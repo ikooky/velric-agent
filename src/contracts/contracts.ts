@@ -210,7 +210,7 @@ export const huntContract: ToolContract = {
   name: "hunt",
   title: "LLM-orchestrated hunt",
   description:
-    "Multi-agent LLM orchestration: goals decomposer (goal+constraints) → planner loop (situation→judge→dispatch intents) → worker execution (JSON-action tool loop) → anti-hallucination gates (system-digest evidence channel) → report.md + evidence + graph.json. Give it a goal; it runs the whole recon workflow autonomously. Resumable: state lives in outputRoot/graph.json.",
+    "Multi-agent LLM orchestration: goals decomposer (goal+constraints) → planner loop (situation→judge→dispatch intents) → worker execution (JSON-action tool loop) → anti-hallucination gates (system-digest evidence channel) → report.md + evidence + graph.json. Async: returns immediately with a statusFile; poll hunt_status(outputRoot) until state=done. Resumable: state lives in outputRoot/graph.json.",
   kind: "runtime",
   inputSchema: z.object({
     goal: z.string().describe("natural-language recon goal"),
@@ -224,6 +224,18 @@ export const huntContract: ToolContract = {
   outputSchema: z.object({ facts: z.number(), findings: z.number() }),
   annotations: writingAnnotations(),
   examples: [{ title: "hunt", input: { goal: "对 example.com 做 API 面侦察", outputRoot: "/tmp/recon" } }],
+};
+
+export const huntStatusContract: ToolContract = {
+  name: "hunt_status",
+  title: "Poll hunt progress",
+  description:
+    "Poll the status of a hunt started via the hunt tool. Returns state=running|done|error plus the full result (rounds, goalsMet, facts, findings, reportPath) when done.",
+  kind: "runtime",
+  inputSchema: z.object({ outputRoot: z.string().describe("outputRoot given to hunt") }),
+  outputSchema: z.object({ state: z.string() }),
+  annotations: readOnlyAnnotations(),
+  examples: [{ title: "poll", input: { outputRoot: "/tmp/recon" } }],
 };
 
 export const workflowGuideContract: ToolContract = {
@@ -291,5 +303,6 @@ export const ALL_CONTRACTS: readonly ToolContract[] = [
   saveEvidenceContract,
   autoPipelineContract,
   huntContract,
+  huntStatusContract,
   workflowGuideContract,
 ];

@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
 
@@ -192,7 +193,11 @@ const handlers: Readonly<Record<string, Handler>> = {
     );
   },
   hunt: async (raw) => {
+    // Long-running: a full hunt takes minutes — far beyond the typical MCP
+    // client request timeout (60s). Launch async and return a handle; the
+    // host polls hunt_status.
     const { runHunt } = await import("../application/hunt.js");
+    const { writeFile, mkdir, readFile } = await import("node:fs/promises");
     const p = z
       .object({
         goal: z.string(),
@@ -204,7 +209,17 @@ const handlers: Readonly<Record<string, Handler>> = {
         maxSteps: z.number().optional(),
       })
       .parse(raw);
-    return runHunt({
+    await mkdir(p.outputRoot, { recursive: true });
+    const statusFile = join(p.outputRoot, "hunt_status.json");
+    const startedAt = new Date().toISOString();
+    const writeStatus = async (patch: Record<string, unknown>) => {
+      const prev = await readFile(statusFile, "utf8")
+        .then((t) => JSON.parse(t) as Record<string, unknown>)
+        .catch(() => ({}));
+      await writeFile(statusFile, JSON.stringify({ ...prev, ...patch }, null, 2));
+    };
+    await writeStatus({ state: "running", startedAt, goal: p.goal, outputRoot: p.outputRoot });
+    void runHunt({
       goal: p.goal,
       outputRoot: p.outputRoot,
       chromiumPath: p.chromiumPath,
@@ -216,7 +231,20 @@ const handlers: Readonly<Record<string, Handler>> = {
         apiKey: process.env.LLM_API_KEY ?? process.env.NEWAPI_KEY ?? "",
         model: p.model ?? process.env.LLM_MODEL ?? "glm-5.3-flash",
       },
-    });
+    })
+      .then((r) => writeStatus({ state: "done", finishedAt: new Date().toISOString(), result: r }))
+      .catch((e: unknown) => writeStatus({ state: "error", finishedAt: new Date().toISOString(), error: String((e as Error).message ?? e).slice(0, 300) }));
+    return {
+      started: true,
+      statusFile,
+      poll: "hunt_status(outputRoot) — read hunt_status.json; state=running|done|error",
+    };
+  },
+  hunt_status: async (raw) => {
+    const { readFile } = await import("node:fs/promises");
+    const p = z.object({ outputRoot: z.string() }).parse(raw);
+    const t = await readFile(join(p.outputRoot, "hunt_status.json"), "utf8");
+    return JSON.parse(t) as Record<string, unknown>;
   },
   workflow_guide: async () => {
     const { WORKFLOW_GUIDE, PHASE_TAGS } = await import("./workflow.js");

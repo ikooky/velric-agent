@@ -457,10 +457,17 @@ export const runHunt = async (input: HuntInput): Promise<HuntResult> => {
       existing.add(summary);
       added++;
     }
-    transcript.push({ round, actor: "planner", text: `met=${(plan.goals_met ?? []).length} new_intents=${added} done=${plan.done === true}` });
-    await saveGraph(root, g);
     const allMet = g.goals.length > 0 && g.goals.every((x) => x.met);
-    if (plan.done === true || allMet) break;
+    // Hard floor (engine-enforced, planner is NOT trusted): `done` is honored
+    // only when every goal is met. A premature done is logged and overridden —
+    // the loop continues until goals are met or the round budget runs out.
+    const prematureDone = plan.done === true && !allMet;
+    if (prematureDone) {
+      transcript.push({ round, actor: "engine", text: `planner declared done with unmet goals — overriding, continuing (open goals: ${g.goals.filter((x) => !x.met).map((x) => `#${x.id}`).join(",")})` });
+    }
+    transcript.push({ round, actor: "planner", text: `met=${(plan.goals_met ?? []).length} new_intents=${added} done=${plan.done === true}${prematureDone ? "(overridden)" : ""}` });
+    await saveGraph(root, g);
+    if (!prematureDone && (plan.done === true || allMet)) break;
 
     const batch = g.intents.filter((i) => i.state === "open").slice(0, input.maxIntentsPerRound ?? 2);
     if (batch.length === 0) {
