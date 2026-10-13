@@ -299,6 +299,60 @@ export const handlers: Readonly<Record<string, Handler>> = {
     const { probeParams } = await import("../application/paramProbe.js");
     return probeParams(p);
   },
+  subdomain_enum: async (raw) => {
+    const p = z.object({ domain: z.string(), outputRoot: z.string(), proxy: z.string().optional() }).parse(raw);
+    const { discoverSubdomains } = await import("../domain/subdomains.js");
+    return discoverSubdomains(p);
+  },
+  port_scan: async (raw) => {
+    const p = z.object({ host: z.string(), outputRoot: z.string(), ports: z.array(z.number()).optional(), timeoutMs: z.number().optional(), concurrency: z.number().optional() }).parse(raw);
+    const { scanPorts } = await import("../domain/portScan.js");
+    return scanPorts(p);
+  },
+  probe_paths: async (raw) => {
+    const p = z.object({ baseUrl: z.string(), outputRoot: z.string(), paths: z.array(z.string()).optional(), cookie: z.string().optional(), proxy: z.string().optional() }).parse(raw);
+    const { probePaths } = await import("../domain/pathProbe.js");
+    return probePaths(p);
+  },
+  probe_cors: async (raw) => {
+    const p = z.object({ baseUrl: z.string(), outputRoot: z.string(), origins: z.array(z.string()).optional(), proxy: z.string().optional() }).parse(raw);
+    const { probeCors } = await import("../domain/cors.js");
+    return probeCors(p);
+  },
+  fingerprint: async (raw) => {
+    const p = z.object({ baseUrl: z.string(), outputRoot: z.string(), cookie: z.string().optional(), proxy: z.string().optional() }).parse(raw);
+    const { fingerprint } = await import("../domain/fingerprint.js");
+    return fingerprint(p);
+  },
+  wayback_urls: async (raw) => {
+    const p = z.object({ target: z.string(), outputRoot: z.string(), maxUrls: z.number().optional(), proxy: z.string().optional() }).parse(raw);
+    const { fetchWayback } = await import("../domain/sourcemap.js");
+    return fetchWayback(p);
+  },
+  detect_sourcemaps: async (raw) => {
+    const p = z.object({ outputRoot: z.string(), jsDir: z.string().optional(), baseUrl: z.string().optional(), proxy: z.string().optional() }).parse(raw);
+    const { detectSourceMaps } = await import("../domain/sourcemap.js");
+    return detectSourceMaps(p);
+  },
+  auto_batch: async (raw) => {
+    const p = z.object({ seedsFile: z.string(), outputRoot: z.string(), chromiumPath: z.string().optional(), skipRuntime: z.boolean().optional(), notifyWebhook: z.string().optional() }).parse(raw);
+    // Async start (batch = N × minutes); poll each target's pipeline.json.
+    const { join } = await import("node:path");
+    const { writeFile, mkdir } = await import("node:fs/promises");
+    const statusFile = join(p.outputRoot, "batch_status.json");
+    await mkdir(p.outputRoot, { recursive: true });
+    await writeFile(statusFile, JSON.stringify({ state: "running", startedAt: new Date().toISOString() }));
+    void (async () => {
+      try {
+        const { runBatch } = await import("../application/batch.js");
+        const result = await runBatch(p);
+        await writeFile(statusFile, JSON.stringify({ state: "done", result }));
+      } catch (e) {
+        await writeFile(statusFile, JSON.stringify({ state: "error", error: String((e as Error).message ?? e) }));
+      }
+    })();
+    return { started: true, outputRoot: p.outputRoot, statusFile, pollHint: "read batch_status.json / each target's pipeline.json" };
+  },
   workflow_guide: async () => {
     const { WORKFLOW_GUIDE } = await import("./workflow.js");
     return WORKFLOW_GUIDE;

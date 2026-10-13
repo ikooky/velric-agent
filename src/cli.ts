@@ -55,10 +55,18 @@ Usage:
   velric-agent enrich <seed...> --out DIR        asset graph from seeds (DNS+HTTP)
   velric-agent gen-report <report.json> <outdir> render findings markdown report
   velric-agent save-evidence <items.json> <outdir> content-addressed evidence blobs
-  velric-agent auto <seed> <outdir>            deterministic pipeline (enrich→classify→recon→runtime→structure→report)
+  velric-agent auto <seed> <outdir>            deterministic pipeline (+subdomains/paths/cors/fingerprint/sourcemaps; --fresh 重跑; checkpoint 断点续跑)
   velric-agent run-diff <oldDir> <newDir>      diff two recon runs (attack-surface monitoring)
   velric-agent probe-params <params_merged.json> <outdir>
                                                per-param differential probe (--max N)
+  velric-agent subdomains <domain> <outdir>     subdomain enum (crt.sh + CNAME + wordlist)
+  velric-agent port-scan <host> <outdir>        TCP top-ports scan (--ports/--timeout)
+  velric-agent paths <baseUrl> <outdir>         sensitive paths w/ soft-404 calibration
+  velric-agent cors <baseUrl> <outdir>          CORS misconfiguration probe
+  velric-agent fingerprint <baseUrl> <outdir>   WAF/CDN id + method enum + cookie audit
+  velric-agent wayback <domain> <outdir>        historical URLs from web.archive.org
+  velric-agent sourcemaps <jsDir> <outdir>      source-map leak detection (--base URL)
+  velric-agent auto-batch <seeds.txt> <outdir>  batch pipeline + summary (--notify URL)
   velric-agent help
 
 Common flags: --proxy URL, --cookie STR, --timeout MS
@@ -290,6 +298,7 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
             timeoutMs: num(flags.timeout),
             skipRuntime: flags["skip-runtime"] === true,
             maxPages: num(flags["max-pages"]),
+            resume: flags.fresh !== true,
           }),
         );
         return 0;
@@ -321,6 +330,94 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
             maxEndpoints: num(flags.max),
           }),
         );
+        return 0;
+      }
+      case "subdomains": {
+        const [domain, dir] = positional;
+        if (!domain || !dir) {
+          console.error("usage: subdomains <domain> <outdir> [--wordlist FILE]");
+          return 2;
+        }
+        const { discoverSubdomains } = await import("./domain/subdomains.js");
+        out(await discoverSubdomains({ domain, outputRoot: dir, proxy: typeof flags.proxy === "string" ? flags.proxy : undefined }));
+        return 0;
+      }
+      case "port-scan": {
+        const [host, dir] = positional;
+        if (!host || !dir) {
+          console.error("usage: port-scan <host|ip> <outdir> [--ports 80,443 [--timeout MS] [--concurrency N]");
+          return 2;
+        }
+        const ports = typeof flags.ports === "string" ? flags.ports.split(",").map((x) => Number(x.trim())).filter((n) => n > 0) : undefined;
+        const { scanPorts } = await import("./domain/portScan.js");
+        out(await scanPorts({ host, outputRoot: dir, ports, timeoutMs: num(flags.timeout), concurrency: num(flags.concurrency) }));
+        return 0;
+      }
+      case "paths": {
+        const [base, dir] = positional;
+        if (!base || !dir) {
+          console.error("usage: paths <baseUrl> <outdir> [--paths FILE] [--cookie STR]");
+          return 2;
+        }
+        const { probePaths } = await import("./domain/pathProbe.js");
+        out(await probePaths({ baseUrl: base, outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, proxy: typeof flags.proxy === "string" ? flags.proxy : undefined }));
+        return 0;
+      }
+      case "cors": {
+        const [base, dir] = positional;
+        if (!base || !dir) {
+          console.error("usage: cors <baseUrl> <outdir>");
+          return 2;
+        }
+        const { probeCors } = await import("./domain/cors.js");
+        out(await probeCors({ baseUrl: base, outputRoot: dir, proxy: typeof flags.proxy === "string" ? flags.proxy : undefined }));
+        return 0;
+      }
+      case "fingerprint": {
+        const [base, dir] = positional;
+        if (!base || !dir) {
+          console.error("usage: fingerprint <baseUrl> <outdir>");
+          return 2;
+        }
+        const { fingerprint } = await import("./domain/fingerprint.js");
+        out(await fingerprint({ baseUrl: base, outputRoot: dir, proxy: typeof flags.proxy === "string" ? flags.proxy : undefined }));
+        return 0;
+      }
+      case "wayback": {
+        const [target, dir] = positional;
+        if (!target || !dir) {
+          console.error("usage: wayback <domain> <outdir> [--max N]");
+          return 2;
+        }
+        const { fetchWayback } = await import("./domain/sourcemap.js");
+        out(await fetchWayback({ target, outputRoot: dir, maxUrls: num(flags.max), proxy: typeof flags.proxy === "string" ? flags.proxy : undefined }));
+        return 0;
+      }
+      case "sourcemaps": {
+        const [dir, outDir] = positional;
+        if (!dir || !outDir) {
+          console.error("usage: sourcemaps <jsDir> <outdir> [--base URL]");
+          return 2;
+        }
+        const { detectSourceMaps } = await import("./domain/sourcemap.js");
+        out(await detectSourceMaps({ outputRoot: outDir, jsDir: dir, baseUrl: typeof flags.base === "string" ? flags.base : undefined, proxy: typeof flags.proxy === "string" ? flags.proxy : undefined }));
+        return 0;
+      }
+      case "auto-batch": {
+        const [seedsFile, dir] = positional;
+        if (!seedsFile || !dir) {
+          console.error("usage: auto-batch <seeds.txt> <outdir> [--chromium PATH] [--skip-runtime] [--notify URL]");
+          return 2;
+        }
+        const { runBatch } = await import("./application/batch.js");
+        out(await runBatch({
+          seedsFile, outputRoot: dir,
+          chromiumPath: typeof flags.chromium === "string" ? flags.chromium : undefined,
+          proxy: typeof flags.proxy === "string" ? flags.proxy : undefined,
+          cookie: typeof flags.cookie === "string" ? flags.cookie : undefined,
+          skipRuntime: flags["skip-runtime"] === true,
+          notifyWebhook: typeof flags.notify === "string" ? flags.notify : undefined,
+        }));
         return 0;
       }
       default:

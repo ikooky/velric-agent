@@ -84,5 +84,13 @@ export const PHASE_TAGS: Record<string, string> = {
   hunt_overview: "[Phase 0-5 态势] 每轮先读:目标/意图/事实/发现全貌",
   run_diff: "[监控] 同目标两次 run 的攻击面 diff:新端点/新参数/资产变更",
   probe_params: "[Phase 4 深化] 参数差分:逐个剔除参数对比响应,识别必填/开关参数",
+  subdomain_enum: "[Phase 1 资产] 子域枚举:crt.sh + CNAME 链 + 词表爆破",
+  port_scan: "[Phase 1 资产] TCP top-端口扫描:非 Web 开放端口直出 finding",
+  probe_paths: "[Phase 2 探测] 敏感路径:soft-404 校准,60 高信号路径",
+  probe_cors: "[Phase 4 深化] CORS 配置缺陷:Origin 反射/null + credentials",
+  fingerprint: "[Phase 0 指纹] WAF/CDN 识别 + 方法枚举 + Cookie 安全审计",
+  wayback_urls: "[Phase 1 资产] Wayback 历史 URL:死接口/老管理面回收",
+  detect_sourcemaps: "[Phase 2 探测] Source map 泄漏:原始源码可恢复",
+  auto_batch: "[批量] N 目标管道 + 汇总对比报告(监控场景)",
   workflow_guide: "[必读] 返回完整方法论(Phase 0-5+纪律);开局先调这个",
 };

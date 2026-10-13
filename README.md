@@ -35,6 +35,18 @@ Agent 自主渗透测试工具包 —— 让 Agent 独立完成 Web 应用的攻
 - `gen_report` — 从 `report.json` 渲染可交付渗透测试报告（findings 按严重等级排序、含 PoC 证据），输出 `report.md`。
 - `save_evidence` — 内容寻址证据存储（sha256）：`blobs/<h2>/<hash>.bin` + `manifest.json`，每次写入校验，独立于易失流量留存证据。
 
+### 攻击面纵深
+
+- **子域枚举** `subdomains` — crt.sh 证书透明 + CNAME 链追踪 + ~140 高频前缀 DNS 爆破(api/dev/admin/uat/gray/jenkins/k8s/grafana...)
+- **端口扫描** `port-scan` — TCP connect top ~65 端口;公网 redis/mongodb/es 等直接升 high finding
+- **敏感路径** `paths` — 65 条高信号字典(.git/.env/swagger/actuator/druid/backup...) + **soft-404 校准**(随机路径基线,同构响应不算发现)
+- **CORS 探测** `cors` — Origin 变体(evil/反射/null),ACAO 反射 + ACAC true 判配置缺陷
+- **WAF/CDN 识别** `fingerprint` — header 指纹库(cloudflare/aliyun/qcloud/safedog/baota...) + HTTP 方法枚举(OPTIONS/Allow/PUT/TRACE) + Cookie 安全审计(Secure/HttpOnly/SameSite)
+- **Source map 泄漏** `sourcemaps` — harvested JS 逐个探 .map(本地+远程),生产泄漏 = 源码可恢复
+- **Wayback 历史** `wayback` — web.archive.org CDX,死接口/老管理面回收
+- **批量模式** `auto-batch` — N 目标管道 + 汇总对比报告 + webhook 通知(--notify URL)
+- **断点续跑** — auto 管道 stage 级 checkpoint.json,中断后 skip 已完成阶段(--fresh 强制重跑)
+
 ### 内建情报能力
 
 - **秘密扫描** — harvest 对 JS bundle 做 regex 扫描(AWS key/GH token/JWT/DB URL/内网 IP/内部主机名),命中写 `secrets.txt`,auto 管道自动升级为 high finding
@@ -83,7 +95,7 @@ velric-agent help
 
 ## MCP 接入
 
-`velric-agent mcp` 启动 stdio MCP server，暴露全部 19 个工具 + 2 个 resources(driver-playbook/workflow-guide) + 1 个 prompt(hunt-driver)。
+`velric-agent mcp` 启动 stdio MCP server，暴露全部 27 个工具 + 2 个 resources(driver-playbook/workflow-guide) + 1 个 prompt(hunt-driver)。
 
 Hermes（`config.yaml`）：
 

@@ -9,6 +9,8 @@ const outputRoot = z
 
 // ---- net ----
 
+const LEDGER = z.string().optional().describe("auto-record touched URLs into the hunt observation ledger");
+
 export const dnsResolveContract: ToolContract = {
   name: "dns_resolve",
   title: "DNS resolve",
@@ -377,6 +379,103 @@ export const probeParamsContract: ToolContract = {
   examples: [{ title: "probe", input: { mergedFile: "/tmp/recon/params_merged.json", outputRoot: "/tmp/recon" } }],
 };
 
+
+export const subdomainsContract: ToolContract = {
+  name: "subdomain_enum",
+  title: "Subdomain enumeration",
+  description:
+    "crt.sh certificate transparency + CNAME chain walking + high-frequency wordlist DNS brute (~140 prefixes: api/dev/admin/uat/gray/jenkins/k8s/grafana...). Writes subdomains.txt.",
+  kind: "runtime",
+  inputSchema: z.object({ domain: z.string(), outputRoot, observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ total: z.number() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "enum", input: { domain: "example.com", outputRoot: "/tmp/recon" } }],
+};
+
+export const portScanContract: ToolContract = {
+  name: "port_scan",
+  title: "TCP port scan",
+  description:
+    "TCP connect scan of top ~65 ports (web/db/middleware/admin). Non-web open ports (redis/mongodb/es...) are direct findings. Writes ports_open.txt.",
+  kind: "runtime",
+  inputSchema: z.object({ host: z.string(), outputRoot, ports: z.array(z.number()).optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ open: z.number() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "scan", input: { host: "1.2.3.4", outputRoot: "/tmp/recon" } }],
+};
+
+export const pathsContract: ToolContract = {
+  name: "probe_paths",
+  title: "Sensitive path probing",
+  description:
+    "Built-in ~60 high-signal paths (.git/config, .env, swagger, actuator, druid, phpinfo, backup dumps...) with soft-404 calibration (random-path baseline; isomorphic responses are not findings). Writes sensitive_paths.txt.",
+  kind: "runtime",
+  inputSchema: z.object({ baseUrl: z.string(), outputRoot, paths: z.array(z.string()).optional(), cookie: z.string().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ found: z.number() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "probe", input: { baseUrl: "https://target/", outputRoot: "/tmp/recon" } }],
+};
+
+export const corsContract: ToolContract = {
+  name: "probe_cors",
+  title: "CORS misconfiguration probe",
+  description:
+    "Origin variants (evil / suffix-reflection / null / localhost) via OPTIONS; flags ACAO reflection + ACAC true. Writes cors_probe.json.",
+  kind: "runtime",
+  inputSchema: z.object({ baseUrl: z.string(), outputRoot, origins: z.array(z.string()).optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ misconfigured: z.boolean() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "cors", input: { baseUrl: "https://api.target/", outputRoot: "/tmp/recon" } }],
+};
+
+export const fingerprintContract: ToolContract = {
+  name: "fingerprint",
+  title: "WAF/CDN + methods + cookies",
+  description:
+    "WAF/CDN identification from header signatures (cloudflare/aliyun/qcloud/safedog/baota...), HTTP method enumeration (OPTIONS Allow + PUT/TRACE), Set-Cookie security audit (Secure/HttpOnly/SameSite). Writes fingerprint.json.",
+  kind: "runtime",
+  inputSchema: z.object({ baseUrl: z.string(), outputRoot, cookie: z.string().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ waf: z.number() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "fp", input: { baseUrl: "https://target/", outputRoot: "/tmp/recon" } }],
+};
+
+export const waybackContract: ToolContract = {
+  name: "wayback_urls",
+  title: "Historical URLs from Wayback",
+  description:
+    "web.archive.org CDX API: historical 200-URLs for the domain — dead admin panels, old API versions. Feeds the endpoint pool. Writes wayback_urls.txt.",
+  kind: "runtime",
+  inputSchema: z.object({ target: z.string(), outputRoot, maxUrls: z.number().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ urls: z.number() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "wb", input: { target: "example.com", outputRoot: "/tmp/recon" } }],
+};
+
+export const sourcemapsContract: ToolContract = {
+  name: "detect_sourcemaps",
+  title: "Source-map leak detection",
+  description:
+    "Checks every harvested JS for sourceMappingURL + probes <file>.map (local then remote via baseUrl). Leaked maps = recoverable original sources. Writes sourcemaps.txt.",
+  kind: "runtime",
+  inputSchema: z.object({ outputRoot, jsDir: z.string().optional(), baseUrl: z.string().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ leaked: z.number() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "sm", input: { outputRoot: "/tmp/recon" } }],
+};
+
+export const batchContract: ToolContract = {
+  name: "auto_batch",
+  title: "Batch pipeline",
+  description:
+    "Runs the auto pipeline for every seed in seeds.txt (one dir per target) + comparison summary (batch_summary.md). Optional webhook notify on completion. Long-running: returns started; poll each target's pipeline.json.",
+  kind: "runtime",
+  inputSchema: z.object({ seedsFile: z.string(), outputRoot, chromiumPath: z.string().optional(), skipRuntime: z.boolean().optional(), notifyWebhook: z.string().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ targets: z.number() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "batch", input: { seedsFile: "/tmp/seeds.txt", outputRoot: "/tmp/batch" } }],
+};
+
 export const ALL_CONTRACTS: readonly ToolContract[] = [
   dnsResolveContract,
   httpProbeContract,
@@ -393,6 +492,14 @@ export const ALL_CONTRACTS: readonly ToolContract[] = [
   autoStatusContract,
   runDiffContract,
   probeParamsContract,
+  subdomainsContract,
+  portScanContract,
+  pathsContract,
+  corsContract,
+  fingerprintContract,
+  waybackContract,
+  sourcemapsContract,
+  batchContract,
   huntContract,
   huntRecordContract,
   huntOverviewContract,

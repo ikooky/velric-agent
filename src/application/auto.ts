@@ -33,6 +33,8 @@ export interface AutoInput {
   readonly cookie?: string;
   readonly timeoutMs?: number;
   readonly skipRuntime?: boolean;
+  /** Resume from checkpoint.json when true (default true). */
+  readonly resume?: boolean;
   readonly maxPages?: number;
 }
 
@@ -61,6 +63,40 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
   const stages: StageResult[] = [];
   const root = input.outputRoot;
   await mkdir(root, { recursive: true });
+
+  // Checkpoint resume: stages already marked ok in checkpoint.json are skipped
+  // (their artifacts are on disk). Wipe checkpoint.json for a fresh run.
+  const { readCheckpoint, writeStageDone } = await import("../domain/rateLimit.js");
+  const cp = input.resume === false ? { stages: {} } : await readCheckpoint(root);
+  const done = (stage: string): boolean => cp.stages[stage]?.status === "ok";
+  const mark = async (stage: string): Promise<void> => { await writeStageDone(root, stage); };
+
+  // ---- Stage 0: fingerprint (WAF/CDN, methods, cookies) ----
+  if (!done("fingerprint")) {
+    try {
+      const { fingerprint } = await import("../domain/fingerprint.js");
+      const fp = await fingerprint({ baseUrl: input.seed, outputRoot: root, proxy: input.proxy, cookie: input.cookie, timeoutMs: input.timeoutMs });
+      stages.push({ stage: "fingerprint", status: "ok", detail: `waf=${fp.waf.join(",") || "none"} methods=${fp.methods.allowed.length}` });
+      await mark("fingerprint");
+    } catch (e) {
+      stages.push({ stage: "fingerprint", status: "fail", detail: String((e as Error).message ?? e).slice(0, 120) });
+    }
+  } else stages.push({ stage: "fingerprint", status: "skip", detail: "checkpoint" });
+
+  // ---- Stage 0b: subdomain enumeration (domains only) ----
+  const isDomainSeed = !/^https?:\/\//.test(input.seed) || /^https?:\/\/[^\/]+\/?$/.test(input.seed);
+  if (!done("subdomains") && isDomainSeed) {
+    try {
+      let domain = input.seed.replace(/^https?:\/\//, "").split("/")[0]!;
+      const { discoverSubdomains } = await import("../domain/subdomains.js");
+      const sub = await discoverSubdomains({ domain, outputRoot: root, proxy: input.proxy });
+      domain = sub.domain;
+      stages.push({ stage: "subdomains", status: "ok", detail: `${sub.total.length} subdomains (crt.sh=${sub.crtSh.length} brute=${sub.bruteFound.length})` });
+      await mark("subdomains");
+    } catch (e) {
+      stages.push({ stage: "subdomains", status: "fail", detail: String((e as Error).message ?? e).slice(0, 120) });
+    }
+  } else stages.push({ stage: "subdomains", status: "skip", detail: done("subdomains") ? "checkpoint" : "non-domain seed" });
 
   // ---- Stage 1: enrich asset graph ----
   let assetCounts: Record<string, number> = {};
@@ -121,6 +157,14 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
     }
   } else {
     stages.push({ stage: "capture_runtime", status: "skip", detail: "skipRuntime=true" });
+    // Without runtime, api_merged never gets written (runtime owns that
+    // merge). Fall back to the static list so downstream consumers
+    // (batch summary, run_diff) still have an endpoint file.
+    if (!(await exists(join(root, "api_merged.txt"))) && (await exists(join(root, "api_static.txt")))) {
+      const { writeFile: wf } = await import("node:fs/promises");
+      const staticList = await readFile(join(root, "api_static.txt"), "utf8");
+      await wf(join(root, "api_merged.txt"), staticList);
+    }
   }
 
   // ---- Stage 5: perm tree + param matrix (when artifacts exist) ----
@@ -147,6 +191,42 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
 /** GraphQL introspection disabled detection: explicit error mentioning it. */
 const introspectionBlocked = (body: string): boolean =>
   /introspection.*(disabled|not enabled|allowed)|GraphQL introspection/i.test(body);
+  // ---- Stage 5b: sensitive paths (soft-404 calibrated) ----
+  if (!done("paths")) {
+    try {
+      const { probePaths } = await import("../domain/pathProbe.js");
+      const pp = await probePaths({ baseUrl: input.seed, outputRoot: root, proxy: input.proxy, cookie: input.cookie, timeoutMs: input.timeoutMs });
+      stages.push({ stage: "paths", status: "ok", detail: `${pp.found.length} found / ${pp.probed} probed` });
+      await mark("paths");
+    } catch (e) {
+      stages.push({ stage: "paths", status: "fail", detail: String((e as Error).message ?? e).slice(0, 120) });
+    }
+  } else stages.push({ stage: "paths", status: "skip", detail: "checkpoint" });
+
+  // ---- Stage 5c: CORS probe ----
+  if (!done("cors")) {
+    try {
+      const { probeCors } = await import("../domain/cors.js");
+      const co = await probeCors({ baseUrl: input.seed, outputRoot: root, proxy: input.proxy, timeoutMs: input.timeoutMs });
+      stages.push({ stage: "cors", status: "ok", detail: co.misconfigured ? "MISCONFIGURED" : "clean" });
+      await mark("cors");
+    } catch (e) {
+      stages.push({ stage: "cors", status: "fail", detail: String((e as Error).message ?? e).slice(0, 120) });
+    }
+  } else stages.push({ stage: "cors", status: "skip", detail: "checkpoint" });
+
+  // ---- Stage 5d: source-map leak detection ----
+  if (!done("sourcemaps")) {
+    try {
+      const { detectSourceMaps } = await import("../domain/sourcemap.js");
+      const sm = await detectSourceMaps({ outputRoot: root, baseUrl: input.seed.startsWith("http") ? input.seed : `https://${input.seed}`, proxy: input.proxy });
+      stages.push({ stage: "sourcemaps", status: "ok", detail: `${sm.leaked.length} leaked / ${sm.checked} checked` });
+      await mark("sourcemaps");
+    } catch (e) {
+      stages.push({ stage: "sourcemaps", status: "fail", detail: String((e as Error).message ?? e).slice(0, 120) });
+    }
+  } else stages.push({ stage: "sourcemaps", status: "skip", detail: "checkpoint" });
+
   // ---- Stage 6: report + evidence ----
   const apiStatic = join(root, "api_static.txt");
   let findings = 0;
@@ -170,6 +250,77 @@ const introspectionBlocked = (body: string): boolean =>
         severity: "medium",
         summary: "capture_runtime 录制到真实后端流量(匿名可达)",
         poc: liveCalls.slice(0, 20).join("\n"),
+      });
+    }
+    // Non-web open ports are direct findings
+    const portsFile = join(root, "ports_open.txt");
+    if (await exists(portsFile)) {
+      const lines = (await readFile(portsFile, "utf8")).split("\n").filter(Boolean);
+      const risky = lines.filter((l) => /redis|mongodb|elasticsearch|mysql|postgres|memcached|kafka|docker|kubelet|solr|kibana|vnc|rdp|mssql|oracle/.test(l));
+      if (risky.length > 0) {
+        fList.push({
+          name: `高危端口暴露 ${risky.length} 个`,
+          severity: "high",
+          summary: "TCP 扫描发现数据库/中间件/管理端口对外开放(未鉴权服务风险前置)",
+          poc: risky.join("\n"),
+        });
+      }
+    }
+    // Sensitive paths that survived soft-404 calibration
+    const sensFile = join(root, "sensitive_paths.txt");
+    if (await exists(sensFile)) {
+      const lines = (await readFile(sensFile, "utf8")).split("\n").filter(Boolean);
+      const high = lines.filter((l) => /^200/.test(l) && /\.git|\.env|swagger|api-docs|actuator\/env|heapdump|druid|pprof|backup|dump\.sql|WEB-INF/.test(l));
+      if (high.length > 0) {
+        fList.push({
+          name: `敏感路径命中 ${high.length} 个`,
+          severity: "high",
+          summary: "soft-404 校准后仍 200 的高价值路径(.git/.env/swagger/actuator/druid 等)",
+          poc: high.join("\n"),
+        });
+      }
+      const protectedPaths = lines.filter((l) => /^[43]0[13]/.test(l));
+      if (protectedPaths.length > 0) {
+        fList.push({
+          name: `受保护路径存在 ${protectedPaths.length} 个`,
+          severity: "low",
+          summary: "401/403 路径=存在但需鉴权(目录爆破/绕过候选)",
+          poc: protectedPaths.slice(0, 15).join("\n"),
+        });
+      }
+    }
+    // CORS misconfiguration
+    const corsJson = await readJson<{ misconfigured: boolean; results: { origin: string; acao: string | null; acac: boolean; verdict: string }[] }>(join(root, "cors_probe.json"));
+    if (corsJson?.misconfigured) {
+      const bad = corsJson.results.filter((r) => r.acac && (r.verdict === "reflect" || r.verdict === "null"));
+      fList.push({
+        name: "CORS 配置缺陷",
+        severity: "high",
+        summary: `ACAO 反射任意 Origin 且允许 credentials(${bad.map((b) => b.origin).slice(0, 3).join(", ")})`,
+        poc: JSON.stringify(bad, null, 2).slice(0, 800),
+      });
+    }
+    // Source-map leaks
+    const smFile = join(root, "sourcemaps.txt");
+    if (await exists(smFile)) {
+      const lines = (await readFile(smFile, "utf8")).split("\n").filter(Boolean);
+      if (lines.length > 0) {
+        fList.push({
+          name: `Source map 泄漏 ${lines.length} 个`,
+          severity: "medium",
+          summary: "生产 bundle 的 .map 可访问,原始源码可完整恢复",
+          poc: lines.slice(0, 10).join("\n"),
+        });
+      }
+    }
+    // WAF/CDN presence (informational, recorded as fact via report meta)
+    const fpJson = await readJson<{ waf: string[] }>(join(root, "fingerprint.json"));
+    if (fpJson && fpJson.waf.length > 0) {
+      fList.push({
+        name: `WAF/CDN 在位: ${fpJson.waf.join(", ")}`,
+        severity: "low",
+        summary: "header 指纹识别的防护层,后续测试需降速/换路径",
+        poc: JSON.stringify(fpJson.waf),
       });
     }
     // Secrets leaked into bundles (harvest's regex scan artifact)
