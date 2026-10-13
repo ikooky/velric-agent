@@ -270,6 +270,27 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
         out(await saveEvidence({ outputRoot: dir, items }));
         return 0;
       }
+      case "auto": {
+        const [seed, dir] = positional;
+        if (!seed || !dir) {
+          console.error("usage: auto <seed> <outdir> [--chromium PATH] [--skip-runtime] [--proxy URL] [--cookie STR] [--timeout MS] [--max-pages N]");
+          return 2;
+        }
+        const { runAutoPipeline } = await import("./application/auto.js");
+        out(
+          await runAutoPipeline({
+            seed,
+            outputRoot: dir,
+            chromiumPath: typeof flags.chromium === "string" ? flags.chromium : undefined,
+            proxy: typeof flags.proxy === "string" ? flags.proxy : undefined,
+            cookie: typeof flags.cookie === "string" ? flags.cookie : undefined,
+            timeoutMs: num(flags.timeout),
+            skipRuntime: flags["skip-runtime"] === true,
+            maxPages: num(flags["max-pages"]),
+          }),
+        );
+        return 0;
+      }
       default:
         console.error(`unknown command: ${command}\n`);
         console.log(USAGE);
