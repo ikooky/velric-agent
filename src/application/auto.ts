@@ -52,7 +52,8 @@ export interface AutoResult {
 }
 
 const exists = async (p: string): Promise<boolean> => {
-  try { await readFile(p, "utf8"); return true; } catch { return false; }
+  const { stat } = await import("node:fs/promises");
+  try { await stat(p); return true; } catch { return false; }
 };
 
 const readJson = async <T>(p: string): Promise<T | null> => {
@@ -227,6 +228,40 @@ const introspectionBlocked = (body: string): boolean =>
     }
   } else stages.push({ stage: "sourcemaps", status: "skip", detail: "checkpoint" });
 
+  // ---- Stage 5e: verification passes (auth surface / dom sinks / jwt) ----
+  if (!done("auth_probe") && (await exists(join(root, "api_merged.txt")))) {
+    try {
+      const { probeAuth } = await import("../domain/authProbe.js");
+      const au = await probeAuth({ endpointsFile: join(root, "api_merged.txt"), outputRoot: root, proxy: input.proxy, cookie: input.cookie, timeoutMs: input.timeoutMs, maxEndpoints: 60 });
+      stages.push({ stage: "auth_probe", status: "ok", detail: `anon=${au.anonymous.length} authReq=${au.authRequired.length}` });
+      await mark("auth_probe");
+    } catch (e) {
+      stages.push({ stage: "auth_probe", status: "fail", detail: String((e as Error).message ?? e).slice(0, 120) });
+    }
+  } else stages.push({ stage: "auth_probe", status: "skip", detail: done("auth_probe") ? "checkpoint" : "no endpoints" });
+
+  if (!done("dom_sinks") && (await exists(join(root, "js")))) {
+    try {
+      const { scanDomSinks } = await import("../domain/domSinks.js");
+      const ds = await scanDomSinks({ jsDir: join(root, "js"), outputRoot: root });
+      stages.push({ stage: "dom_sinks", status: "ok", detail: `${ds.chains.length} chains / ${ds.scanned} files` });
+      await mark("dom_sinks");
+    } catch (e) {
+      stages.push({ stage: "dom_sinks", status: "fail", detail: String((e as Error).message ?? e).slice(0, 120) });
+    }
+  } else stages.push({ stage: "dom_sinks", status: "skip", detail: done("dom_sinks") ? "checkpoint" : "no js corpus" });
+
+  if (!done("jwt_inspect")) {
+    try {
+      const { inspectJwt } = await import("../domain/jwt.js");
+      const jt = await inspectJwt({ outputRoot: root, secretsFile: (await exists(join(root, "secrets.txt"))) ? join(root, "secrets.txt") : undefined, jsDir: (await exists(join(root, "js"))) ? join(root, "js") : undefined });
+      stages.push({ stage: "jwt_inspect", status: "ok", detail: `${jt.tokens} tokens` });
+      await mark("jwt_inspect");
+    } catch (e) {
+      stages.push({ stage: "jwt_inspect", status: "fail", detail: String((e as Error).message ?? e).slice(0, 120) });
+    }
+  } else stages.push({ stage: "jwt_inspect", status: "skip", detail: "checkpoint" });
+
   // ---- Stage 6: report + evidence ----
   const apiStatic = join(root, "api_static.txt");
   let findings = 0;
@@ -321,6 +356,37 @@ const introspectionBlocked = (body: string): boolean =>
         severity: "low",
         summary: "header 指纹识别的防护层,后续测试需降速/换路径",
         poc: JSON.stringify(fpJson.waf),
+      });
+    }
+    // Anonymous-reachable endpoints (auth surface)
+    const authJson = await readJson<{ anonymous: { url: string }[]; authRequired: { url: string }[] }>(join(root, "auth_surface.json"));
+    if (authJson && authJson.anonymous.length > 0) {
+      fList.push({
+        name: `匿名可达 API ${authJson.anonymous.length} 个`,
+        severity: authJson.anonymous.length > 30 ? "medium" : "low",
+        summary: `鉴权面测绘:${authJson.anonymous.length} 端点匿名 200(其中含写操作/管理命名的需重点复核),${authJson.authRequired?.length ?? 0} 端点需鉴权`,
+        poc: authJson.anonymous.slice(0, 20).map((a) => a.url).join("\n"),
+      });
+    }
+    // DOM-XSS taint chains
+    const domJson = await readJson<{ chains: { file: string; source: string; sink: string }[] }>(join(root, "dom_sinks.json"));
+    if (domJson && domJson.chains.length > 0) {
+      fList.push({
+        name: `DOM-XSS 候选链 ${domJson.chains.length} 条`,
+        severity: "medium",
+        summary: "location.* → innerHTML/eval 类污点链(静态预筛,需宿主构造 PoC 复核)",
+        poc: domJson.chains.slice(0, 10).map((c) => `${c.file}: ${c.source} → ${c.sink}`).join("\n"),
+      });
+    }
+    // JWT weak secrets
+    const jwtJson = await readJson<{ analyses: { tokenPreview: string; algNone: boolean; weakSecret: string | null; expired: boolean | null }[] }>(join(root, "jwt_analysis.json"));
+    const weakJwts = jwtJson?.analyses.filter((a) => a.weakSecret || a.algNone) ?? [];
+    if (weakJwts.length > 0) {
+      fList.push({
+        name: `JWT 弱凭据 ${weakJwts.length} 个`,
+        severity: "high",
+        summary: "HS256 弱密钥可爆破或 alg=none,token 可伪造",
+        poc: weakJwts.map((a) => `${a.tokenPreview} ${a.algNone ? "alg=none" : "secret=" + a.weakSecret}`).join("\n"),
       });
     }
     // Secrets leaked into bundles (harvest's regex scan artifact)

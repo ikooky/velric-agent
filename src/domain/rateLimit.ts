@@ -19,7 +19,7 @@ export interface RateLimitOptions {
   readonly intervalMs?: number;
 }
 
-const acquire = (bucketKey: string, opts: RateLimitOptions): Promise<void> => {
+export const acquire = (bucketKey: string, opts: RateLimitOptions): Promise<void> => {
   const rps = opts.rps ?? 0;
   const interval = opts.intervalMs ?? (rps > 0 ? 1000 / rps : 0);
   if (interval <= 0) return Promise.resolve();

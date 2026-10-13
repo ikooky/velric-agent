@@ -67,10 +67,34 @@ Usage:
   velric-agent wayback <domain> <outdir>        historical URLs from web.archive.org
   velric-agent sourcemaps <jsDir> <outdir>      source-map leak detection (--base URL)
   velric-agent auto-batch <seeds.txt> <outdir>  batch pipeline + summary (--notify URL)
+  velric-agent auth-probe <api_merged.txt> <outdir>  anonymous vs auth access mapping
+  velric-agent idor-prescreen <params_merged.json> <outdir>  IDOR candidate prescreen
+  velric-agent git-restore <baseUrl> <outdir>  rebuild source from leaked .git
+  velric-agent dom-sinks <jsDir> <outdir>      DOM-XSS taint chain scan
+  velric-agent jwt-inspect <outdir>            JWT decode + weak-secret crack
+  velric-agent ws-schema <runtime_api.json> <outdir>  WS message field schemas
   velric-agent help
 
-Common flags: --proxy URL, --cookie STR, --timeout MS
+Common flags: --proxy URL | --proxy-pool FILE, --rps N (global rate limit), --cookie STR, --timeout MS
 `;
+
+
+/** Resolve effective proxy: --proxy single URI, or round-robin from
+ *  --proxy-pool <file>. Applies global --rps when set. */
+let poolState: { pool: import("./domain/proxyPool.js").ProxyPool } | null = null;
+const resolveProxy = async (flags: Record<string, string | boolean | undefined>): Promise<string | undefined> => {
+  const { setGlobalRateLimit } = await import("./adapters/http.js");
+  if (typeof flags.rps === "string" && Number(flags.rps) > 0) setGlobalRateLimit(Number(flags.rps));
+  if (typeof flags.proxy === "string") return flags.proxy;
+  if (typeof flags["proxy-pool"] === "string") {
+    if (!poolState) {
+      const { ProxyPool } = await import("./domain/proxyPool.js");
+      poolState = { pool: await ProxyPool.fromFile(flags["proxy-pool"]) };
+    }
+    return poolState.pool.next() ?? undefined;
+  }
+  return undefined;
+};
 
 /** Run one CLI command; returns the process exit code. */
 export const runCli = async (argv: readonly string[]): Promise<number> => {
@@ -418,6 +442,71 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
           skipRuntime: flags["skip-runtime"] === true,
           notifyWebhook: typeof flags.notify === "string" ? flags.notify : undefined,
         }));
+        return 0;
+      }
+      case "auth-probe": {
+        const [endpointsFile, dir] = positional;
+        if (!endpointsFile || !dir) {
+          console.error("usage: auth-probe <api_merged.txt> <outdir> [--cookie STR]");
+          return 2;
+        }
+        const { probeAuth } = await import("./domain/authProbe.js");
+        out(await probeAuth({ endpointsFile, outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, proxy: await resolveProxy(flags) }));
+        return 0;
+      }
+      case "idor-prescreen": {
+        const [mergedFile, dir] = positional;
+        if (!mergedFile || !dir) {
+          console.error("usage: idor-prescreen <params_merged.json> <outdir> [--cookie STR]");
+          return 2;
+        }
+        const { prescreenIdor } = await import("./domain/authProbe.js");
+        out(await prescreenIdor({ mergedFile, outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, proxy: await resolveProxy(flags) }));
+        return 0;
+      }
+      case "git-restore": {
+        const [base, dir] = positional;
+        if (!base || !dir) {
+          console.error("usage: git-restore <baseUrl> <outdir>");
+          return 2;
+        }
+        const { restoreGit } = await import("./domain/gitRestore.js");
+        out(await restoreGit({ baseUrl: base, outputRoot: dir, proxy: await resolveProxy(flags) }));
+        return 0;
+      }
+      case "dom-sinks": {
+        const [jsDir, dir] = positional;
+        if (!jsDir || !dir) {
+          console.error("usage: dom-sinks <jsDir> <outdir>");
+          return 2;
+        }
+        const { scanDomSinks } = await import("./domain/domSinks.js");
+        out(await scanDomSinks({ jsDir, outputRoot: dir }));
+        return 0;
+      }
+      case "jwt-inspect": {
+        const dir = positional[0];
+        if (!dir) {
+          console.error("usage: jwt-inspect <outdir> [--secrets FILE] [--js DIR] [--token STR]");
+          return 2;
+        }
+        const { inspectJwt } = await import("./domain/jwt.js");
+        out(await inspectJwt({
+          outputRoot: dir,
+          secretsFile: typeof flags.secrets === "string" ? flags.secrets : undefined,
+          jsDir: typeof flags.js === "string" ? flags.js : undefined,
+          token: typeof flags.token === "string" ? flags.token : undefined,
+        }));
+        return 0;
+      }
+      case "ws-schema": {
+        const [runtimeFile, dir] = positional;
+        if (!runtimeFile || !dir) {
+          console.error("usage: ws-schema <runtime_api.json> <outdir>");
+          return 2;
+        }
+        const { extractWsSchema } = await import("./domain/wsSchema.js");
+        out(await extractWsSchema({ runtimeFile, outputRoot: dir }));
         return 0;
       }
       default:

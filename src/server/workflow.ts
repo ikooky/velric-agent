@@ -92,5 +92,11 @@ export const PHASE_TAGS: Record<string, string> = {
   wayback_urls: "[Phase 1 资产] Wayback 历史 URL:死接口/老管理面回收",
   detect_sourcemaps: "[Phase 2 探测] Source map 泄漏:原始源码可恢复",
   auto_batch: "[批量] N 目标管道 + 汇总对比报告(监控场景)",
+  auth_probe: "[Phase 4 深化] 鉴权面测绘:匿名可达 vs 需鉴权端点清单",
+  idor_prescreen: "[Phase 4 深化] IDOR 预筛:id 类参数数值邻域差分(只读)",
+  git_restore: "[Phase 4 深化] .git 泄漏源码还原(tree/blob 对象重建)",
+  dom_sinks: "[Phase 4 深化] DOM-XSS 污点链:source→sink 静态分析",
+  jwt_inspect: "[Phase 4 深化] JWT 解码+弱密钥爆破+alg=none 检测",
+  ws_schema: "[Phase 4 深化] WS 帧字段 schema:私有协议接口文档",
   workflow_guide: "[必读] 返回完整方法论(Phase 0-5+纪律);开局先调这个",
 };

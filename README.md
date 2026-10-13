@@ -47,6 +47,22 @@ Agent 自主渗透测试工具包 —— 让 Agent 独立完成 Web 应用的攻
 - **批量模式** `auto-batch` — N 目标管道 + 汇总对比报告 + webhook 通知(--notify URL)
 - **断点续跑** — auto 管道 stage 级 checkpoint.json,中断后 skip 已完成阶段(--fresh 强制重跑)
 
+### 从测绘到验证
+
+- **鉴权面测绘** `auth-probe` — 每个端点匿名 vs 带 cookie 双探,产出匿名可达/需鉴权/歧义三类清单(API 面核心交付物)
+- **IDOR 预筛** `idor-prescreen` — 参数矩阵筛 id 类参数,数值邻域差分(原值/邻值/不存在),响应指纹对比,候选交宿主深挖(只读)
+- **.git 源码还原** `git-restore` — 泄漏 .git 的 config/HEAD/refs + loose objects 逐层拉取,本地重建完整源码树(tree→blob 真实解析,zlib+raw 模式)
+- **DOM-XSS 污点链** `dom-sinks` — location.*/window.name/postMessage → innerHTML/eval/document.write/insertAdjacentHTML 静态污点分析,fixture 5/5 链全中
+- **JWT 分析** `jwt-inspect` — secrets/js 语料/token 三源收集,header/payload 解码,exp/alg=none 检测,HS256 弱密钥字典爆破(实测 "secret" 秒破)
+- **WS 消息 schema** `ws-schema` — 录制的 WS 帧解析成字段表(点路径+类型+样本)= 私有协议接口文档
+
+### 基础设施
+
+- **SOCKS5 透传** — undici 原生 Socks5ProxyAgent,--proxy socks5:// 直用
+- **代理池轮换** `--proxy-pool FILE` — 轮换+失败计数+自动剔除
+- **全局限速** `--rps N` — per-host token bucket,批量目标保持礼貌
+- **断点续跑** — stage 级 checkpoint(本轮已含)
+
 ### 内建情报能力
 
 - **秘密扫描** — harvest 对 JS bundle 做 regex 扫描(AWS key/GH token/JWT/DB URL/内网 IP/内部主机名),命中写 `secrets.txt`,auto 管道自动升级为 high finding
@@ -95,7 +111,7 @@ velric-agent help
 
 ## MCP 接入
 
-`velric-agent mcp` 启动 stdio MCP server，暴露全部 27 个工具 + 2 个 resources(driver-playbook/workflow-guide) + 1 个 prompt(hunt-driver)。
+`velric-agent mcp` 启动 stdio MCP server，暴露全部 33 个工具 + 2 个 resources(driver-playbook/workflow-guide) + 1 个 prompt(hunt-driver)。
 
 Hermes（`config.yaml`）：
 

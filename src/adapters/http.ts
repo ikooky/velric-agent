@@ -1,10 +1,18 @@
 import { createHash } from "node:crypto";
-import { ProxyAgent, fetch as undiciFetch, type Dispatcher } from "undici";
+import { ProxyAgent, Socks5ProxyAgent, fetch as undiciFetch, type Dispatcher } from "undici";
+
+// Process-wide rate limiting (per-host token bucket) — opt-in via
+// setGlobalRateLimit() so batch/targeted tools stay polite.
+import { acquire } from "../domain/rateLimit.js";
+
+let globalRps = 0;
+export const setGlobalRateLimit = (rps: number): void => { globalRps = rps; };
 
 /** Best-effort HTTP layer shared by probes and harvesters. TLS verification is
  * disabled on purpose: recon targets are often self-signed / internal hosts. */
 
 export interface FetchOptions {
+  readonly raw?: boolean;
   readonly redirect?: "follow" | "manual";
   readonly headers?: Readonly<Record<string, string>>;
   readonly timeoutMs?: number;
@@ -25,6 +33,7 @@ export interface FetchResult {
   readonly body: string;
   readonly bytes: number;
   readonly sha256: string;
+  readonly rawBuffer?: Buffer;
   readonly error?: string;
 }
 
@@ -64,14 +73,17 @@ const fetchOnce = async (
   if (options.cookie) headers["Cookie"] = options.cookie;
 
   // A real egress proxy: requests route through it. Never leaked to the target.
-  let dispatcher: ProxyAgent | undefined;
+  let dispatcher: ProxyAgent | Socks5ProxyAgent | undefined;
   if (options.proxy) {
-    dispatcher = new ProxyAgent({
-      uri: options.proxy,
-      connect: { rejectUnauthorized: false },
-    });
+    dispatcher = options.proxy.startsWith("socks5")
+      ? new Socks5ProxyAgent(new URL(options.proxy))
+      : new ProxyAgent({ uri: options.proxy, connect: { rejectUnauthorized: false } });
   }
 
+  // Per-host throttle when a global rate limit is configured.
+  if (globalRps > 0) {
+    try { await acquire(new URL(url).hostname, { rps: globalRps }); } catch { /* unthrottled */ }
+  }
   try {
     const res = await undiciFetch(url, {
       method: options.method ?? "GET",
@@ -86,6 +98,10 @@ const fetchOnce = async (
     const finalRedirect = res.headers.get("location");
     const buf = Buffer.from(await res.arrayBuffer());
     const slice = buf.subarray(0, maxBytes);
+    // raw mode: hand the caller the untouched Buffer (binary git objects etc.)
+    if (options.raw) {
+      (res as unknown as { __rawBuffer?: Buffer }).__rawBuffer = slice;
+    }
     const headerObj: Record<string, string> = {};
     res.headers.forEach((v, k) => {
       headerObj[k] = v;
@@ -94,9 +110,10 @@ const fetchOnce = async (
       url,
       status: res.status,
       ok: res.ok,
+      rawBuffer: (res as unknown as { __rawBuffer?: Buffer }).__rawBuffer,
       contentType: res.headers.get("content-type") ?? "",
       headers: headerObj,
-      body: slice.toString("utf8"),
+      body: options.raw ? "" : slice.toString("utf8"),
       bytes: buf.length,
       sha256: createHash("sha256").update(buf).digest("hex"),
       finalUrl: finalRedirect ?? null,

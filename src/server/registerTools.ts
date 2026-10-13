@@ -353,6 +353,36 @@ export const handlers: Readonly<Record<string, Handler>> = {
     })();
     return { started: true, outputRoot: p.outputRoot, statusFile, pollHint: "read batch_status.json / each target's pipeline.json" };
   },
+  auth_probe: async (raw) => {
+    const p = z.object({ endpointsFile: z.string(), outputRoot: z.string(), cookie: z.string().optional(), proxy: z.string().optional() }).parse(raw);
+    const { probeAuth } = await import("../domain/authProbe.js");
+    return probeAuth(p);
+  },
+  idor_prescreen: async (raw) => {
+    const p = z.object({ mergedFile: z.string(), outputRoot: z.string(), cookie: z.string().optional(), proxy: z.string().optional() }).parse(raw);
+    const { prescreenIdor } = await import("../domain/authProbe.js");
+    return prescreenIdor(p);
+  },
+  git_restore: async (raw) => {
+    const p = z.object({ baseUrl: z.string(), outputRoot: z.string(), proxy: z.string().optional() }).parse(raw);
+    const { restoreGit } = await import("../domain/gitRestore.js");
+    return restoreGit(p);
+  },
+  dom_sinks: async (raw) => {
+    const p = z.object({ jsDir: z.string(), outputRoot: z.string() }).parse(raw);
+    const { scanDomSinks } = await import("../domain/domSinks.js");
+    return scanDomSinks(p);
+  },
+  jwt_inspect: async (raw) => {
+    const p = z.object({ outputRoot: z.string(), secretsFile: z.string().optional(), jsDir: z.string().optional(), token: z.string().optional() }).parse(raw);
+    const { inspectJwt } = await import("../domain/jwt.js");
+    return inspectJwt(p);
+  },
+  ws_schema: async (raw) => {
+    const p = z.object({ runtimeFile: z.string(), outputRoot: z.string() }).parse(raw);
+    const { extractWsSchema } = await import("../domain/wsSchema.js");
+    return extractWsSchema(p);
+  },
   workflow_guide: async () => {
     const { WORKFLOW_GUIDE } = await import("./workflow.js");
     return WORKFLOW_GUIDE;

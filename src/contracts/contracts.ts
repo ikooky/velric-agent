@@ -476,6 +476,79 @@ export const batchContract: ToolContract = {
   examples: [{ title: "batch", input: { seedsFile: "/tmp/seeds.txt", outputRoot: "/tmp/batch" } }],
 };
 
+
+export const authProbeContract: ToolContract = {
+  name: "auth_probe",
+  title: "Auth-surface mapping",
+  description:
+    "Every discovered endpoint probed anonymous vs authenticated (cookie). Classifies the API surface into anonymous-reachable / auth-required / ambiguous — the core deliverable of API recon. Writes auth_surface.json.",
+  kind: "runtime",
+  inputSchema: z.object({ endpointsFile: z.string(), outputRoot, cookie: z.string().optional(), proxy: z.string().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ probed: z.number() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "auth", input: { endpointsFile: "/tmp/recon/api_merged.txt", outputRoot: "/tmp/recon" } }],
+};
+
+export const idorContract: ToolContract = {
+  name: "idor_prescreen",
+  title: "IDOR candidate prescreen",
+  description:
+    "From the param matrix: GET endpoints with id-like params, numeric-neighbor variants (original vs shifted), response fingerprint diff. Read-only. Candidates go to host_review. Writes idor_prescreen.json.",
+  kind: "runtime",
+  inputSchema: z.object({ mergedFile: z.string(), outputRoot, cookie: z.string().optional(), proxy: z.string().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ screened: z.number() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "idor", input: { mergedFile: "/tmp/recon/params_merged.json", outputRoot: "/tmp/recon" } }],
+};
+
+export const gitRestoreContract: ToolContract = {
+  name: "git_restore",
+  title: "Leaked .git source recovery",
+  description:
+    "Fetches .git config/HEAD/refs + walks loose objects (tree→blob) from a leaked .git directory and rebuilds the source tree locally. Read-only against the target. Writes git-restored/ + git_restore.json.",
+  kind: "runtime",
+  inputSchema: z.object({ baseUrl: z.string(), outputRoot, proxy: z.string().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ gitFound: z.boolean() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "git", input: { baseUrl: "https://target/", outputRoot: "/tmp/recon" } }],
+};
+
+export const domSinksContract: ToolContract = {
+  name: "dom_sinks",
+  title: "DOM-XSS taint chain scan",
+  description:
+    "Static taint analysis over harvested JS: location.hash/search/referrer/name → innerHTML/eval/document.write/insertAdjacentHTML/jQuery chains. Outputs candidate sinks + trigger context. Writes dom_sinks.json.",
+  kind: "runtime",
+  inputSchema: z.object({ jsDir: z.string(), outputRoot, observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ chains: z.number() }),
+  annotations: readOnlyAnnotations(),
+  examples: [{ title: "dom", input: { jsDir: "/tmp/recon/js", outputRoot: "/tmp/recon" } }],
+};
+
+export const jwtContract: ToolContract = {
+  name: "jwt_inspect",
+  title: "JWT analysis",
+  description:
+    "Collects JWTs (secrets.txt / js corpus / raw token), decodes header+payload (alg/exp/claims), flags alg=none, cracks HS256 against a weak-secret dictionary. Writes jwt_analysis.json.",
+  kind: "runtime",
+  inputSchema: z.object({ outputRoot, secretsFile: z.string().optional(), jsDir: z.string().optional(), token: z.string().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ tokens: z.number() }),
+  annotations: readOnlyAnnotations(),
+  examples: [{ title: "jwt", input: { outputRoot: "/tmp/recon", jsDir: "/tmp/recon/js" } }],
+};
+
+export const wsSchemaContract: ToolContract = {
+  name: "ws_schema",
+  title: "WS message schema",
+  description:
+    "Parses recorded WebSocket frames (runtime_api.json wsFrames) into per-endpoint field tables (dotted paths, types, samples) — private-protocol interface docs from real traffic. Writes ws_schema.json.",
+  kind: "runtime",
+  inputSchema: z.object({ runtimeFile: z.string(), outputRoot, observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ endpoints: z.number() }),
+  annotations: readOnlyAnnotations(),
+  examples: [{ title: "ws", input: { runtimeFile: "/tmp/recon/runtime_api.json", outputRoot: "/tmp/recon" } }],
+};
+
 export const ALL_CONTRACTS: readonly ToolContract[] = [
   dnsResolveContract,
   httpProbeContract,
@@ -500,6 +573,12 @@ export const ALL_CONTRACTS: readonly ToolContract[] = [
   waybackContract,
   sourcemapsContract,
   batchContract,
+  authProbeContract,
+  idorContract,
+  gitRestoreContract,
+  domSinksContract,
+  jwtContract,
+  wsSchemaContract,
   huntContract,
   huntRecordContract,
   huntOverviewContract,
