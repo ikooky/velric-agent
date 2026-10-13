@@ -5,6 +5,7 @@ import { spiderMpa } from "./application/spider.js";
 import { buildPermissionTree } from "./application/permTreeService.js";
 import { mergeParamSamples } from "./application/paramMerge.js";
 import { captureRuntime } from "./application/runtime.js";
+import { DEFAULT_HOOK_CONFIG } from "./domain/preload.js";
 import { PRODUCT_IDENTITY } from "./identity.js";
 
 /** Minimal argv parser: command-first, --flag value pairs, --bool flags. */
@@ -45,7 +46,7 @@ Usage:
   velric-agent harvest <url> <outdir>     static SPA bundle harvest
   velric-agent extract-routes <jsdir> <outdir>
   velric-agent spider <url> <outdir>      MPA crawl (--cookie/--max/--depth/--exclude)
-  velric-agent runtime <url> <outdir>     headless runtime capture (--chromium PATH)
+  velric-agent runtime <url> <outdir>     headless runtime capture (--chromium/--routes/--wait/--per-route/--api-pattern)
   velric-agent perm-tree <jsdir> <outdir> permission tree rebuild (--role NAME)
   velric-agent merge-params <samples.json> <outdir>
   velric-agent help
@@ -164,15 +165,31 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
       case "runtime": {
         const [base, dir] = positional;
         if (!base || !dir) {
-          console.error("usage: runtime <url> <outdir> [--chromium PATH]");
+          console.error(
+            "usage: runtime <url> <outdir> [--chromium PATH] [--routes /a,/b] [--wait MS] [--per-route MS] [--route-timeout MS] [--api-pattern RE] [--headless false] [--proxy URL]",
+          );
           return 2;
         }
+        const num = (v: string | boolean | undefined): number | undefined =>
+          typeof v === "string" && v.trim() !== "" ? Number(v) : undefined;
+        const strList = (v: string | boolean | undefined): string[] | undefined =>
+          typeof v === "string" && v.trim() !== ""
+            ? v.split(",").map((s) => s.trim()).filter(Boolean)
+            : undefined;
         out(
           await captureRuntime({
             baseUrl: base,
             outputRoot: dir,
             chromiumPath: typeof flags.chromium === "string" ? flags.chromium : undefined,
             proxy: typeof flags.proxy === "string" ? flags.proxy : undefined,
+            routes: strList(flags.routes),
+            waitMs: num(flags.wait),
+            perRouteMs: num(flags["per-route"]),
+            routeTimeoutMs: num(flags["route-timeout"]),
+            headless: flags.headless === "false" ? false : undefined,
+            hook: typeof flags["api-pattern"] === "string"
+              ? { ...DEFAULT_HOOK_CONFIG, apiPattern: flags["api-pattern"] }
+              : undefined,
           }),
         );
         return 0;

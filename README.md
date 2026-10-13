@@ -1,4 +1,4 @@
-Web 应用 API 面侦察工具集 —— 一个 CLI 和一个 MCP server，共享同一核心。适用于已授权的安全测试：枚举 SPA/MPA 的后端接口、前端路由、请求参数与运行时行为。
+Agent 自主渗透测试工具包 —— 让 Agent 独立完成 Web 应用的攻击面测绘。覆盖 SPA/MPA 的后端接口枚举、无头浏览器运行时流量录制、前端权限树重建与多样本参数矩阵聚合，提供 CLI 与 MCP server 双形态，可被任何 MCP 客户端直接驱动。仅用于已授权的安全测试。
 
 ## 功能
 
@@ -43,7 +43,7 @@ velric-agent http-probe https://target/
 velric-agent harvest https://target/ /tmp/recon
 velric-agent extract-routes /tmp/recon/js /tmp/recon
 velric-agent spider https://target/ /tmp/recon --cookie "session=..."
-velric-agent runtime https://target/ /tmp/recon --chromium /usr/bin/chromium
+velric-agent runtime https://target/ /tmp/recon --chromium /usr/bin/chromium --wait 6000 --per-route 4000
 velric-agent perm-tree /tmp/recon/js /tmp/recon
 velric-agent merge-params /tmp/recon/param_samples.json /tmp/recon
 velric-agent help
@@ -61,7 +61,7 @@ mcp_servers:
     command: npx
     args:
       - -y
-      - velric-agent@0.1.0
+      - velric-agent@latest
       - mcp
     enabled: true
 ```
@@ -73,7 +73,7 @@ Claude Code / Cursor 等 JSON 客户端：
   "mcpServers": {
     "velric-agent": {
       "command": "npx",
-      "args": ["-y", "velric-agent@0.1.0", "mcp"]
+      "args": ["-y", "velric-agent@latest", "mcp"]
     }
   }
 }

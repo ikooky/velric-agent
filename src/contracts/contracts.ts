@@ -102,6 +102,7 @@ export const captureRuntimeContract: ToolContract = {
     perRouteMs: z.number().int().optional(),
     routeTimeoutMs: z.number().int().optional(),
     recordWs: z.boolean().optional(),
+    apiPattern: z.string().optional(),
   }),
   outputSchema: z.object({ uniqueCalls: z.array(z.string()) }),
   annotations: writingAnnotations(),

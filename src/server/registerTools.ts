@@ -11,6 +11,7 @@ import { spiderMpa } from "../application/spider.js";
 import { buildPermissionTree } from "../application/permTreeService.js";
 import { mergeParamSamples } from "../application/paramMerge.js";
 import { captureRuntime } from "../application/runtime.js";
+import { DEFAULT_HOOK_CONFIG } from "../domain/preload.js";
 import { writeArtifact } from "../adapters/artifacts.js";
 import { classifyPaths, extractPathLiterals, extractRoutes } from "../domain/endpoints.js";
 
@@ -98,34 +99,38 @@ const handlers: Readonly<Record<string, Handler>> = {
         })
         .parse(raw),
     ),
-  capture_runtime: (raw) =>
-    captureRuntime(
-      z
-        .object({
-          baseUrl: z.string(),
-          outputRoot: z.string(),
-          routes: z.array(z.string()).optional(),
-          cookies: z
-            .array(
-              z.object({
-                name: z.string(),
-                value: z.string(),
-                path: z.string().optional(),
-              }),
-            )
-            .optional(),
-          localStorage: z.record(z.string(), z.string()).optional(),
-          stubs: z.array(z.object({ match: z.string(), body: z.unknown() })).optional(),
-          chromiumPath: z.string().optional(),
-          headless: z.boolean().optional(),
-          proxy: z.string().optional(),
-          waitMs: z.number().optional(),
-          perRouteMs: z.number().optional(),
-          routeTimeoutMs: z.number().optional(),
-          recordWs: z.boolean().optional(),
-        })
-        .parse(raw),
-    ),
+  capture_runtime: (raw) => {
+    const i = z
+      .object({
+        baseUrl: z.string(),
+        outputRoot: z.string(),
+        routes: z.array(z.string()).optional(),
+        cookies: z
+          .array(
+            z.object({
+              name: z.string(),
+              value: z.string(),
+              path: z.string().optional(),
+            }),
+          )
+          .optional(),
+        localStorage: z.record(z.string(), z.string()).optional(),
+        stubs: z.array(z.object({ match: z.string(), body: z.unknown() })).optional(),
+        chromiumPath: z.string().optional(),
+        headless: z.boolean().optional(),
+        proxy: z.string().optional(),
+        waitMs: z.number().optional(),
+        perRouteMs: z.number().optional(),
+        routeTimeoutMs: z.number().optional(),
+        recordWs: z.boolean().optional(),
+        apiPattern: z.string().optional(),
+      })
+      .parse(raw);
+    return captureRuntime({
+      ...i,
+      hook: i.apiPattern ? { ...DEFAULT_HOOK_CONFIG, apiPattern: i.apiPattern } : undefined,
+    });
+  },
   build_perm_tree: (raw) =>
     buildPermissionTree(
       z

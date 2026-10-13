@@ -179,18 +179,10 @@ export const captureRuntime = async (
       storage: [],
       headers: [],
     };
-    for (const rt of routes) {
-      try {
-        await page.goto(origin + rt, {
-          waitUntil: "domcontentloaded",
-          timeout: input.routeTimeoutMs ?? 12000,
-        });
-      } catch {
-        /* route timeout is data, not failure */
-      }
-      await page.waitForTimeout(input.perRouteMs ?? 900);
-      // Collect per page: the hook state resets on every navigation, so gather
-      // as we go instead of reading only the final document.
+    // Read the live document's hook state and fold it into the totals. The hook
+    // state resets on every navigation, so each document must be collected
+    // while it is still the active page.
+    const collect = async (key: string): Promise<void> => {
       const fresh = await page.evaluate(`(() => {
         const w = window;
         const obs = w.__API_RECON_OBSERVE__ || { storage: [], headers: [] };
@@ -206,12 +198,27 @@ export const captureRuntime = async (
         routes: string[];
         observe: { storage: unknown[]; headers: { name: string; url: string }[] };
       };
-      perRoute[rt] = fresh.apis;
+      perRoute[key] = [...new Set([...(perRoute[key] ?? []), ...fresh.apis])];
       for (const a of fresh.apis) allApis.add(a);
       allDetail.push(...fresh.detail);
       for (const r of fresh.routes) allVueRoutes.add(r);
       observeAcc.storage.push(...fresh.observe.storage);
       observeAcc.headers.push(...fresh.observe.headers);
+    };
+    // Boot phase: the entry document is live right now; collect it before the
+    // route loop navigates away (its initial API burst is otherwise lost).
+    await collect(new URL(shell.url).pathname);
+    for (const rt of routes) {
+      try {
+        await page.goto(origin + rt, {
+          waitUntil: "domcontentloaded",
+          timeout: input.routeTimeoutMs ?? 12000,
+        });
+      } catch {
+        /* route timeout is data, not failure */
+      }
+      await page.waitForTimeout(input.perRouteMs ?? 900);
+      await collect(rt);
     }
 
     const uniqueCalls = [...allApis].sort();

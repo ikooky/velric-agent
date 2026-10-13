@@ -36,6 +36,13 @@ Pick the entry tool from what the user supplied:
    `harvest_static` (SPA) or `spider_mpa` (MPA).
 3. Runtime to recover methods/bodies: `capture_runtime` with the entry URL;
    pass `routes` from the static `routes.txt` for deeper coverage.
+   - Larger production SPAs (Grafana, dashboards, admin consoles) boot their
+     first API burst **seconds** after the document loads: raise the wait
+     (`capture_runtime` `waitMs` / CLI `--wait 6000-8000`, `perRouteMs` /
+     `--per-route 4000-6000`) or the capture reports few/zero calls.
+   - Custom API prefixes (Algolia `/1/indexes/`, SaaS `/v2/`, `/internal/`
+     variants) are not matched by the default pattern: pass an explicit
+     `apiPattern` (MCP) / `--api-pattern '<re>'` (CLI) to record them.
 4. If module pages stay blank behind permission gates: `build_perm_tree`, feed
    its stubs back into `capture_runtime` via `stubs`, re-run.
 5. Merge parameters: collect `param_samples.json` entries, `merge_params`.
