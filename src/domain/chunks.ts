@@ -34,7 +34,7 @@ export const parseChunkMaps = (js: string): ChunkMap[] => {
   const pubs = [...js.matchAll(/(?:\.p|publicPath)\s*=\s*"([^"]*)"/g)].map(
     (m) => m[1]!,
   );
-  const re = /\}\[[A-Za-z_$]\]\s*\+\s*"\.js"/g;
+  const re = /\}\[[A-Za-z_$][\w$]*\]\s*\+?\s*\)?\s*\+\s*"\.js"/g;
   for (const m of js.matchAll(re)) {
     const body = matchedBlock(js, m.index!);
     const pairs: Record<string, string> = {};

@@ -69,21 +69,27 @@ export const parseMpaPage = (html: string): MpaPage => {
   };
   walk(doc);
 
-  // inline script text
+  // inline script text: parse5 puts script bodies in #text child nodes
   const scriptTexts: string[] = [];
-  const collectText = (node: unknown): void => {
+  const collectText = (node: unknown, inScript: boolean): void => {
     if (Array.isArray(node)) {
-      node.forEach(collectText);
+      node.forEach((n) => collectText(n, inScript));
       return;
     }
     if (node === null || typeof node !== "object") return;
-    const el = node as { tagName?: string; value?: string; childNodes?: unknown[] };
-    if (el.tagName === "script" && typeof el.value === "string") {
+    const el = node as {
+      nodeName?: string;
+      tagName?: string;
+      value?: string;
+      childNodes?: unknown[];
+    };
+    const isScript = el.tagName === "script";
+    if (inScript && el.nodeName === "#text" && typeof el.value === "string") {
       scriptTexts.push(el.value);
     }
-    if (el.childNodes) collectText(el.childNodes);
+    if (el.childNodes) collectText(el.childNodes, isScript || inScript);
   };
-  collectText(doc);
+  collectText(doc, false);
   for (const t of scriptTexts) {
     for (const m of t.matchAll(/["'`](\/[A-Za-z0-9_\-./{}$:?=&]{2,120})["'`]/g)) {
       inline.push(m[1]!);

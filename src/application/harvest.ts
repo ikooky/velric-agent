@@ -133,10 +133,17 @@ export const harvestStatic = async (
   if (missing.length > 0) await pooled(missing, concurrency, download);
   const unreachable = [...allManifest].filter((u) => !have.has(u)).length;
 
-  // Extract from the whole corpus.
+  // Extract from the whole corpus, including the entry HTML's inline scripts.
   const api = new Set<string>();
   const other = new Set<string>();
   const routes = new Set<string>();
+  const consume = (text: string): void => {
+    const classified = classifyPaths(extractPathLiterals(text));
+    for (const p of classified.api) api.add(p);
+    for (const p of classified.other) other.add(p);
+    for (const r of extractRoutes(text)) routes.add(r);
+  };
+  consume(entry.body); // inline <script> API calls in the entry page
   let files: string[] = [];
   try {
     files = await readdir(jsDir);
@@ -150,10 +157,7 @@ export const harvestStatic = async (
     } catch {
       return;
     }
-    const classified = classifyPaths(extractPathLiterals(text));
-    for (const p of classified.api) api.add(p);
-    for (const p of classified.other) other.add(p);
-    for (const r of extractRoutes(text)) routes.add(r);
+    consume(text);
   });
 
   const artifacts: { path: string; bytes: number }[] = [];

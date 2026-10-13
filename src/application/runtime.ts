@@ -169,6 +169,16 @@ export const captureRuntime = async (
     const shellLinks = shell.links.filter((h): h is string => !!h && h.length > 1);
     const routes = [...new Set([...(input.routes ?? ["/"]), ...shellLinks])];
     const perRoute: Record<string, string[]> = {};
+    const allApis = new Set<string>();
+    const allDetail: {
+      method: string; url: string; status: number;
+      reqBody: string | null; responseBody: string | null; source: string;
+    }[] = [];
+    const allVueRoutes = new Set<string>();
+    const observeAcc: { storage: unknown[]; headers: { name: string; url: string }[] } = {
+      storage: [],
+      headers: [],
+    };
     for (const rt of routes) {
       try {
         await page.goto(origin + rt, {
@@ -179,35 +189,32 @@ export const captureRuntime = async (
         /* route timeout is data, not failure */
       }
       await page.waitForTimeout(input.perRouteMs ?? 900);
-      const fresh = await page.evaluate<string[]>(`(() => {
+      // Collect per page: the hook state resets on every navigation, so gather
+      // as we go instead of reading only the final document.
+      const fresh = await page.evaluate(`(() => {
         const w = window;
-        const out = [];
-        if (w.__API_RECON_LOG__) for (const e of w.__API_RECON_LOG__) out.push(e);
-        return out;
-      })()`);
-      perRoute[rt] = fresh;
+        const obs = w.__API_RECON_OBSERVE__ || { storage: [], headers: [] };
+        return {
+          apis: [...(w.__API_RECON_LOG__ || [])],
+          detail: (w.__API_RECON_DETAIL__ || []).slice(-2000),
+          routes: [...(w.__API_RECON_ROUTES__ || [])],
+          observe: { storage: obs.storage.slice(-200), headers: obs.headers.slice(-500) },
+        };
+      })()`) as {
+        apis: string[];
+        detail: { method: string; url: string; status: number; reqBody: string | null; responseBody: string | null; source: string }[];
+        routes: string[];
+        observe: { storage: unknown[]; headers: { name: string; url: string }[] };
+      };
+      perRoute[rt] = fresh.apis;
+      for (const a of fresh.apis) allApis.add(a);
+      allDetail.push(...fresh.detail);
+      for (const r of fresh.routes) allVueRoutes.add(r);
+      observeAcc.storage.push(...fresh.observe.storage);
+      observeAcc.headers.push(...fresh.observe.headers);
     }
 
-    // Collect the recorded surface from the LAST page visit.
-    const collected = await page.evaluate(`(() => {
-      const w = window;
-      return {
-        apis: [...(w.__API_RECON_LOG__ || [])],
-        detail: (w.__API_RECON_DETAIL__ || []).slice(-2000),
-        routes: [...(w.__API_RECON_ROUTES__ || [])],
-        observe: w.__API_RECON_OBSERVE__ || { storage: [], headers: [] },
-      };
-    })()`) as {
-      apis: string[];
-      detail: { method: string; url: string; status: number; reqBody: string | null; responseBody: string | null; source: string }[];
-      routes: string[];
-      observe: { storage: unknown[]; headers: { name: string; url: string }[] };
-    };
-
-    // per-route attribution: replay route list and diff the detail log length is
-    // unreliable across navigations (state resets per document), so attribution
-    // is derived from the final page's detail plus route presence.
-    const uniqueCalls = [...new Set(collected.apis)].sort();
+    const uniqueCalls = [...allApis].sort();
     const wsUniq = [...new Set(wsFrames.map((f) => f.url))].filter(Boolean).sort();
 
     const artifacts: { path: string; bytes: number }[] = [];
@@ -220,9 +227,12 @@ export const captureRuntime = async (
             shell,
             uniqueCalls,
             perRoute,
-            detail: collected.detail,
-            routes: collected.routes,
-            observe: collected.observe,
+            detail: allDetail.slice(-4000),
+            routes: [...allVueRoutes].sort(),
+            observe: {
+              storage: observeAcc.storage.slice(-1000),
+              headers: observeAcc.headers.slice(-2000),
+            },
             wsEndpoints: wsUniq,
             wsFrames,
           },
@@ -251,7 +261,7 @@ export const captureRuntime = async (
       routesVisited: routes,
       uniqueCalls,
       perRoute,
-      details: collected.detail.length,
+      details: allDetail.length,
       wsEndpoints: wsUniq,
       wsFrames: wsFrames.length,
       sseEndpoints: [],
