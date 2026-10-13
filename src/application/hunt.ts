@@ -79,18 +79,25 @@ const execTool = async (
       let body: string | undefined;
       if (typeof args.body === "string") body = args.body;
       else if (args.body !== undefined) body = JSON.stringify(args.body);
+      const redirect = str("redirect", "manual") === "follow" ? "follow" : "manual";
       const r = await httpProbe({
         url,
         proxy: ctx.proxy,
+        method: str("method", "GET").toUpperCase(),
+        body,
+        redirect,
         headers: {
           ...headers,
           ...(body !== undefined ? { "content-type": str("contentType", "application/json") } : {}),
         },
       });
       const bodyP = (r as { body?: string }).body?.slice(0, 3000);
+      const redirectNote = (r as { finalUrl?: string | null }).finalUrl
+        ? ` → redirects to ${(r as { finalUrl?: string | null }).finalUrl}`
+        : "";
       return {
-        result: { status: r.status, title: r.title, bodyPreview: bodyP },
-        digest: `${str("method", "GET")} ${url} → ${r.status} | ${(bodyP ?? "").replace(/\s+/g, " ").slice(0, 280)}`,
+        result: { status: r.status, title: r.title, bodyPreview: bodyP, redirectedTo: (r as { finalUrl?: string | null }).finalUrl ?? null },
+        digest: `${str("method", "GET").toUpperCase()} ${url} → ${r.status}${redirectNote} | ${(bodyP ?? "").replace(/\s+/g, " ").slice(0, 280)}`,
         urls: [url],
       };
     }
@@ -235,25 +242,51 @@ const writeBack = (
   const findings = (fin.findings ?? []) as { name?: string; vulnclass?: string; severity?: string; summary?: string; poc?: string }[];
 
   // gate 1: every http(s) URL cited in evidence must have been truly requested
-  const requested = [...touchedUrls];
+  // (path-exact: same origin+path; query string may differ — the host root
+  // being probed does NOT authorize citing arbitrary paths under it)
+  const norm = (u: string): string => {
+    try {
+      const x = new URL(u);
+      return `${x.origin}${x.pathname}`;
+    } catch {
+      return u.replace(/[?#].*$/, "");
+    }
+  };
+  const requested = new Set([...touchedUrls].map(norm));
   const citedUrls = (txt: string): string[] =>
     [...String(txt).matchAll(/https?:\/\/[^\s"'\]]+/g)].map((m) => m[0]!.replace(/[.,;)]+$/, ""));
   const urlOk = (txt: string): boolean =>
-    citedUrls(txt).every((u) => requested.some((r) => u === r || u.startsWith(r) || r.startsWith(u)));
+    citedUrls(txt).every((u) => requested.has(norm(u)));
 
   // gate 2: observed (non-inferred) facts must cite a system digest — the
-  // model's narration alone is never evidence.
-  const digestKeys = systemDigests.map((d) => {
-    const url = d.match(/https?:\/\/\S+/)?.[0]?.split("?")[0];
-    const status = d.match(/→\s*(\d{3})/)?.[1];
-    return { raw: d, url, status };
-  });
+  // model's narration alone is never evidence. A digest authorizes exactly the
+  // URL+status it recorded; nothing else (no path-prefix, no loose tail match).
+  const digestKeys = systemDigests
+    .map((d) => {
+      const url = d.match(/https?:\/\/\S+/)?.[0]?.replace(/[.,;)]+$/, "");
+      const status = d.match(/→\s*(\d{3})/)?.[1];
+      return url ? { url: url.split("?")[0]!, status } : null;
+    })
+    .filter((x): x is { url: string; status: string } => x !== null);
   const digestOk = (f: { summary?: string; evidence?: string; confidence?: string }): boolean => {
     if (f.confidence === "inferred") return true;
     const txt = `${f.evidence ?? ""} ${f.summary ?? ""}`;
+    // relative-path citations must match a requested path on the intent's target origin
+    const origin = (() => {
+      const m = txt.match(/https?:\/\/[^/\s"']+/);
+      return m ? m[0] : null;
+    })();
+    const relPaths = [...txt.matchAll(/(?<![/\w])\/(?:[\w.-]+\/)*[\w.-]+/g)].map((m) => m[0]);
     return digestKeys.some((k) => {
-      if (k.url && txt.includes(k.url)) return true;
-      if (k.url && k.status && txt.includes(k.status) && txt.includes(k.url.split("/").slice(-1)[0] ?? "###")) return true;
+      if (txt.includes(k.url)) return true;
+      if (
+        origin &&
+        relPaths.some((p) => `${origin}${p}` === k.url) &&
+        k.status &&
+        txt.includes(k.status)
+      ) {
+        return true;
+      }
       return false;
     });
   };

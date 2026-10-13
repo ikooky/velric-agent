@@ -5,6 +5,7 @@ import { ProxyAgent, fetch as undiciFetch, type Dispatcher } from "undici";
  * disabled on purpose: recon targets are often self-signed / internal hosts. */
 
 export interface FetchOptions {
+  readonly redirect?: "follow" | "manual";
   readonly headers?: Readonly<Record<string, string>>;
   readonly timeoutMs?: number;
   readonly proxy?: string;
@@ -16,6 +17,7 @@ export interface FetchOptions {
 
 export interface FetchResult {
   readonly url: string;
+  readonly finalUrl?: string | null;
   readonly status: number;
   readonly ok: boolean;
   readonly contentType: string;
@@ -55,12 +57,13 @@ export const fetchUrl = async (
       method: options.method ?? "GET",
       headers,
       body: options.body,
-      redirect: "follow",
+      redirect: options.redirect ?? "follow",
       signal: controller.signal,
       ...(dispatcher ? { dispatcher } : {}),
     } satisfies Parameters<typeof undiciFetch>[1] & {
       dispatcher?: Dispatcher;
     });
+    const finalRedirect = res.headers.get("location");
     const buf = Buffer.from(await res.arrayBuffer());
     const slice = buf.subarray(0, maxBytes);
     const headerObj: Record<string, string> = {};
@@ -76,6 +79,7 @@ export const fetchUrl = async (
       body: slice.toString("utf8"),
       bytes: buf.length,
       sha256: createHash("sha256").update(buf).digest("hex"),
+      finalUrl: finalRedirect ?? null,
     };
   } catch (cause) {
     return {

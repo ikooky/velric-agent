@@ -22,7 +22,7 @@ export interface ProbeResult {
   readonly error?: string;
 }
 
-/** One GET probe: status line, title, fingerprint headers, body hash. */
+/** One probe: status line, title, fingerprint headers, body hash. */
 export const httpProbe = async (input: {
   readonly url: string;
   readonly cookie?: string;
@@ -30,6 +30,9 @@ export const httpProbe = async (input: {
   readonly timeoutMs?: number;
   readonly maxBytes?: number;
   readonly headers?: Readonly<Record<string, string>>;
+  readonly redirect?: "follow" | "manual";
+  readonly method?: string;
+  readonly body?: string;
 }): Promise<ProbeResult> => {
   const started = Date.now();
   const res = await fetchUrl(input.url, {
@@ -38,6 +41,9 @@ export const httpProbe = async (input: {
     timeoutMs: input.timeoutMs,
     maxBytes: input.maxBytes,
     headers: input.headers,
+    redirect: input.redirect,
+    method: input.method,
+    body: input.body,
   });
   const titleMatch = res.body.match(TITLE_RE);
   const title = titleMatch
