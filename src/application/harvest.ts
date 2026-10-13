@@ -44,8 +44,8 @@ export interface HarvestSummary {
   readonly artifacts: { path: string; bytes: number }[];
 }
 
-const SCRIPT_SRC_RE = /<script[^>]+src="([^"]+\.js[^"]*)"/gi;
-const LINK_JS_RE = /(?:src|href)="([^"]*\.js)"/gi;
+const SCRIPT_SRC_RE = /<script[^>]+src=("([^"]+\.js[^"]*)"|([^"\s>]+\.js))/gi;
+const LINK_JS_RE = /(?:src|href)=("([^"]*\.js)"|([^"\s>]+\.js))/gi;
 
 const normalizeBase = (raw: string): string =>
   raw.startsWith("http") ? raw : `https://${raw}`;
@@ -74,7 +74,7 @@ export const harvestStatic = async (
   const seeds = new Set<string>();
   for (const re of [SCRIPT_SRC_RE, LINK_JS_RE]) {
     for (const m of entry.body.matchAll(re)) {
-      const src = m[1]!;
+      const src = m[2] ?? m[3] ?? m[1]!;
       seeds.add(src.startsWith("http") ? src : new URL(src, base).href);
     }
   }

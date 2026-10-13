@@ -23,6 +23,7 @@ export interface RuntimeCaptureInput {
   readonly routeTimeoutMs?: number;
   readonly recordWs?: boolean;
   readonly captureResponses?: boolean;
+  readonly maxRoutes?: number;
 }
 
 export interface RuntimeCaptureResult {
@@ -167,7 +168,13 @@ export const captureRuntime = async (
       links: (string | null)[];
     };
     const shellLinks = shell.links.filter((h): h is string => !!h && h.length > 1);
-    const routes = [...new Set([...(input.routes ?? ["/"]), ...shellLinks])];
+    // Route fan-out cap: runtime's job is API-surface enumeration, not full-site
+    // mirroring. Heavy SPAs expose hundreds of live-DOM links (Discourse: ~106);
+    // visiting them all starves the route loop on modest hardware. Explicit
+    // input.routes take priority; discovered shell links are capped.
+    const maxRoutes = input.maxRoutes ?? 30;
+    const seedRoutes = [...new Set([...(input.routes ?? ["/"]), ...shellLinks])];
+    const routes = seedRoutes.slice(0, maxRoutes);
     const perRoute: Record<string, string[]> = {};
     const allApis = new Set<string>();
     const allDetail: {
@@ -261,6 +268,27 @@ export const captureRuntime = async (
       );
     } catch {
       /* api_static.txt absent — static merge skipped */
+    }
+    // param_samples.json: bridge runtime detail → merge_params input, so the
+    // recorded traffic feeds the parameter-matrix step without manual reshaping.
+    {
+      const paramSamples = allDetail
+        .filter((d) => d.reqBody || String(d.url).includes("?"))
+        .map((d) => ({
+          method: d.method,
+          url: String(d.url).startsWith("http")
+            ? String(d.url)
+            : new URL(String(d.url), origin).href,
+          body: d.reqBody,
+          query: String(d.url).includes("?") ? String(d.url).split("?")[1] ?? null : null,
+        }));
+      artifacts.push(
+        await writeArtifact(
+          root,
+          "param_samples.json",
+          JSON.stringify(paramSamples, null, 2),
+        ),
+      );
     }
 
     return {

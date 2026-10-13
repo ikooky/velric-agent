@@ -34,7 +34,7 @@ export const DEFAULT_HOOK_CONFIG: HookConfig = {
     flags: { success: true, message: "ok" },
   },
   stubs: [],
-  apiPattern: "\\/(api|apis|v\\d+|dev|internal|graphql)\\/",
+  apiPattern: "\\/(api|apis|v\\d+|dev|internal|graphql)\\/|\\.json(?:$|\\?)",
   recordDetail: true,
   respMax: 600,
   extractUrlsFromResponse: true,

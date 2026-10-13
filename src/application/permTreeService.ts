@@ -2,14 +2,15 @@ import { writeArtifact } from "../adapters/artifacts.js";
 import { readJsCorpus } from "./harvest.js";
 import {
   DEFAULT_PERM_HEURISTICS,
+  buildGenericPermTree,
   buildPermTree,
+  extractGenericRbac,
   extractRouteMap,
   flatCodes,
   parseUserRouteAuth,
   type PermTreeHeuristics,
   type PermTreeNode,
 } from "../domain/permTree.js";
-
 export interface PermTreeInput {
   readonly jsDir: string;
   readonly outputRoot: string;
@@ -26,6 +27,7 @@ export interface PermTreeResult {
   readonly treeRoots: number;
   readonly tree: PermTreeNode[];
   readonly artifacts: { path: string; bytes: number }[];
+  readonly mode?: "generic-rbac";
 }
 
 /**
@@ -52,12 +54,53 @@ export const buildPermissionTree = async (
     if (!f.text.includes("userRouteAuth")) continue;
     if (authFile === null || f.text.length > authFile.text.length) authFile = f;
   }
+  // Generic fallback: no userRouteAuth in the corpus — mine generic RBAC
+  // signals (hasPermi/hasRole/permission literals, route roles guards)
+  // instead of failing hard.
   if (authFile === null) {
-    throw {
-      code: "auth_module_not_found",
-      message: "userRouteAuth module not found in the JS corpus",
-      remediation:
-        "the target may not use this auth pattern; inspect api_static.txt instead",
+    const rbac = extractGenericRbac(corpus);
+    if (rbac.permissionCodes.length === 0 && rbac.routeRoles.length === 0) {
+      throw {
+        code: "auth_module_not_found",
+        message:
+          "neither userRouteAuth nor generic RBAC markers (hasPermi/hasRole/permission) found in the JS corpus",
+        remediation: "run harvest_static first; the target may not embed auth metadata client-side",
+      };
+    }
+    const tree = buildGenericPermTree(rbac.permissionCodes);
+    const role = input.role ?? "SUPER_ADMIN";
+    const permAll = { response_code: 0, verbose_msg: "ok", data: tree };
+    const rolePerm = {
+      response_code: 0,
+      verbose_msg: "ok",
+      data: { role_type: role, permissions: rbac.permissionCodes },
+    };
+    const artifacts: { path: string; bytes: number }[] = [];
+    artifacts.push(
+      await writeArtifact(input.outputRoot, "perm_codes_generic.txt", rbac.permissionCodes.join("\n")),
+    );
+    if (rbac.routeRoles.length > 0) {
+      artifacts.push(
+        await writeArtifact(input.outputRoot, "route_roles.json", JSON.stringify(rbac.routeRoles, null, 2)),
+      );
+    }
+    artifacts.push(
+      await writeArtifact(input.outputRoot, "permissions_tree.json", JSON.stringify(tree, null, 2)),
+    );
+    artifacts.push(
+      await writeArtifact(input.outputRoot, "permissions_all_stub.json", JSON.stringify(permAll, null, 2)),
+    );
+    artifacts.push(
+      await writeArtifact(input.outputRoot, "role_permissions_stub.json", JSON.stringify(rolePerm, null, 2)),
+    );
+    return {
+      authSourceFile: rbac.source,
+      entries: rbac.permissionCodes.length,
+      codes: rbac.permissionCodes.length,
+      treeRoots: tree.length,
+      tree,
+      artifacts,
+      mode: "generic-rbac" as const,
     };
   }
   const entries = parseUserRouteAuth(authFile.text, routeMap);

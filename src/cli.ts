@@ -183,6 +183,7 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
             chromiumPath: typeof flags.chromium === "string" ? flags.chromium : undefined,
             proxy: typeof flags.proxy === "string" ? flags.proxy : undefined,
             routes: strList(flags.routes),
+            maxRoutes: num(flags["max-routes"]),
             waitMs: num(flags.wait),
             perRouteMs: num(flags["per-route"]),
             routeTimeoutMs: num(flags["route-timeout"]),

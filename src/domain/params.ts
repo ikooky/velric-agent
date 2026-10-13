@@ -73,6 +73,9 @@ export const mergeParams = (samples: readonly ParamSample[]): MergedEndpoint[] =
   }
   const byEndpoint = new Map<string, Agg>();
   samples.forEach((s, idx) => {
+    // Be tolerant of partial captures: a sample without method+url carries no
+    // endpoint identity — skip it instead of crashing on undefined.
+    if (!s || typeof s.url !== "string" || !s.url || !s.method) return;
     const path = pathOf(s.url);
     const key = `${s.method.toUpperCase()} ${path}`;
     const agg =

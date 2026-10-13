@@ -179,6 +179,89 @@ export const flatCodes = (nodes: readonly PermTreeNode[]): string[] => {
 };
 
 /** Default heuristics matching the reference script's enterprise-admin tuning. */
+/**
+ * Generic RBAC fallback for corpora without userRouteAuth (RuoYi
+ * hasPermi strings, vue-router role guards, permission: literals).
+ * Extracts permission codes and route→roles pairs from plain JS text.
+ */
+export interface GenericRbac {
+  readonly permissionCodes: string[];
+  readonly routeRoles: { readonly route: string; readonly roles: string[] }[];
+  readonly source: string | null;
+}
+
+export const extractGenericRbac = (
+  files: ReadonlyArray<{ path: string; text: string }>,
+): GenericRbac => {
+  const codes = new Set<string>();
+  const routeRoles: { route: string; roles: string[] }[] = [];
+  let source: string | null = null;
+  // permission strings: hasPermi('a:b:c'), hasRole('x'), permission: "a:b:c",
+  // v-permission="'a:b:c'", plain "a:b:c" colon-triple literals
+  const permRe =
+    /(?:hasPermi|hasRole|checkPermi|v-hasPermi|v-permission|permission)[("'=:\s]+['"]([a-zA-Z0-9_:-]{3,80})['"]/g;
+  const tripleRe = /["']([a-z][a-z0-9_]*:[a-z][a-z0-9_]*:[a-zA-Z0-9_:*]+)["']/g;
+  const rolesRe =
+    /(?:path|name|route)\s*[:=]\s*["']([^"']{1,60})["'][^}]{0,200}?roles\s*:\s*(\[[^\]]{0,200}\])/gs;
+  for (const f of files) {
+    let hit = false;
+    for (const m of f.text.matchAll(permRe)) {
+      codes.add(m[1]!);
+      hit = true;
+    }
+    for (const m of f.text.matchAll(tripleRe)) {
+      codes.add(m[1]!);
+      hit = true;
+    }
+    for (const m of f.text.matchAll(rolesRe)) {
+      let roles: string[] = [];
+      try {
+        roles = (JSON.parse(m[2]!.replace(/'/g, '"')) as unknown[])
+          .filter((x): x is string => typeof x === "string")
+          .slice(0, 10);
+      } catch {
+        roles = [...m[2]!.matchAll(/["']([^"']+)["']/g)].map((x) => x[1]!).slice(0, 10);
+      }
+      if (roles.length > 0) {
+        routeRoles.push({ route: m[1]!, roles });
+        hit = true;
+      }
+    }
+    if (hit && source === null) source = f.path;
+  }
+  return {
+    permissionCodes: [...codes].sort(),
+    routeRoles,
+    source,
+  };
+};
+
+/** Build a permission tree from generic colon-style codes (RuoYi et al.): first segment is parent. */
+export const buildGenericPermTree = (
+  codes: readonly string[],
+): PermTreeNode[] => {
+  const childrenOf: Record<string, string[]> = {};
+  const roots = new Set<string>();
+  for (const c of codes) {
+    const seg = c.split(":");
+    if (seg.length < 2) {
+      roots.add(c);
+      continue;
+    }
+    const parent = seg[0]!;
+    if (parent === c) continue;
+    roots.add(parent);
+    (childrenOf[parent] ??= []).push(c);
+  }
+  const makeNode = (code: string): PermTreeNode => ({
+    code,
+    position: roots.has(code) && !childrenOf[code] ? "left" : "top",
+    name: code,
+    ...(childrenOf[code] ? { children: childrenOf[code]!.slice().sort().map(makeNode) } : {}),
+  });
+  return [...roots].sort().map(makeNode);
+};
+
 export const DEFAULT_PERM_HEURISTICS: PermTreeHeuristics = {
   roots: [
     "MONITOR",
