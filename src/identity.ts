@@ -14,7 +14,7 @@ const pkg = JSON.parse(
   readFileSync(join(packageRoot, "package.json"), "utf8"),
 ) as PackageJson;
 
-/** Canonical public identity shared by packaging, setup, MCP, and skill install. */
+/** Canonical public identity shared by packaging and MCP. */
 export const PRODUCT_IDENTITY = {
   displayName: "velric-agent",
   packageName: pkg.name,

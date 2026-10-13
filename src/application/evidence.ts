@@ -3,7 +3,7 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 /**
- * velric evidence 包的无状态移植:内容寻址 blob 存储 + sha256 校验。
+ * 内容寻址证据存储:blob 存储 + sha256 校验。
  * blobs/<hash[:2]>/<hash>.bin + manifest.json(记录来源/长度/哈希)。
  */
 export interface EvidenceItem {
@@ -33,8 +33,7 @@ export const saveEvidence = async (input: EvidenceInput): Promise<EvidenceResult
     const bin = join(blobDir, hash.slice(0, 2), `${hash}.bin`);
     await mkdir(dirname(bin), { recursive: true });
     await writeFile(bin, it.content, "utf8");
-    // write-after-verify: reread to confirm durable write (velric evidence
-    // guarantees "visible only after durable write")
+    // write-after-verify: reread to confirm durable write
     const written = await readFile(bin, "utf8");
     if (sha256(written) !== hash) {
       throw { code: "io_error", message: `evidence write verify failed for ${hash}` };

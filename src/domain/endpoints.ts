@@ -1,5 +1,5 @@
 /**
- * Path/endpoint extraction logic ported from velric's api-recon reference
+ * Path/endpoint extraction logic
  * scripts (harvest_static.py). Pure functions: text in, sets out. No IO.
  */
 

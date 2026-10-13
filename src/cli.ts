@@ -56,7 +56,7 @@ Usage:
   velric-agent gen-report <report.json> <outdir> render findings markdown report
   velric-agent save-evidence <items.json> <outdir> content-addressed evidence blobs
   velric-agent auto <seed> <outdir>            deterministic pipeline (enrich→classify→recon→runtime→structure→report)
-  velric-agent hunt <goal> <outdir>            LLM-orchestrated hunt (goals→planner/worker loop, velric prompt catalog)
+  velric-agent hunt <goal> <outdir>            LLM-orchestrated hunt (goals→planner/worker loop)
   velric-agent help
 
 Common flags: --proxy URL, --cookie STR, --timeout MS
@@ -313,28 +313,6 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
             skipRuntime: flags["skip-runtime"] === true,
             maxPages: num(flags["max-pages"]),
           }),
-        );
-        return 0;
-      }
-      case "setup": {
-        const { runSetup } = await import("./setup/setup.js");
-        const dryRun = flags["dry-run"] === true;
-        const plan = await runSetup({
-          dryRun,
-          configPath: typeof flags.config === "string" ? flags.config : undefined,
-          skillsDir: typeof flags.skills === "string" ? flags.skills : undefined,
-        });
-        console.log(
-          JSON.stringify(
-            {
-              config: plan.config,
-              skill: { installed: plan.skill.installed.length },
-              skillsDir: plan.skillsDir,
-              dryRun,
-            },
-            null,
-            2,
-          ),
         );
         return 0;
       }

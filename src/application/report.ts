@@ -1,6 +1,6 @@
 import { writeArtifact } from "./enrich.js";
 
-/** Mirrors velric report/report.go Input. */
+/** Report input shape. */
 export interface ReportInput {
   readonly title: string;
   readonly goal: string;
@@ -9,7 +9,7 @@ export interface ReportInput {
   readonly findings: readonly FindingView[];
 }
 
-/** Mirrors velric report.findingView (parseFinding). */
+/** Finding view shape. */
 export interface FindingView {
   readonly vulnClass?: string;
   readonly name?: string;
@@ -23,7 +23,7 @@ const sevRank: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 
 const nz = (s: string | undefined, d: string): string =>
   s !== undefined && s.trim() !== "" ? s : d;
 
-/** Renders the deliverable Markdown report (velric report.Markdown). */
+/** Renders the deliverable Markdown report. */
 export const renderReport = (input: ReportInput): string => {
   const b: string[] = [];
   b.push(`# 渗透测试报告 — ${nz(input.title, "未命名任务")}`);

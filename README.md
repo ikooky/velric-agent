@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/velric-lockup-horizontal.png" alt="velric" width="420">
+</p>
+
 Agent 自主渗透测试工具包 —— 让 Agent 独立完成 Web 应用的攻击面测绘。覆盖 SPA/MPA 的后端接口枚举、无头浏览器运行时流量录制、前端权限树重建与多样本参数矩阵聚合，提供 CLI 与 MCP server 双形态，可被任何 MCP 客户端直接驱动。仅用于已授权的安全测试。
 
 ## 功能
@@ -25,19 +29,19 @@ Agent 自主渗透测试工具包 —— 让 Agent 独立完成 Web 应用的攻
 - `dns_resolve` — A/AAAA/CNAME 解析（≤50 hosts）。
 - `http_probe` — 单 URL 探测：状态码/标题/Server/尺寸/sha256，支持自定义 header、cookie、代理。
 
-### 资产与报告（velric 引擎能力）
+### 资产与报告
 
 - `enrich_assets` — 资产图自动补全：种子域名/URL → DNS 解析（A/AAAA/CNAME）→ `root_domain`/`domain`/`subdomain`/`ip`/`service` 节点 → HTTP 探测（状态码+标题）。产出 `assets.json`。
 - `gen_report` — 从 `report.json` 渲染可交付渗透测试报告（findings 按严重等级排序、含 PoC 证据），输出与 velric 报告引擎同构的 `report.md`。
 - `save_evidence` — 内容寻址证据存储（sha256）：`blobs/<h2>/<hash>.bin` + `manifest.json`，每次写入校验，独立于易失流量留存证据。
 
-### LLM 编排 hunt（velric 提示词目录移植）
+### LLM 编排 hunt
 
-- `hunt` — velric planner/worker/goals 多 agent 编排的无状态移植：目标分解器（抽目标+操作约束）→ 规划者循环（读态势→判目标→派意图：硬底线/不重派/材料性新机理才重开/串行链分步派/路线多样）→ worker 执行（JSON-action 工具循环，12 侦察工具+http_req）→ 反幻觉双闸门（evidence 引用的 URL 必须真实请求过；observed 事实必须引用系统 digest——模型口述永不入图）→ 步数耗尽自动抢救写回 → 最终 report.md+evidence+graph.json。状态全落文件，可重跑续跑。
+- `hunt` — 多 agent LLM 编排：目标分解器（抽目标+操作约束）→ 规划者循环（读态势→判目标→派意图：硬底线/不重派/材料性新机理才重开/串行链分步派/路线多样）→ worker 执行（JSON-action 工具循环，12 侦察工具+http_req）→ 反幻觉双闸门（evidence 引用的 URL 必须真实请求过；observed 事实必须引用系统 digest——模型口述永不入图）→ 步数耗尽自动抢救写回 → 最终 report.md+evidence+graph.json。状态全落文件，可重跑续跑。
 
-### 自主流水线（编排）
+### 自主流水线
 
-- `auto_recon` — velric planner/worker 编排的无状态移植：`enrich → classify(SPA/MPA) → harvest/spider → capture_runtime → perm_tree + merge_params → findings/report/evidence`。一条命令跑完侦察全链路，直接产出 `report.md` + 证据 blob + `pipeline.json` 运行台账。任一非关键阶段失败只记录不中断，产物全落 `outputRoot`，可重跑续跑。
+- `auto_recon` — 一条命令跑完侦察全链路：`enrich → classify(SPA/MPA) → harvest/spider → capture_runtime → perm_tree + merge_params → findings/report/evidence`，直接产出 `report.md` + 证据 blob + `pipeline.json` 运行台账。任一非关键阶段失败只记录不中断，产物全落 `outputRoot`，可重跑续跑。
 
 ## 安装
 
@@ -91,9 +95,6 @@ Claude Code / Cursor 等 JSON 客户端：
     }
   }
 }
-```
-velric-agent setup
-velric-agent setup --dry-run   # 只看计划不落盘
 ```
 
 ## 典型工作流

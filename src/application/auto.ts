@@ -11,8 +11,7 @@ import { saveEvidence } from "./evidence.js";
 import { writeArtifact } from "./enrich.js";
 
 /**
- * Deterministic autonomous pipeline (stateless port of velric's
- * planner/worker split): stages run in dependency order against one
+ * Deterministic autonomous pipeline: stages run in dependency order against one
  * outputRoot; every stage is one of the 11 standalone tools; failure of a
  * non-critical stage is recorded and the pipeline continues. State lives in
  * files under outputRoot only — zero DB, resumable by re-run.

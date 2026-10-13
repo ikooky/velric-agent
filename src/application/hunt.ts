@@ -1,7 +1,6 @@
 /**
- * Hunt engine — LLM-driven stateless port of velric's orchestration
- * (goals decomposer + planner/worker loop). Zero DB: state lives in
- * graph.json under outputRoot. Worker agents execute the recon toolset
+ * Hunt engine — LLM-driven multi-agent orchestration (goals decomposer +
+ * planner/worker loop). Zero DB: state lives in graph.json under outputRoot. Worker agents execute the recon toolset
  * through a JSON-action loop.
  *
  * Trust model (hardened on real e2e): the model's narration is NEVER the

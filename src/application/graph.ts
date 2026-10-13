@@ -1,4 +1,4 @@
-/** File-backed exploration graph — stateless port of velric's exploration store. */
+/** File-backed exploration graph. */
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 

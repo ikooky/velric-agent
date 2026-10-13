@@ -1,7 +1,7 @@
 /**
- * Prompt catalog — stateless port of velric's agent/promptcatalog.go +
- * planner/worker/goals/mainagent default templates. LLM-driven orchestration
- * needs the *decision disciplines*, not just the pipeline order.
+ * Prompt catalog — role system prompts for the orchestration loop:
+ * goals decomposer, planner, worker. LLM-driven orchestration needs the
+ * *decision disciplines*, not just the pipeline order.
  */
 
 export interface PromptVars {

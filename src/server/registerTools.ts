@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
 
 import { ALL_CONTRACTS } from "../contracts/contracts.js";
+import { PHASE_TAGS } from "./workflow.js";
 import type { ToolContract } from "../contracts/toolContract.js";
 import { deliver } from "./delivery.js";
 import { resolveHost } from "../application/dns.js";
@@ -190,6 +191,41 @@ const handlers: Readonly<Record<string, Handler>> = {
         .parse(raw),
     );
   },
+  hunt: async (raw) => {
+    const { runHunt } = await import("../application/hunt.js");
+    const p = z
+      .object({
+        goal: z.string(),
+        outputRoot: z.string(),
+        chromiumPath: z.string().optional(),
+        proxy: z.string().optional(),
+        model: z.string().optional(),
+        maxRounds: z.number().optional(),
+        maxSteps: z.number().optional(),
+      })
+      .parse(raw);
+    return runHunt({
+      goal: p.goal,
+      outputRoot: p.outputRoot,
+      chromiumPath: p.chromiumPath,
+      proxy: p.proxy,
+      maxRounds: p.maxRounds,
+      maxSteps: p.maxSteps,
+      llm: {
+        baseUrl: process.env.LLM_BASE_URL ?? "https://z-api.pp.ua/v1",
+        apiKey: process.env.LLM_API_KEY ?? process.env.NEWAPI_KEY ?? "",
+        model: p.model ?? process.env.LLM_MODEL ?? "glm-5.3-flash",
+      },
+    });
+  },
+  workflow_guide: async () => {
+    const { WORKFLOW_GUIDE, PHASE_TAGS } = await import("./workflow.js");
+    return {
+      phases: 6,
+      guide: WORKFLOW_GUIDE,
+      toolPhaseMap: PHASE_TAGS,
+    };
+  },
   save_evidence: async (raw) => {
     const p = z
       .object({ itemsFile: z.string(), outputRoot: z.string() })
@@ -212,7 +248,7 @@ export const registerAllTools = (server: McpServer): void => {
       contract.name,
       {
         title: contract.title,
-        description: contract.description,
+        description: `${PHASE_TAGS[contract.name] ? PHASE_TAGS[contract.name] + " — " : ""}${contract.description}`,
         inputSchema: contract.inputSchema as z.ZodType<Record<string, unknown>>,
       },
       async (input) => deliver(contract, () => handler(input as Record<string, unknown>)),
