@@ -35,12 +35,22 @@ Agent 自主渗透测试工具包 —— 让 Agent 独立完成 Web 应用的攻
 - `gen_report` — 从 `report.json` 渲染可交付渗透测试报告（findings 按严重等级排序、含 PoC 证据），输出 `report.md`。
 - `save_evidence` — 内容寻址证据存储（sha256）：`blobs/<h2>/<hash>.bin` + `manifest.json`，每次写入校验，独立于易失流量留存证据。
 
+### 内建情报能力
+
+- **秘密扫描** — harvest 对 JS bundle 做 regex 扫描(AWS key/GH token/JWT/DB URL/内网 IP/内部主机名),命中写 `secrets.txt`,auto 管道自动升级为 high finding
+- **运行时降噪** — capture_runtime 过滤统计信标(GA/sentry)与静态资源(SVG 图标包/字体/图片),只留真实 API 流量
+- **指纹增强** — http_probe 返回 TLS 证书 SAN(顺带子域发现)、安全响应头、技术栈签名(vue/vite/nginx 等)
+- **robots/sitemap 并入** — harvest 自动抓取 robots.txt + sitemap.xml 路径进路由池
+- **GraphQL 探测** — auto 管道对 /graphql 做轻量 introspection 探测
+- **HTTP 重试** — 全部外部请求默认 3 次重试(间隔 1s,网络错/超时/5xx)
+
 ### 宿主驱动 hunt（零 key）
 
 - `hunt_begin` / `hunt_record` / `hunt_overview` — 宿主 agent（你接入的 MCP 客户端）就是 planner+worker 大脑：`hunt_begin(goal)` 建图并返回驱动手册（目标分解规则、规划纪律：硬底线/不重派/材料性新机理才重开/串行链分步派/路线多样、量化验收、执行红线）；循环 = `hunt_overview` 读态势 → 调侦察工具（带 `observationLedgerRoot`，系统自动把工具真实请求过的 URL+状态记入观察台账）→ `hunt_record` 写回（防幻觉闸门自动执行：evidence 引用的 URL 必须在台账里、observed 事实必须引用系统记录，编造整条丢弃）→ `gen_report` + `save_evidence` 交付。状态全落 graph.json，可重入。无需任何 API key。
 
 ### 自主流水线
 
+- `run_diff` / `probe_params` — 攻击面深化与监控:两次 run 的结构化 diff(新端点/新参数/资产变更,配 cron 即攻击面监控);参数差分探测(逐参数剔除对比响应,识别必填/开关参数)
 - `auto_recon` / `auto_status` — 一条命令异步跑完侦察全链路(规避 MCP 客户端 60s 超时,auto_status 轮询进度):`enrich → classify(SPA/MPA) → harvest/spider → capture_runtime → perm_tree + merge_params → findings/report/evidence`，直接产出 `report.md` + 证据 blob + `pipeline.json` 运行台账。任一非关键阶段失败只记录不中断，产物全落 `outputRoot`，可重跑续跑。
 
 ## 安装
@@ -73,7 +83,7 @@ velric-agent help
 
 ## MCP 接入
 
-`velric-agent mcp` 启动 stdio MCP server，暴露全部 17 个工具(auto_recon 为异步启动,auto_status 轮询)。
+`velric-agent mcp` 启动 stdio MCP server，暴露全部 19 个工具 + 2 个 resources(driver-playbook/workflow-guide) + 1 个 prompt(hunt-driver)。
 
 Hermes（`config.yaml`）：
 
