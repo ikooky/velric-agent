@@ -1,0 +1,30 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.ikooky/velric-agent",
+  "title": "velric-agent",
+  "description": "Stateless reconnaissance toolset for authorized web-app security testing — one CLI and MCP server.",
+  "websiteUrl": "https://github.com/ikooky/velric-agent",
+  "repository": {
+    "url": "https://github.com/ikooky/velric-agent",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "velric-agent",
+      "version": "0.1.0",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,238 @@
+import { resolveHost } from "./application/dns.js";
+import { httpProbe } from "./application/probe.js";
+import { harvestStatic } from "./application/harvest.js";
+import { spiderMpa } from "./application/spider.js";
+import { buildPermissionTree } from "./application/permTreeService.js";
+import { mergeParamSamples } from "./application/paramMerge.js";
+import { captureRuntime } from "./application/runtime.js";
+import { PRODUCT_IDENTITY } from "./identity.js";
+
+/** Minimal argv parser: command-first, --flag value pairs, --bool flags. */
+interface ParsedArgs {
+  readonly command: string;
+  readonly positional: string[];
+  readonly flags: Record<string, string | boolean>;
+}
+
+const parseArgs = (argv: readonly string[]): ParsedArgs => {
+  const [command = "help", ...rest] = argv;
+  const positional: string[] = [];
+  const flags: Record<string, string | boolean> = {};
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i]!;
+    if (a.startsWith("--")) {
+      const key = a.slice(2);
+      const next = rest[i + 1];
+      if (next !== undefined && !next.startsWith("--")) {
+        flags[key] = next;
+        i++;
+      } else {
+        flags[key] = true;
+      }
+    } else {
+      positional.push(a);
+    }
+  }
+  return { command, positional, flags };
+};
+
+const USAGE = `velric-agent ${PRODUCT_IDENTITY.packageVersion} — stateless recon toolset (CLI + MCP)
+
+Usage:
+  velric-agent mcp                        start the stdio MCP server
+  velric-agent dns-resolve <host> [...]   resolve A/AAAA/CNAME
+  velric-agent http-probe <url>           probe one URL (status/title/hash)
+  velric-agent harvest <url> <outdir>     static SPA bundle harvest
+  velric-agent extract-routes <jsdir> <outdir>
+  velric-agent spider <url> <outdir>      MPA crawl (--cookie/--max/--depth/--exclude)
+  velric-agent runtime <url> <outdir>     headless runtime capture (--chromium PATH)
+  velric-agent perm-tree <jsdir> <outdir> permission tree rebuild (--role NAME)
+  velric-agent merge-params <samples.json> <outdir>
+  velric-agent help
+
+Common flags: --proxy URL, --cookie STR, --timeout MS
+`;
+
+/** Run one CLI command; returns the process exit code. */
+export const runCli = async (argv: readonly string[]): Promise<number> => {
+  const { command, positional, flags } = parseArgs(argv);
+  const out = (v: unknown) => console.log(JSON.stringify(v, null, 2));
+  try {
+    switch (command) {
+      case "mcp":
+      case "--mcp":
+        console.error("use `velric-agent mcp` (handled by the bin shim)");
+        return 2;
+      case "help":
+      case "--help":
+      case "-h":
+        console.log(USAGE);
+        return 0;
+      case "dns-resolve": {
+        if (positional.length === 0) {
+          console.error("usage: dns-resolve <host> [...]");
+          return 2;
+        }
+        const results = [];
+        for (const host of positional) results.push(await resolveHost(host));
+        out({ results });
+        return 0;
+      }
+      case "http-probe": {
+        const url = positional[0];
+        if (!url) {
+          console.error("usage: http-probe <url>");
+          return 2;
+        }
+        out(
+          await httpProbe({
+            url,
+            cookie: typeof flags.cookie === "string" ? flags.cookie : undefined,
+            proxy: typeof flags.proxy === "string" ? flags.proxy : undefined,
+            timeoutMs: typeof flags.timeout === "string" ? Number(flags.timeout) : undefined,
+          }),
+        );
+        return 0;
+      }
+      case "harvest": {
+        const [base, dir] = positional;
+        if (!base || !dir) {
+          console.error("usage: harvest <url> <outdir>");
+          return 2;
+        }
+        out(
+          await harvestStatic({
+            baseUrl: base,
+            outputRoot: dir,
+            proxy: typeof flags.proxy === "string" ? flags.proxy : undefined,
+            cookie: typeof flags.cookie === "string" ? flags.cookie : undefined,
+            timeoutMs: typeof flags.timeout === "string" ? Number(flags.timeout) : undefined,
+          }),
+        );
+        return 0;
+      }
+      case "extract-routes": {
+        const [jsDir, dir] = positional;
+        if (!jsDir || !dir) {
+          console.error("usage: extract-routes <jsdir> <outdir>");
+          return 2;
+        }
+        const { readJsCorpus } = await import("./application/harvest.js");
+        const { writeArtifact } = await import("./adapters/artifacts.js");
+        const { classifyPaths, extractPathLiterals, extractRoutes } = await import(
+          "./domain/endpoints.js"
+        );
+        const corpus = await readJsCorpus(jsDir);
+        if (corpus.length === 0) {
+          console.error(`no .js files under ${jsDir}`);
+          return 1;
+        }
+        const api = new Set<string>();
+        const other = new Set<string>();
+        const routes = new Set<string>();
+        for (const f of corpus) {
+          const c = classifyPaths(extractPathLiterals(f.text));
+          for (const p of c.api) api.add(p);
+          for (const p of c.other) other.add(p);
+          for (const r of extractRoutes(f.text)) routes.add(r);
+        }
+        await writeArtifact(dir, "api_static.txt", [...api].sort().join("\n"));
+        await writeArtifact(dir, "paths_other.txt", [...other].sort().join("\n"));
+        await writeArtifact(dir, "routes.txt", [...routes].sort().join("\n"));
+        out({ files: corpus.length, api: api.size, other: other.size, routes: routes.size });
+        return 0;
+      }
+      case "spider": {
+        const [base, dir] = positional;
+        if (!base || !dir) {
+          console.error("usage: spider <url> <outdir>");
+          return 2;
+        }
+        out(
+          await spiderMpa({
+            baseUrl: base,
+            outputRoot: dir,
+            cookie: typeof flags.cookie === "string" ? flags.cookie : undefined,
+            proxy: typeof flags.proxy === "string" ? flags.proxy : undefined,
+            maxPages: typeof flags.max === "string" ? Number(flags.max) : undefined,
+            depth: typeof flags.depth === "string" ? Number(flags.depth) : undefined,
+            exclude: typeof flags.exclude === "string" ? flags.exclude : undefined,
+          }),
+        );
+        return 0;
+      }
+      case "runtime": {
+        const [base, dir] = positional;
+        if (!base || !dir) {
+          console.error("usage: runtime <url> <outdir> [--chromium PATH]");
+          return 2;
+        }
+        out(
+          await captureRuntime({
+            baseUrl: base,
+            outputRoot: dir,
+            chromiumPath: typeof flags.chromium === "string" ? flags.chromium : undefined,
+            proxy: typeof flags.proxy === "string" ? flags.proxy : undefined,
+          }),
+        );
+        return 0;
+      }
+      case "perm-tree": {
+        const [jsDir, dir] = positional;
+        if (!jsDir || !dir) {
+          console.error("usage: perm-tree <jsdir> <outdir> [--role NAME]");
+          return 2;
+        }
+        out(
+          await buildPermissionTree({
+            jsDir,
+            outputRoot: dir,
+            role: typeof flags.role === "string" ? flags.role : undefined,
+          }),
+        );
+        return 0;
+      }
+      case "merge-params": {
+        const [samples, dir] = positional;
+        if (!samples || !dir) {
+          console.error("usage: merge-params <samples.json> <outdir>");
+          return 2;
+        }
+        out(await mergeParamSamples({ samplesFile: samples, outputRoot: dir }));
+        return 0;
+      }
+      case "setup": {
+        const { runSetup } = await import("./setup/setup.js");
+        const dryRun = flags["dry-run"] === true;
+        const plan = await runSetup({
+          dryRun,
+          configPath: typeof flags.config === "string" ? flags.config : undefined,
+          skillsDir: typeof flags.skills === "string" ? flags.skills : undefined,
+        });
+        console.log(
+          JSON.stringify(
+            {
+              config: plan.config,
+              skill: { installed: plan.skill.installed.length },
+              skillsDir: plan.skillsDir,
+              dryRun,
+            },
+            null,
+            2,
+          ),
+        );
+        return 0;
+      }
+      default:
+        console.error(`unknown command: ${command}\n`);
+        console.log(USAGE);
+        return 2;
+    }
+  } catch (cause) {
+    const e = cause as { code?: string; message?: string };
+    console.error(
+      JSON.stringify({ error: { code: e.code ?? "internal_error", message: e.message ?? String(cause) } }, null, 2),
+    );
+    return 1;
+  }
+};

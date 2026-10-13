@@ -1,0 +1,67 @@
+{
+  "name": "velric-agent",
+  "mcpName": "io.github.ikooky/velric-agent",
+  "version": "0.1.0",
+  "description": "Stateless reconnaissance toolset for authorized web-app security testing — one CLI and MCP server.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ikooky/velric-agent.git"
+  },
+  "homepage": "https://github.com/ikooky/velric-agent#readme",
+  "bugs": {
+    "url": "https://github.com/ikooky/velric-agent/issues"
+  },
+  "keywords": [
+    "security",
+    "pentest",
+    "recon",
+    "api-discovery",
+    "spa",
+    "mcp-server",
+    "mcp",
+    "model-context-protocol",
+    "agent-skills",
+    "playwright",
+    "cli"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "bin": {
+    "velric-agent": "scripts/velric-agent.mjs"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "files": [
+    "dist",
+    "skills",
+    "scripts/velric-agent.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "start": "node scripts/velric-agent.mjs mcp",
+    "dev": "node scripts/velric-agent.mjs",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.3.1",
+    "parse5": "8.0.1",
+    "playwright-core": "1.64.0",
+    "undici": "^7.30.0",
+    "yaml": "2.9.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "^2.3.1",
+    "@types/node": "^22.0.0",
+    "@types/write-file-atomic": "^4.0.3",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
