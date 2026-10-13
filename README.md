@@ -32,7 +32,7 @@ Agent 自主渗透测试工具包 —— 让 Agent 独立完成 Web 应用的攻
 ### 资产与报告
 
 - `enrich_assets` — 资产图自动补全：种子域名/URL → DNS 解析（A/AAAA/CNAME）→ `root_domain`/`domain`/`subdomain`/`ip`/`service` 节点 → HTTP 探测（状态码+标题）。产出 `assets.json`。
-- `gen_report` — 从 `report.json` 渲染可交付渗透测试报告（findings 按严重等级排序、含 PoC 证据），输出与 velric 报告引擎同构的 `report.md`。
+- `gen_report` — 从 `report.json` 渲染可交付渗透测试报告（findings 按严重等级排序、含 PoC 证据），输出 `report.md`。
 - `save_evidence` — 内容寻址证据存储（sha256）：`blobs/<h2>/<hash>.bin` + `manifest.json`，每次写入校验，独立于易失流量留存证据。
 
 ### 宿主驱动 hunt（零 key）
@@ -64,12 +64,16 @@ velric-agent spider https://target/ /tmp/recon --cookie "session=..."
 velric-agent runtime https://target/ /tmp/recon --chromium /usr/bin/chromium --wait 6000 --per-route 4000
 velric-agent perm-tree /tmp/recon/js /tmp/recon
 velric-agent merge-params /tmp/recon/param_samples.json /tmp/recon
+velric-agent enrich example.com --out /tmp/recon
+velric-agent gen-report /tmp/recon/report.json /tmp/recon
+velric-agent save-evidence /tmp/recon/items.json /tmp/recon
+velric-agent auto https://target/ /tmp/recon --chromium /usr/bin/chromium
 velric-agent help
 ```
 
 ## MCP 接入
 
-`velric-agent mcp` 启动 stdio MCP server，暴露全部 8 个工具。
+`velric-agent mcp` 启动 stdio MCP server，暴露全部 15 个工具。
 
 Hermes（`config.yaml`）：
 
