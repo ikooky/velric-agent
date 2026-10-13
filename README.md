@@ -31,6 +31,10 @@ Agent 自主渗透测试工具包 —— 让 Agent 独立完成 Web 应用的攻
 - `gen_report` — 从 `report.json` 渲染可交付渗透测试报告（findings 按严重等级排序、含 PoC 证据），输出与 velric 报告引擎同构的 `report.md`。
 - `save_evidence` — 内容寻址证据存储（sha256）：`blobs/<h2>/<hash>.bin` + `manifest.json`，每次写入校验，独立于易失流量留存证据。
 
+### LLM 编排 hunt（velric 提示词目录移植）
+
+- `hunt` — velric planner/worker/goals 多 agent 编排的无状态移植：目标分解器（抽目标+操作约束）→ 规划者循环（读态势→判目标→派意图：硬底线/不重派/材料性新机理才重开/串行链分步派/路线多样）→ worker 执行（JSON-action 工具循环，12 侦察工具+http_req）→ 反幻觉双闸门（evidence 引用的 URL 必须真实请求过；observed 事实必须引用系统 digest——模型口述永不入图）→ 步数耗尽自动抢救写回 → 最终 report.md+evidence+graph.json。状态全落文件，可重跑续跑。
+
 ### 自主流水线（编排）
 
 - `auto_recon` — velric planner/worker 编排的无状态移植：`enrich → classify(SPA/MPA) → harvest/spider → capture_runtime → perm_tree + merge_params → findings/report/evidence`。一条命令跑完侦察全链路，直接产出 `report.md` + 证据 blob + `pipeline.json` 运行台账。任一非关键阶段失败只记录不中断，产物全落 `outputRoot`，可重跑续跑。

@@ -55,7 +55,8 @@ Usage:
   velric-agent enrich <seed...> --out DIR        asset graph from seeds (DNS+HTTP)
   velric-agent gen-report <report.json> <outdir> render findings markdown report
   velric-agent save-evidence <items.json> <outdir> content-addressed evidence blobs
-  velric-agent auto <seed> <outdir>            autonomous pipeline (enrich→classify→recon→runtime→structure→report)
+  velric-agent auto <seed> <outdir>            deterministic pipeline (enrich→classify→recon→runtime→structure→report)
+  velric-agent hunt <goal> <outdir>            LLM-orchestrated hunt (goals→planner/worker loop, velric prompt catalog)
   velric-agent help
 
 Common flags: --proxy URL, --cookie STR, --timeout MS
@@ -268,6 +269,30 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
           source: string; label?: string; content: string;
         }[];
         out(await saveEvidence({ outputRoot: dir, items }));
+        return 0;
+      }
+      case "hunt": {
+        const [goal, dir] = positional;
+        if (!goal || !dir) {
+          console.error("usage: hunt <goal> <outdir> [--model NAME] [--base-url URL] [--api-key KEY] [--chromium PATH] [--proxy URL] [--max-rounds N] [--max-steps N]");
+          return 2;
+        }
+        const { runHunt } = await import("./application/hunt.js");
+        const baseUrl = (typeof flags["base-url"] === "string" ? flags["base-url"] : undefined)
+          ?? process.env.LLM_BASE_URL ?? "https://z-api.pp.ua/v1";
+        const apiKey = (typeof flags["api-key"] === "string" ? flags["api-key"] : undefined)
+          ?? process.env.LLM_API_KEY ?? process.env.NEWAPI_KEY ?? "";
+        const model = (typeof flags.model === "string" ? flags.model : undefined)
+          ?? process.env.LLM_MODEL ?? "glm-5.3-flash";
+        const r = await runHunt({
+          goal, outputRoot: dir,
+          llm: { baseUrl, apiKey, model },
+          chromiumPath: typeof flags.chromium === "string" ? flags.chromium : undefined,
+          proxy: typeof flags.proxy === "string" ? flags.proxy : undefined,
+          maxRounds: num(flags["max-rounds"]),
+          maxSteps: num(flags["max-steps"]),
+        });
+        out(r);
         return 0;
       }
       case "auto": {
