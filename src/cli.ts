@@ -283,7 +283,7 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
         const apiKey = (typeof flags["api-key"] === "string" ? flags["api-key"] : undefined)
           ?? process.env.LLM_API_KEY ?? process.env.NEWAPI_KEY ?? "";
         const model = (typeof flags.model === "string" ? flags.model : undefined)
-          ?? process.env.LLM_MODEL ?? "glm-5.3-flash";
+          ?? process.env.LLM_MODEL ?? "deepseek-v4.1-flash";
         const r = await runHunt({
           goal, outputRoot: dir,
           llm: { baseUrl, apiKey, model },

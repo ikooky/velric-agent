@@ -229,7 +229,7 @@ const handlers: Readonly<Record<string, Handler>> = {
       llm: {
         baseUrl: process.env.LLM_BASE_URL ?? "https://z-api.pp.ua/v1",
         apiKey: process.env.LLM_API_KEY ?? process.env.NEWAPI_KEY ?? "",
-        model: p.model ?? process.env.LLM_MODEL ?? "glm-5.3-flash",
+        model: p.model ?? process.env.LLM_MODEL ?? "deepseek-v4.1-flash",
       },
     })
       .then((r) => writeStatus({ state: "done", finishedAt: new Date().toISOString(), result: r }))

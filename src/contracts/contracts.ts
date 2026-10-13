@@ -217,7 +217,7 @@ export const huntContract: ToolContract = {
     outputRoot,
     chromiumPath: z.string().optional(),
     proxy: z.string().optional(),
-    model: z.string().optional().describe("LLM model (default glm-5.3-flash; needs LLM_BASE_URL/LLM_API_KEY or z-api default)"),
+    model: z.string().optional().describe("LLM model (default deepseek-v4.1-flash; needs LLM_BASE_URL/LLM_API_KEY or z-api default)"),
     maxRounds: z.number().int().min(1).max(20).optional(),
     maxSteps: z.number().int().min(1).max(30).optional(),
   }),

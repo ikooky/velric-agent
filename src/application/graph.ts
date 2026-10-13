@@ -97,9 +97,9 @@ export const saveGraph = async (root: string, g: Graph): Promise<void> => {
 export const graphOverview = (g: Graph): string => {
   const open = g.intents.filter((i) => i.state === "open");
   const running = g.intents.filter((i) => i.state === "running");
-  const recentDone = g.intents
-    .filter((i) => i.state === "done" || i.state === "exhausted" || i.state === "blocked")
-    .slice(-10);
+  const terminal = g.intents.filter((i) => i.state === "done" || i.state === "exhausted" || i.state === "blocked");
+  const recentDone = terminal.slice(-8);
+  const olderDoneCount = Math.max(0, terminal.length - recentDone.length);
   const facts = g.facts.slice(-15);
   const findings = g.findings;
   const lines = [
@@ -109,8 +109,8 @@ export const graphOverview = (g: Graph): string => {
     `assets(${g.assets.length}): ${[...new Set(g.assets.map((a) => a.type))].map((t) => `${t}=${g.assets.filter((a) => a.type === t).length}`).join(", ")}`,
     `open_intents: ${open.length ? open.map((i) => `#${i.id} ${i.summary}`).join(" ; ") : "(none)"}`,
     `running_intents: ${running.length ? running.map((i) => `#${i.id} ${i.summary}`).join(" ; ") : "(none)"}`,
-    `recent_done_intents:`,
-    ...recentDone.map((i) => `  #${i.id}[${i.state}] ${i.summary}${i.error ? ` (err: ${i.error.slice(0, 80)})` : ""}`),
+    `recent_done_intents:${olderDoneCount > 0 ? ` (+${olderDoneCount} older done, omitted)` : ""}`,
+    ...recentDone.map((i) => `  #${i.id}[${i.state}] ${i.summary.slice(0, 120)}${i.error ? ` (err: ${i.error.slice(0, 80)})` : ""}`),
     `recent_facts:`,
     ...facts.map((f) => `  fact#${f.id}[${f.confidence}]${f.intentId ? `(from intent#${f.intentId})` : ""} ${f.summary}${f.evidence ? ` | ev: ${f.evidence.slice(0, 100)}` : ""}`),
     `findings(${findings.length}):`,
