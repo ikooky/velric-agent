@@ -55,6 +55,7 @@ Usage:
   velric-agent enrich <seed...> --out DIR        asset graph from seeds (DNS+HTTP)
   velric-agent gen-report <report.json> <outdir> render findings markdown report
   velric-agent save-evidence <items.json> <outdir> content-addressed evidence blobs
+  velric-agent auto <seed> <outdir>            autonomous pipeline (enrich→classify→recon→runtime→structure→report)
   velric-agent help
 
 Common flags: --proxy URL, --cookie STR, --timeout MS
@@ -267,6 +268,27 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
           source: string; label?: string; content: string;
         }[];
         out(await saveEvidence({ outputRoot: dir, items }));
+        return 0;
+      }
+      case "auto": {
+        const [seed, dir] = positional;
+        if (!seed || !dir) {
+          console.error("usage: auto <seed> <outdir> [--chromium PATH] [--skip-runtime] [--proxy URL] [--cookie STR] [--timeout MS]");
+          return 2;
+        }
+        const { runAutoPipeline } = await import("./application/auto.js");
+        out(
+          await runAutoPipeline({
+            seed,
+            outputRoot: dir,
+            chromiumPath: typeof flags.chromium === "string" ? flags.chromium : undefined,
+            proxy: typeof flags.proxy === "string" ? flags.proxy : undefined,
+            cookie: typeof flags.cookie === "string" ? flags.cookie : undefined,
+            timeoutMs: num(flags.timeout),
+            skipRuntime: flags["skip-runtime"] === true,
+            maxPages: num(flags["max-pages"]),
+          }),
+        );
         return 0;
       }
       case "setup": {

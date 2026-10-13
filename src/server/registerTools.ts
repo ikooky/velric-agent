@@ -173,6 +173,23 @@ const handlers: Readonly<Record<string, Handler>> = {
     const { generateReport } = await import("../application/report.js");
     return generateReport({ reportJson: await readFile(p.reportFile, "utf8"), outputRoot: p.outputRoot });
   },
+  auto_recon: async (raw) => {
+    const { runAutoPipeline } = await import("../application/auto.js");
+    return runAutoPipeline(
+      z
+        .object({
+          seed: z.string(),
+          outputRoot: z.string(),
+          chromiumPath: z.string().optional(),
+          proxy: z.string().optional(),
+          cookie: z.string().optional(),
+          timeoutMs: z.number().optional(),
+          skipRuntime: z.boolean().optional(),
+          maxPages: z.number().optional(),
+        })
+        .parse(raw),
+    );
+  },
   save_evidence: async (raw) => {
     const p = z
       .object({ itemsFile: z.string(), outputRoot: z.string() })

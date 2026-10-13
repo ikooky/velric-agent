@@ -31,6 +31,10 @@ Agent 自主渗透测试工具包 —— 让 Agent 独立完成 Web 应用的攻
 - `gen_report` — 从 `report.json` 渲染可交付渗透测试报告（findings 按严重等级排序、含 PoC 证据），输出与 velric 报告引擎同构的 `report.md`。
 - `save_evidence` — 内容寻址证据存储（sha256）：`blobs/<h2>/<hash>.bin` + `manifest.json`，每次写入校验，独立于易失流量留存证据。
 
+### 自主流水线（编排）
+
+- `auto_recon` — velric planner/worker 编排的无状态移植：`enrich → classify(SPA/MPA) → harvest/spider → capture_runtime → perm_tree + merge_params → findings/report/evidence`。一条命令跑完侦察全链路，直接产出 `report.md` + 证据 blob + `pipeline.json` 运行台账。任一非关键阶段失败只记录不中断，产物全落 `outputRoot`，可重跑续跑。
+
 ## 安装
 
 要求 Node ≥ 22；`capture_runtime` 需要系统 Chromium（`--chromium` 或 `VELRIC_CHROMIUM` 指定）。
@@ -89,6 +93,14 @@ velric-agent setup --dry-run   # 只看计划不落盘
 ```
 
 ## 典型工作流
+
+一条命令（推荐）：
+
+```bash
+velric-agent auto juejin.cn /tmp/recon --chromium /usr/bin/chromium
+```
+
+分步（需要精细控制时）：
 
 1. `http_probe` 入口页 → 判断 SPA（空壳+chunk）还是 MPA（服务端渲染+表单）。
 2. 静态先行：SPA 用 `harvest_static`，MPA 用 `spider_mpa`。

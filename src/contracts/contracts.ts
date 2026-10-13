@@ -185,6 +185,27 @@ export const genReportContract: ToolContract = {
   examples: [{ title: "report", input: { reportFile: "/tmp/recon/report.json", outputRoot: "/tmp/recon" } }],
 };
 
+export const autoPipelineContract: ToolContract = {
+  name: "auto_recon",
+  title: "Autonomous recon pipeline",
+  description:
+    "Deterministic stateless port of velric's planner/worker orchestration: enrich asset graph → classify SPA/MPA → static recon (harvest/spider) → runtime capture → perm tree + param matrix → findings/report/evidence. One command, full deliverable. State lives in outputRoot only.",
+  kind: "runtime",
+  inputSchema: z.object({
+    seed: z.string().describe("domain or URL"),
+    outputRoot,
+    chromiumPath: z.string().optional(),
+    proxy: z.string().optional(),
+    cookie: z.string().optional(),
+    timeoutMs: z.number().int().min(1000).max(120000).optional(),
+    skipRuntime: z.boolean().optional(),
+    maxPages: z.number().int().min(1).max(200).optional(),
+  }),
+  outputSchema: z.object({ stages: z.number() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "auto", input: { seed: "example.com", outputRoot: "/tmp/recon" } }],
+};
+
 export const saveEvidenceContract: ToolContract = {
   name: "save_evidence",
   title: "Save evidence blobs",
@@ -236,4 +257,5 @@ export const ALL_CONTRACTS: readonly ToolContract[] = [
   enrichAssetsContract,
   genReportContract,
   saveEvidenceContract,
+  autoPipelineContract,
 ];
