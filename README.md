@@ -41,7 +41,7 @@ Agent 自主渗透测试工具包 —— 让 Agent 独立完成 Web 应用的攻
 
 ### 自主流水线
 
-- `auto_recon` — 一条命令跑完侦察全链路：`enrich → classify(SPA/MPA) → harvest/spider → capture_runtime → perm_tree + merge_params → findings/report/evidence`，直接产出 `report.md` + 证据 blob + `pipeline.json` 运行台账。任一非关键阶段失败只记录不中断，产物全落 `outputRoot`，可重跑续跑。
+- `auto_recon` / `auto_status` — 一条命令异步跑完侦察全链路(规避 MCP 客户端 60s 超时,auto_status 轮询进度):`enrich → classify(SPA/MPA) → harvest/spider → capture_runtime → perm_tree + merge_params → findings/report/evidence`，直接产出 `report.md` + 证据 blob + `pipeline.json` 运行台账。任一非关键阶段失败只记录不中断，产物全落 `outputRoot`，可重跑续跑。
 
 ## 安装
 
@@ -73,7 +73,7 @@ velric-agent help
 
 ## MCP 接入
 
-`velric-agent mcp` 启动 stdio MCP server，暴露全部 15 个工具。
+`velric-agent mcp` 启动 stdio MCP server，暴露全部 17 个工具(auto_recon 为异步启动,auto_status 轮询)。
 
 Hermes（`config.yaml`）：
 

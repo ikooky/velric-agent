@@ -176,21 +176,45 @@ const handlers: Readonly<Record<string, Handler>> = {
     return generateReport({ reportJson: await readFile(p.reportFile, "utf8"), outputRoot: p.outputRoot });
   },
   auto_recon: async (raw) => {
-    const { runAutoPipeline } = await import("../application/auto.js");
-    return runAutoPipeline(
-      z
-        .object({
-          seed: z.string(),
-          outputRoot: z.string(),
-          chromiumPath: z.string().optional(),
-          proxy: z.string().optional(),
-          cookie: z.string().optional(),
-          timeoutMs: z.number().optional(),
-          skipRuntime: z.boolean().optional(),
-          maxPages: z.number().optional(),
-        })
-        .parse(raw),
-    );
+    // Async start + auto_status poll (MCP clients default to a 60s request
+    // timeout; the full pipeline takes minutes). Mirrors the hunt pattern.
+    const p = z
+      .object({
+        seed: z.string(),
+        outputRoot: z.string(),
+        chromiumPath: z.string().optional(),
+        proxy: z.string().optional(),
+        cookie: z.string().optional(),
+        timeoutMs: z.number().optional(),
+        skipRuntime: z.boolean().optional(),
+        maxPages: z.number().optional(),
+      })
+      .parse(raw);
+    const { join } = await import("node:path");
+    const statusFile = join(p.outputRoot, "auto_status.json");
+    const { writeFile, mkdir } = await import("node:fs/promises");
+    await mkdir(p.outputRoot, { recursive: true });
+    await writeFile(statusFile, JSON.stringify({ state: "running", startedAt: new Date().toISOString() }));
+    void (async () => {
+      try {
+        const { runAutoPipeline } = await import("../application/auto.js");
+        const result = await runAutoPipeline(p);
+        await writeFile(statusFile, JSON.stringify({ state: "done", startedAt: new Date().toISOString(), result }));
+      } catch (e) {
+        await writeFile(statusFile, JSON.stringify({ state: "error", error: String((e as Error).message ?? e) }));
+      }
+    })();
+    return { started: true, outputRoot: p.outputRoot, statusFile, pollWith: "auto_status" };
+  },
+  auto_status: async (raw) => {
+    const p = z.object({ outputRoot: z.string() }).parse(raw);
+    const { readFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    try {
+      return JSON.parse(await readFile(join(p.outputRoot, "auto_status.json"), "utf8"));
+    } catch {
+      return { state: "unknown", hint: "call auto_recon first" };
+    }
   },
   hunt_begin: async (raw) => {
     const { huntBegin } = await import("../application/huntDriver.js");
@@ -243,6 +267,10 @@ const handlers: Readonly<Record<string, Handler>> = {
     const { huntOverview } = await import("../application/huntDriver.js");
     const p = z.object({ outputRoot: z.string() }).parse(raw);
     return huntOverview(p.outputRoot);
+  },
+  workflow_guide: async () => {
+    const { WORKFLOW_GUIDE } = await import("./workflow.js");
+    return WORKFLOW_GUIDE;
   },
   save_evidence: async (raw) => {
     const p = z

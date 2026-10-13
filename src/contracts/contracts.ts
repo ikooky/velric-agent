@@ -197,7 +197,7 @@ export const autoPipelineContract: ToolContract = {
   name: "auto_recon",
   title: "Autonomous recon pipeline",
   description:
-    "Full recon pipeline in one command: enrich asset graph → classify SPA/MPA → static recon (harvest/spider) → runtime capture → perm tree + param matrix → findings/report/evidence. State lives in outputRoot only.",
+    "Starts the full recon pipeline asynchronously (returns immediately; poll auto_status until state=done): enrich asset graph → classify SPA/MPA → static recon (harvest/spider) → runtime capture → perm tree + param matrix → findings/report/evidence. State lives in outputRoot only.",
   kind: "runtime",
   inputSchema: z.object({
     observationLedgerRoot: z.string().optional().describe("auto-record touched URLs into the hunt observation ledger"),
@@ -213,6 +213,18 @@ export const autoPipelineContract: ToolContract = {
   outputSchema: z.object({ stages: z.number() }),
   annotations: writingAnnotations(),
   examples: [{ title: "auto", input: { seed: "example.com", outputRoot: "/tmp/recon" } }],
+};
+
+export const autoStatusContract: ToolContract = {
+  name: "auto_status",
+  title: "Poll auto_recon progress",
+  description:
+    "Poll the async auto_recon pipeline: returns {state: running|done|error, result?} from outputRoot/auto_status.json.",
+  kind: "runtime",
+  inputSchema: z.object({ outputRoot }),
+  outputSchema: z.object({ state: z.string() }),
+  annotations: readOnlyAnnotations(),
+  examples: [{ title: "poll", input: { outputRoot: "/tmp/recon" } }],
 };
 
 export const huntContract = {
@@ -342,6 +354,7 @@ export const ALL_CONTRACTS: readonly ToolContract[] = [
   genReportContract,
   saveEvidenceContract,
   autoPipelineContract,
+  autoStatusContract,
   huntContract,
   huntRecordContract,
   huntOverviewContract,
