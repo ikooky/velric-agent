@@ -61,8 +61,8 @@ build_perm_tree 从 JS 权限模块重建权限层级(userRouteAuth 或通用 RB
 /** Server-level instructions (shown in initialize handshake). */
 export const SERVER_INSTRUCTIONS = `velric-agent — Agent 自主渗透测试工具包(API 面侦察)。
 
-工作流: 先调 workflow_guide 读方法论,或直接 auto_recon(确定性管道)/hunt(LLM 编排: 目标分解→planner 派意图→worker 执行→反幻觉闸门→报告)。
-典型顺序: hunt(自主) 或 Phase 0-5 手动: harvest/spider → runtime → perm_tree → merge_params → gen_report。
+工作流: 宿主驱动模式——hunt_begin 拿驱动手册(目标分解/规划纪律/闸门规则)→循环{hunt_overview 读态势→调侦察工具(带 observationLedgerRoot 自动记台账)→hunt_record 写回}→gen_report 交付;或 auto_recon 一键确定性管道。无需任何 LLM key。
+典型顺序: hunt_begin 驱动循环,或 Phase 0-5 手动: harvest/spider → runtime → perm_tree → merge_params → gen_report。
 所有工具无状态,产物落 outputRoot。授权测试范围内使用。`;
 
 /** Tool-call guidance appended to each tool description (phase + deps). */
@@ -79,6 +79,8 @@ export const PHASE_TAGS: Record<string, string> = {
   gen_report: "[Phase 5 报告] 消费 findings JSON;收尾用",
   save_evidence: "[Phase 5 存证] 任意阶段产物均可存证",
   auto_recon: "[Phase 0-5 全链路] 确定性管道,一条命令;新手起点",
-  hunt: "[Phase 0-5 全链路·LLM 编排] planner/worker 循环;宿主只给 goal",
+  hunt_begin: "[Phase 0-5 全链路·宿主驱动] 开局必调:建图+返回驱动手册(planner/worker 纪律)",
+  hunt_record: "[Phase 0-5 写回] 带防幻觉闸门:URL 必须在台账、observed 须引系统记录",
+  hunt_overview: "[Phase 0-5 态势] 每轮先读:目标/意图/事实/发现全貌",
   workflow_guide: "[必读] 返回完整方法论(Phase 0-5+纪律);开局先调这个",
 };

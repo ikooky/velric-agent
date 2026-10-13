@@ -35,9 +35,9 @@ Agent 自主渗透测试工具包 —— 让 Agent 独立完成 Web 应用的攻
 - `gen_report` — 从 `report.json` 渲染可交付渗透测试报告（findings 按严重等级排序、含 PoC 证据），输出与 velric 报告引擎同构的 `report.md`。
 - `save_evidence` — 内容寻址证据存储（sha256）：`blobs/<h2>/<hash>.bin` + `manifest.json`，每次写入校验，独立于易失流量留存证据。
 
-### LLM 编排 hunt
+### 宿主驱动 hunt（零 key）
 
-- `hunt` — 多 agent LLM 编排：目标分解器（抽目标+操作约束）→ 规划者循环（读态势→判目标→派意图：硬底线/不重派/材料性新机理才重开/串行链分步派/路线多样）→ worker 执行（JSON-action 工具循环，12 侦察工具+http_req）→ 反幻觉双闸门（evidence 引用的 URL 必须真实请求过；observed 事实必须引用系统 digest——模型口述永不入图）→ 步数耗尽自动抢救写回 → 最终 report.md+evidence+graph.json。状态全落文件，可重跑续跑。
+- `hunt_begin` / `hunt_record` / `hunt_overview` — 宿主 agent（你接入的 MCP 客户端）就是 planner+worker 大脑：`hunt_begin(goal)` 建图并返回驱动手册（目标分解规则、规划纪律：硬底线/不重派/材料性新机理才重开/串行链分步派/路线多样、量化验收、执行红线）；循环 = `hunt_overview` 读态势 → 调侦察工具（带 `observationLedgerRoot`，系统自动把工具真实请求过的 URL+状态记入观察台账）→ `hunt_record` 写回（防幻觉闸门自动执行：evidence 引用的 URL 必须在台账里、observed 事实必须引用系统记录，编造整条丢弃）→ `gen_report` + `save_evidence` 交付。状态全落 graph.json，可重入。无需任何 API key。
 
 ### 自主流水线
 

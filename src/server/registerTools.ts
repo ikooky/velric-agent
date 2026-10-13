@@ -192,67 +192,57 @@ const handlers: Readonly<Record<string, Handler>> = {
         .parse(raw),
     );
   },
-  hunt: async (raw) => {
-    // Long-running: a full hunt takes minutes — far beyond the typical MCP
-    // client request timeout (60s). Launch async and return a handle; the
-    // host polls hunt_status.
-    const { runHunt } = await import("../application/hunt.js");
-    const { writeFile, mkdir, readFile } = await import("node:fs/promises");
+  hunt_begin: async (raw) => {
+    const { huntBegin } = await import("../application/huntDriver.js");
+    const p = z.object({ goal: z.string(), outputRoot: z.string() }).parse(raw);
+    return huntBegin(p);
+  },
+  hunt_record: async (raw) => {
+    const { huntRecord } = await import("../application/huntDriver.js");
     const p = z
       .object({
-        goal: z.string(),
         outputRoot: z.string(),
-        chromiumPath: z.string().optional(),
-        proxy: z.string().optional(),
-        model: z.string().optional(),
-        maxRounds: z.number().optional(),
-        maxSteps: z.number().optional(),
+        intentId: z.number().optional(),
+        intentSummary: z.string().optional(),
+        goals: z.array(z.object({ summary: z.string(), vulnclass: z.string().optional() })).optional(),
+        intents: z.array(z.object({ summary: z.string(), state: z.string().optional() })).optional(),
+        facts: z.array(z.object({
+          summary: z.string().optional(),
+          detail: z.string().optional(),
+          evidence: z.string().optional(),
+          confidence: z.string().optional(),
+        })).optional(),
+        findings: z.array(z.object({
+          name: z.string().optional(),
+          vulnclass: z.string().optional(),
+          severity: z.string().optional(),
+          summary: z.string().optional(),
+          poc: z.string().optional(),
+        })).optional(),
+        assets: z.array(z.object({
+          type: z.string().optional(),
+          key: z.string().optional(),
+          props: z.record(z.string(), z.unknown()).optional(),
+        })).optional(),
+        goalsMet: z.array(z.object({ id: z.number(), reason: z.string().optional() })).optional(),
       })
       .parse(raw);
-    await mkdir(p.outputRoot, { recursive: true });
-    const statusFile = join(p.outputRoot, "hunt_status.json");
-    const startedAt = new Date().toISOString();
-    const writeStatus = async (patch: Record<string, unknown>) => {
-      const prev = await readFile(statusFile, "utf8")
-        .then((t) => JSON.parse(t) as Record<string, unknown>)
-        .catch(() => ({}));
-      await writeFile(statusFile, JSON.stringify({ ...prev, ...patch }, null, 2));
-    };
-    await writeStatus({ state: "running", startedAt, goal: p.goal, outputRoot: p.outputRoot });
-    void runHunt({
-      goal: p.goal,
-      outputRoot: p.outputRoot,
-      chromiumPath: p.chromiumPath,
-      proxy: p.proxy,
-      maxRounds: p.maxRounds,
-      maxSteps: p.maxSteps,
-      llm: {
-        baseUrl: process.env.LLM_BASE_URL ?? "https://z-api.pp.ua/v1",
-        apiKey: process.env.LLM_API_KEY ?? process.env.NEWAPI_KEY ?? "",
-        model: p.model ?? process.env.LLM_MODEL ?? "deepseek-v4.1-flash",
-      },
-    })
-      .then((r) => writeStatus({ state: "done", finishedAt: new Date().toISOString(), result: r }))
-      .catch((e: unknown) => writeStatus({ state: "error", finishedAt: new Date().toISOString(), error: String((e as Error).message ?? e).slice(0, 300) }));
+    const r = await huntRecord(p);
     return {
-      started: true,
-      statusFile,
-      poll: "hunt_status(outputRoot) — read hunt_status.json; state=running|done|error",
+      accepted: r.accepted,
+      dropped: r.dropped,
+      dropReasons: r.dropReasons,
+      goalsMet: r.graph.goals.filter((x) => x.met).length,
+      goalsTotal: r.graph.goals.length,
+      facts: r.graph.facts.length,
+      findings: r.graph.findings.length,
+      assets: r.graph.assets.length,
     };
   },
-  hunt_status: async (raw) => {
-    const { readFile } = await import("node:fs/promises");
+  hunt_overview: async (raw) => {
+    const { huntOverview } = await import("../application/huntDriver.js");
     const p = z.object({ outputRoot: z.string() }).parse(raw);
-    const t = await readFile(join(p.outputRoot, "hunt_status.json"), "utf8");
-    return JSON.parse(t) as Record<string, unknown>;
-  },
-  workflow_guide: async () => {
-    const { WORKFLOW_GUIDE, PHASE_TAGS } = await import("./workflow.js");
-    return {
-      phases: 6,
-      guide: WORKFLOW_GUIDE,
-      toolPhaseMap: PHASE_TAGS,
-    };
+    return huntOverview(p.outputRoot);
   },
   save_evidence: async (raw) => {
     const p = z
@@ -268,6 +258,27 @@ const handlers: Readonly<Record<string, Handler>> = {
 };
 
 /** Register every contract on one MCP server instance. */
+/** Best-effort extraction of URLs a tool truly touched (from args + result). */
+const extractTouchedUrls = (
+  input: Record<string, unknown>,
+  out: unknown,
+): { url: string; status: number | null }[] => {
+  const urls: { url: string; status: number | null }[] = [];
+  const add = (u: unknown, status: number | null = null): void => {
+    if (typeof u === "string" && /^https?:\/\//.test(u)) urls.push({ url: u, status });
+  };
+  for (const key of ["url", "baseUrl", "seed", "urls", "seeds", "hosts"]) {
+    const v = input[key];
+    if (typeof v === "string") add(v);
+    if (Array.isArray(v)) for (const x of v) add(x);
+  }
+  if (out && typeof out === "object") {
+    const o = out as Record<string, unknown>;
+    if (typeof o.url === "string") add(o.url, typeof o.status === "number" ? o.status : null);
+  }
+  return urls;
+};
+
 export const registerAllTools = (server: McpServer): void => {
   for (const contract of ALL_CONTRACTS) {
     const handler = handlers[contract.name];
@@ -279,7 +290,28 @@ export const registerAllTools = (server: McpServer): void => {
         description: `${PHASE_TAGS[contract.name] ? PHASE_TAGS[contract.name] + " — " : ""}${contract.description}`,
         inputSchema: contract.inputSchema as z.ZodType<Record<string, unknown>>,
       },
-      async (input) => deliver(contract, () => handler(input as Record<string, unknown>)),
+      async (input) =>
+        deliver(contract, async () => {
+          const out = await handler(input as Record<string, unknown>);
+          // Observation ledger: record what this tool ACTUALLY touched, so the
+          // host's evidence citations can be gated against reality. Never
+          // trusts narration; derived from the tool's own result.
+          const ledgerRoot = (input as Record<string, unknown>).observationLedgerRoot;
+          if (typeof ledgerRoot === "string" && ledgerRoot && contract.name !== "hunt_record") {
+            try {
+              const { appendLedger } = await import("../application/huntDriver.js");
+              const urls = extractTouchedUrls(input as Record<string, unknown>, out);
+              const byUrl = new Map<string, number | null>();
+              for (const e of urls) byUrl.set(e.url, e.status);
+              if (byUrl.size > 0) {
+                await appendLedger(ledgerRoot, [...byUrl.entries()].map(([url, status]) => ({
+                  tool: contract.name, url, status, at: new Date().toISOString(),
+                })));
+              }
+            } catch { /* ledger is best-effort; never fail the tool */ }
+          }
+          return out;
+        }),
     );
   }
 };

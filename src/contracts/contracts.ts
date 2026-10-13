@@ -30,6 +30,7 @@ export const httpProbeContract: ToolContract = {
     "GET one URL: status, title, server/x-powered-by, size, sha256. TLS verification disabled (recon targets are often self-signed).",
   kind: "net",
   inputSchema: z.object({
+    observationLedgerRoot: z.string().optional().describe("auto-record touched URLs into the hunt observation ledger"),
     url: z.string().url(),
     cookie: z.string().optional(),
     proxy: z.string().optional(),
@@ -50,6 +51,7 @@ export const harvestStaticContract: ToolContract = {
     "Fetch the SPA entry, download every script, expand webpack/Vite chunk manifests to fixpoint, extract API endpoints and frontend routes into api_static.txt / routes.txt / paths_other.txt / chunkmap.txt under output_root.",
   kind: "static",
   inputSchema: z.object({
+    observationLedgerRoot: z.string().optional().describe("auto-record touched URLs into the hunt observation ledger"),
     baseUrl: z.string().describe("entry URL, e.g. https://target/"),
     outputRoot,
     timeoutMs: z.number().int().min(1000).max(120000).optional(),
@@ -72,6 +74,7 @@ export const extractRoutesContract: ToolContract = {
     "Run endpoint/route extraction over a directory of already-downloaded JS chunks (the js/ dir produced by harvest_static).",
   kind: "static",
   inputSchema: z.object({
+    observationLedgerRoot: z.string().optional().describe("auto-record touched URLs into the hunt observation ledger"),
     jsDir: z.string().describe("absolute path to a directory of .js files"),
     outputRoot,
   }),
@@ -89,6 +92,7 @@ export const captureRuntimeContract: ToolContract = {
     "Drive a headless Chromium through an authorized SPA: inject the api-recon preload hook (three-gate defeat), walk routes, record live XHR/fetch/WS endpoints with methods and bodies into runtime_api.json.",
   kind: "runtime",
   inputSchema: z.object({
+    observationLedgerRoot: z.string().optional().describe("auto-record touched URLs into the hunt observation ledger"),
     baseUrl: z.string(),
     outputRoot,
     routes: z.array(z.string()).optional(),
@@ -120,6 +124,7 @@ export const buildPermTreeContract: ToolContract = {
     "Parse userRouteAuth from downloaded JS, resolve webpack aliases via routeMap, infer hierarchy from code prefixes, and write permissive menu/permission stubs (permissions_all_stub.json / role_permissions_stub.json).",
   kind: "structure",
   inputSchema: z.object({
+    observationLedgerRoot: z.string().optional().describe("auto-record touched URLs into the hunt observation ledger"),
     jsDir: z.string(),
     outputRoot,
     role: z.string().optional(),
@@ -139,6 +144,7 @@ export const mergeParamsContract: ToolContract = {
     "Merge recorded param samples (param_samples.json: [{method,url,body,query}]) into per-endpoint field sets with confidence. A field seen in every sample is high; seen once is medium; nothing implies required/optional from one sample.",
   kind: "structure",
   inputSchema: z.object({
+    observationLedgerRoot: z.string().optional().describe("auto-record touched URLs into the hunt observation ledger"),
     samplesFile: z.string().describe("absolute path to param_samples.json"),
     outputRoot,
   }),
@@ -158,6 +164,7 @@ export const enrichAssetsContract: ToolContract = {
     "Asset graph auto-completion: resolve seeds (A/AAAA/CNAME), upsert root_domain/domain/subdomain/ip/service nodes, HTTP-probe web services (status+title). Writes assets.json.",
   kind: "net",
   inputSchema: z.object({
+    observationLedgerRoot: z.string().optional().describe("auto-record touched URLs into the hunt observation ledger"),
     seeds: z.array(z.string()).min(1).describe("domains or URLs"),
     outputRoot,
     proxy: z.string().optional(),
@@ -179,6 +186,7 @@ export const genReportContract: ToolContract = {
   inputSchema: z.object({
     reportFile: z.string().describe("path to report.json {title,goal,assetCounts,findings[]}"),
     outputRoot,
+    observationLedgerRoot: z.string().optional().describe("auto-record touched URLs into the hunt observation ledger"),
   }),
   outputSchema: z.object({ findings: z.number() }),
   annotations: writingAnnotations(),
@@ -192,6 +200,7 @@ export const autoPipelineContract: ToolContract = {
     "Full recon pipeline in one command: enrich asset graph → classify SPA/MPA → static recon (harvest/spider) → runtime capture → perm tree + param matrix → findings/report/evidence. State lives in outputRoot only.",
   kind: "runtime",
   inputSchema: z.object({
+    observationLedgerRoot: z.string().optional().describe("auto-record touched URLs into the hunt observation ledger"),
     seed: z.string().describe("domain or URL"),
     outputRoot,
     chromiumPath: z.string().optional(),
@@ -206,37 +215,66 @@ export const autoPipelineContract: ToolContract = {
   examples: [{ title: "auto", input: { seed: "example.com", outputRoot: "/tmp/recon" } }],
 };
 
-export const huntContract: ToolContract = {
-  name: "hunt",
-  title: "LLM-orchestrated hunt",
+export const huntContract = {
+  name: "hunt_begin",
+  title: "Begin host-driven hunt",
   description:
-    "Multi-agent LLM orchestration: goals decomposer (goal+constraints) → planner loop (situation→judge→dispatch intents) → worker execution (JSON-action tool loop) → anti-hallucination gates (system-digest evidence channel) → report.md + evidence + graph.json. Async: returns immediately with a statusFile; poll hunt_status(outputRoot) until state=done. Resumable: state lives in outputRoot/graph.json.",
+    "Initialize the hunt workspace: creates/resets graph.json for the goal and returns the DRIVER PLAYBOOK (planner/worker disciplines: goal decomposition rules, hard-floor planning, quantified acceptance, evidence gates, worker red lines). The HOST agent is the brain — read the playbook, then drive tools + hunt_record/hunt_overview in a loop.",
+  kind: "runtime",
+  inputSchema: z.object({ goal: z.string(), outputRoot: z.string() }),
+  outputSchema: z.object({ goal: z.string() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "begin", input: { goal: "对 example.com 做 API 面侦察", outputRoot: "/tmp/recon" } }],
+} as unknown as ToolContract;
+
+export const huntRecordContract = {
+  name: "hunt_record",
+  title: "Record gated results",
+  description:
+    "Write intents/goals/facts/findings/assets back into the graph. Anti-hallucination gates run automatically: every http(s) URL cited in evidence/poc must exist in the observation ledger (URLs tools actually requested when observationLedgerRoot was set); observed facts must cite a ledger entry; inferred facts pass with confidence=inferred. Returns accepted/dropped counts.",
   kind: "runtime",
   inputSchema: z.object({
-    goal: z.string().describe("natural-language recon goal"),
     outputRoot,
-    chromiumPath: z.string().optional(),
-    proxy: z.string().optional(),
-    model: z.string().optional().describe("LLM model (default deepseek-v4.1-flash; needs LLM_BASE_URL/LLM_API_KEY or z-api default)"),
-    maxRounds: z.number().int().min(1).max(20).optional(),
-    maxSteps: z.number().int().min(1).max(30).optional(),
+    intentId: z.number().optional(),
+    intentSummary: z.string().optional(),
+    goals: z.array(z.object({ summary: z.string(), vulnclass: z.string().optional() })).optional(),
+    intents: z.array(z.object({ summary: z.string(), state: z.string().optional() })).optional(),
+    facts: z.array(z.object({
+      summary: z.string().optional(),
+      detail: z.string().optional(),
+      evidence: z.string().optional(),
+      confidence: z.string().optional().describe("observed|inferred"),
+    })).optional(),
+    findings: z.array(z.object({
+      name: z.string().optional(),
+      vulnclass: z.string().optional(),
+      severity: z.string().optional(),
+      summary: z.string().optional(),
+      poc: z.string().optional(),
+    })).optional(),
+    assets: z.array(z.object({
+      type: z.string().optional(),
+      key: z.string().optional(),
+      props: z.record(z.string(), z.unknown()).optional(),
+    })).optional(),
+    goalsMet: z.array(z.object({ id: z.number(), reason: z.string().optional() })).optional(),
   }),
-  outputSchema: z.object({ facts: z.number(), findings: z.number() }),
+  outputSchema: z.object({ accepted: z.number(), dropped: z.number() }),
   annotations: writingAnnotations(),
-  examples: [{ title: "hunt", input: { goal: "对 example.com 做 API 面侦察", outputRoot: "/tmp/recon" } }],
-};
+  examples: [{ title: "record", input: { outputRoot: "/tmp/recon", facts: [{ summary: "GET /x → 200", evidence: "GET https://t/x → 200", confidence: "observed" }] } }],
+} as unknown as ToolContract;
 
-export const huntStatusContract: ToolContract = {
-  name: "hunt_status",
-  title: "Poll hunt progress",
+export const huntOverviewContract = {
+  name: "hunt_overview",
+  title: "Read hunt situation",
   description:
-    "Poll the status of a hunt started via the hunt tool. Returns state=running|done|error plus the full result (rounds, goalsMet, facts, findings, reportPath) when done.",
+    "Return the full situation (goal, goals+met, open/running/recent intents, recent facts with evidence, findings, asset counts) for the host's next planning decision.",
   kind: "runtime",
-  inputSchema: z.object({ outputRoot: z.string().describe("outputRoot given to hunt") }),
-  outputSchema: z.object({ state: z.string() }),
+  inputSchema: z.object({ outputRoot }),
+  outputSchema: z.object({ overview: z.string() }),
   annotations: readOnlyAnnotations(),
-  examples: [{ title: "poll", input: { outputRoot: "/tmp/recon" } }],
-};
+  examples: [{ title: "overview", input: { outputRoot: "/tmp/recon" } }],
+} as unknown as ToolContract;
 
 export const workflowGuideContract: ToolContract = {
   name: "workflow_guide",
@@ -259,6 +297,7 @@ export const saveEvidenceContract: ToolContract = {
   inputSchema: z.object({
     itemsFile: z.string().describe("path to items.json [{source,label?,content}]"),
     outputRoot,
+    observationLedgerRoot: z.string().optional().describe("auto-record touched URLs into the hunt observation ledger"),
   }),
   outputSchema: z.object({ blobs: z.number() }),
   annotations: writingAnnotations(),
@@ -274,6 +313,7 @@ export const spiderMpaContract: ToolContract = {
     "Same-origin bounded BFS crawl for non-SPA targets: extract <form> endpoints with params, inline ajax URLs, and the reached link set into forms.txt / links.txt / api_inline.txt.",
   kind: "static",
   inputSchema: z.object({
+    observationLedgerRoot: z.string().optional().describe("auto-record touched URLs into the hunt observation ledger"),
     baseUrl: z.string(),
     outputRoot,
     cookie: z.string().optional(),
@@ -303,6 +343,7 @@ export const ALL_CONTRACTS: readonly ToolContract[] = [
   saveEvidenceContract,
   autoPipelineContract,
   huntContract,
-  huntStatusContract,
+  huntRecordContract,
+  huntOverviewContract,
   workflowGuideContract,
 ];
