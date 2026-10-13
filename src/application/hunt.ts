@@ -431,6 +431,15 @@ export const runHunt = async (input: HuntInput): Promise<HuntResult> => {
     await saveGraph(root, g);
   }
 
+  // Resume discipline: a hard kill mid-worker leaves intents stuck in
+  // `running`. They are re-dispatched as open on resume — frozen work is
+  // worse than a re-run (worker tools are idempotent reads).
+  for (const intent of g.intents) {
+    if (intent.state === "running") {
+      intent.state = "open";
+    }
+  }
+
   const maxRounds = input.maxRounds ?? 8;
   let round = 0;
   while (round < maxRounds) {
