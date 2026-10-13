@@ -8,6 +8,9 @@ import { captureRuntime } from "./application/runtime.js";
 import { DEFAULT_HOOK_CONFIG } from "./domain/preload.js";
 import { PRODUCT_IDENTITY } from "./identity.js";
 
+const num = (v: string | boolean | undefined): number | undefined =>
+  typeof v === "string" && v.trim() !== "" ? Number(v) : undefined;
+
 /** Minimal argv parser: command-first, --flag value pairs, --bool flags. */
 interface ParsedArgs {
   readonly command: string;
@@ -49,6 +52,9 @@ Usage:
   velric-agent runtime <url> <outdir>     headless runtime capture (--chromium/--routes/--wait/--per-route/--api-pattern)
   velric-agent perm-tree <jsdir> <outdir> permission tree rebuild (--role NAME)
   velric-agent merge-params <samples.json> <outdir>
+  velric-agent enrich <seed...> --out DIR        asset graph from seeds (DNS+HTTP)
+  velric-agent gen-report <report.json> <outdir> render findings markdown report
+  velric-agent save-evidence <items.json> <outdir> content-addressed evidence blobs
   velric-agent help
 
 Common flags: --proxy URL, --cookie STR, --timeout MS
@@ -170,8 +176,6 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
           );
           return 2;
         }
-        const num = (v: string | boolean | undefined): number | undefined =>
-          typeof v === "string" && v.trim() !== "" ? Number(v) : undefined;
         const strList = (v: string | boolean | undefined): string[] | undefined =>
           typeof v === "string" && v.trim() !== ""
             ? v.split(",").map((s) => s.trim()).filter(Boolean)
@@ -217,6 +221,52 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
           return 2;
         }
         out(await mergeParamSamples({ samplesFile: samples, outputRoot: dir }));
+        return 0;
+      }
+      case "enrich": {
+        const seeds = positional.filter((p) => !p.startsWith("-"));
+        const dir = flags.out as string | undefined;
+        if (seeds.length === 0 || !dir) {
+          console.error("usage: enrich <seed...> --out DIR [--no-http] [--proxy URL] [--cookie STR] [--timeout MS]");
+          return 2;
+        }
+        const { enrichAssets } = await import("./application/enrich.js");
+        out(
+          await enrichAssets({
+            seeds,
+            outputRoot: dir,
+            proxy: typeof flags.proxy === "string" ? flags.proxy : undefined,
+            cookie: typeof flags.cookie === "string" ? flags.cookie : undefined,
+            timeoutMs: num(flags.timeout),
+            http: flags["no-http"] !== true,
+          }),
+        );
+        return 0;
+      }
+      case "gen-report": {
+        const [reportJson, dir] = positional;
+        if (!reportJson || !dir) {
+          console.error("usage: gen-report <report.json> <outdir>");
+          return 2;
+        }
+        const { readFile } = await import("node:fs/promises");
+        const { generateReport } = await import("./application/report.js");
+        const content = await readFile(reportJson, "utf8");
+        out(await generateReport({ reportJson: content, outputRoot: dir }));
+        return 0;
+      }
+      case "save-evidence": {
+        const [inFile, dir] = positional;
+        if (!inFile || !dir) {
+          console.error("usage: save-evidence <items.json> <outdir>   (items: [{source,label?,content}])");
+          return 2;
+        }
+        const { readFile } = await import("node:fs/promises");
+        const { saveEvidence } = await import("./application/evidence.js");
+        const items = JSON.parse(await readFile(inFile, "utf8")) as {
+          source: string; label?: string; content: string;
+        }[];
+        out(await saveEvidence({ outputRoot: dir, items }));
         return 0;
       }
       case "setup": {

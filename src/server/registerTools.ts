@@ -150,6 +150,40 @@ const handlers: Readonly<Record<string, Handler>> = {
         .object({ samplesFile: z.string(), outputRoot: z.string() })
         .parse(raw),
     ),
+  enrich_assets: async (raw) => {
+    const { enrichAssets } = await import("../application/enrich.js");
+    return enrichAssets(
+      z
+        .object({
+          seeds: z.array(z.string()).min(1),
+          outputRoot: z.string(),
+          proxy: z.string().optional(),
+          cookie: z.string().optional(),
+          timeoutMs: z.number().optional(),
+          http: z.boolean().optional(),
+        })
+        .parse(raw),
+    );
+  },
+  gen_report: async (raw) => {
+    const p = z
+      .object({ reportFile: z.string(), outputRoot: z.string() })
+      .parse(raw);
+    const { readFile } = await import("node:fs/promises");
+    const { generateReport } = await import("../application/report.js");
+    return generateReport({ reportJson: await readFile(p.reportFile, "utf8"), outputRoot: p.outputRoot });
+  },
+  save_evidence: async (raw) => {
+    const p = z
+      .object({ itemsFile: z.string(), outputRoot: z.string() })
+      .parse(raw);
+    const { readFile } = await import("node:fs/promises");
+    const { saveEvidence } = await import("../application/evidence.js");
+    return saveEvidence({
+      outputRoot: p.outputRoot,
+      items: JSON.parse(await readFile(p.itemsFile, "utf8")),
+    });
+  },
 };
 
 /** Register every contract on one MCP server instance. */

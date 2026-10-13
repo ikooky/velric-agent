@@ -149,6 +149,57 @@ export const mergeParamsContract: ToolContract = {
   ],
 };
 
+// ---- enrich / report / evidence (velric engine capabilities) ----
+
+export const enrichAssetsContract: ToolContract = {
+  name: "enrich_assets",
+  title: "Enrich asset graph",
+  description:
+    "Stateless port of the velric enrich engine: resolve seeds (A/AAAA/CNAME), upsert root_domain/domain/subdomain/ip/service nodes, HTTP-probe web services (status+title). Writes assets.json.",
+  kind: "net",
+  inputSchema: z.object({
+    seeds: z.array(z.string()).min(1).describe("domains or URLs"),
+    outputRoot,
+    proxy: z.string().optional(),
+    cookie: z.string().optional(),
+    timeoutMs: z.number().int().min(1000).max(120000).optional(),
+    http: z.boolean().optional().describe("probe web services (default true)"),
+  }),
+  outputSchema: z.object({ assets: z.number() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "enrich", input: { seeds: ["example.com"], outputRoot: "/tmp/recon" } }],
+};
+
+export const genReportContract: ToolContract = {
+  name: "gen_report",
+  title: "Render markdown report",
+  description:
+    "Render a deliverable pentest report (findings sorted by severity, PoC evidence) from report.json — same output shape as the velric report engine.",
+  kind: "structure",
+  inputSchema: z.object({
+    reportFile: z.string().describe("path to report.json {title,goal,assetCounts,findings[]}"),
+    outputRoot,
+  }),
+  outputSchema: z.object({ findings: z.number() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "report", input: { reportFile: "/tmp/recon/report.json", outputRoot: "/tmp/recon" } }],
+};
+
+export const saveEvidenceContract: ToolContract = {
+  name: "save_evidence",
+  title: "Save evidence blobs",
+  description:
+    "Content-addressed (sha256) evidence store: writes blobs/<h2>/<hash>.bin + manifest.json, verifies each write. Stateless port of the velric evidence package.",
+  kind: "structure",
+  inputSchema: z.object({
+    itemsFile: z.string().describe("path to items.json [{source,label?,content}]"),
+    outputRoot,
+  }),
+  outputSchema: z.object({ blobs: z.number() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "evidence", input: { itemsFile: "/tmp/recon/evidence_items.json", outputRoot: "/tmp/recon" } }],
+};
+
 // ---- policy ----
 
 export const spiderMpaContract: ToolContract = {
@@ -182,4 +233,7 @@ export const ALL_CONTRACTS: readonly ToolContract[] = [
   captureRuntimeContract,
   buildPermTreeContract,
   mergeParamsContract,
+  enrichAssetsContract,
+  genReportContract,
+  saveEvidenceContract,
 ];
