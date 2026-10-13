@@ -54,7 +54,15 @@ export const appendLedger = async (
 ): Promise<void> => {
   await mkdir(root, { recursive: true });
   const prev = await readLedger(root);
-  const next = [...prev, ...entries];
+  // Upsert by URL: a statusless older entry upgrades when a later observation
+  // carries a status; a URL never duplicates in the ledger.
+  const byUrl = new Map<string, LedgerEntry>();
+  for (const e of [...prev, ...entries]) {
+    const prior = byUrl.get(e.url);
+    if (!prior) byUrl.set(e.url, e);
+    else if (prior.status == null && e.status != null) byUrl.set(e.url, { ...prior, status: e.status });
+  }
+  const next = [...byUrl.values()];
   const { writeFile } = await import("node:fs/promises");
   await writeFile(ledgerPath(root), JSON.stringify(next, null, 2));
 };
@@ -155,7 +163,13 @@ export const huntRecord = async (input: HuntRecordInput): Promise<{ graph: Graph
   const digestOk = (evidence: string, summary: string): boolean => {
     const txt = `${evidence} ${summary}`;
     for (const [k, statuses] of statusByUrl) {
-      if (txt.includes(k)) return true;
+      if (txt.includes(k)) {
+        // URL cited verbatim: sufficient when the ledger entry carries no
+        // status (e.g. harvest downloads record null status). With a status,
+        // require the status to appear too — the citation must reflect reality.
+        const known = [...statuses].filter((s): s is number => typeof s === "number");
+        return known.length === 0 || known.some((s) => txt.includes(String(s)));
+      }
       // relative-path citation matching a ledgered absolute URL on same origin
       try {
         const u = new URL(k);
@@ -272,11 +286,32 @@ export const huntRecord = async (input: HuntRecordInput): Promise<{ graph: Graph
   return { graph: g, accepted, dropped, dropReasons };
 };
 
-export const huntOverview = async (root: string): Promise<{ overview: string; goalsMet: number; goalsTotal: number }> => {
+export const huntOverview = async (
+  root: string,
+): Promise<{ overview: string; goalsMet: number; goalsTotal: number; ledgerEntries: number }> => {
   const g = await loadGraph(root);
+  const ledger = await readLedger(root);
   return {
     overview: graphOverview(g),
     goalsMet: g.goals.filter((x) => x.met).length,
     goalsTotal: g.goals.length,
+    ledgerEntries: ledger.length,
   };
+};
+
+/** Persist the observation ledger as a content-addressed evidence blob so
+ *  every hunt's claims are traceable to verifiable request receipts. */
+export const exportLedgerEvidence = async (root: string): Promise<{ hash: string; bytes: number } | null> => {
+  const ledger = await readLedger(root);
+  if (ledger.length === 0) return null;
+  const { createHash } = await import("node:crypto");
+  const { mkdir, writeFile } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const body = JSON.stringify(ledger, null, 2);
+  const hash = createHash("sha256").update(body).digest("hex");
+  const dir = join(root, "blobs", hash.slice(0, 2));
+  await mkdir(dir, { recursive: true });
+  const path = join(dir, `${hash}.json`);
+  await writeFile(path, body);
+  return { hash, bytes: Buffer.byteLength(body) };
 };

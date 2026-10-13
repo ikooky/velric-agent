@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 
 import { ensureDir, writeArtifact } from "../adapters/artifacts.js";
@@ -41,6 +42,30 @@ export interface RuntimeCaptureResult {
   readonly sseEndpoints: string[];
   readonly artifacts: { path: string; bytes: number }[];
 }
+
+/** Runtime-capture noise filter: drop static-asset and telemetry hosts from
+ * the API surface (SVG icon JSON, GA/sentry beacons pollute uniqueCalls). */
+const NOISE_HOST_RE =
+  /(?:^|\.)(?:google-analytics\.com|googletagmanager\.com|doubleclick\.net|sentry\.io|.*\.sentry\.io|beacon\.qq\.com|hm\.baidu\.com|plural\.sc\.qq\.com|beacon\.shimo\.io|stats\.g\.doubleclick\.net)$/;
+
+const STATIC_RESOURCE_RE =
+  /\.(?:js|css|png|jpe?g|gif|webp|avif|svg|ico|woff2?|ttf|eot|mp4|webm|mp3|m4a|wav|flv|ts|m3u8|vtt|json\.sig|map|har)(?:[?#@]|$)/i;
+
+/** Icon/font packages fetched as JSON from asset CDNs (e.g. …/svg-next/arrow/v3.json). */
+const ICON_PACKAGE_PATH_RE = /\/svg[-_]|\/icons?[-_/]|\/fonts?[-_/]/i;
+
+const isNoiseUrl = (rawUrl: string, pageOrigin?: string): boolean => {
+  try {
+    const u = new URL(rawUrl, "http://placeholder.local");
+    if (NOISE_HOST_RE.test(u.hostname)) return true;
+    if (STATIC_RESOURCE_RE.test(u.pathname)) return true;
+    // Cross-origin svg/icon delivery paths are static packages, not APIs.
+    if (pageOrigin && u.origin !== pageOrigin && ICON_PACKAGE_PATH_RE.test(u.pathname)) return true;
+    return false;
+  } catch {
+    return false;
+  }
+};
 
 const cookieValue = (v: string): string => {
   if (v.startsWith("b64json:")) return Buffer.from(v.slice(8)).toString("base64");
@@ -173,7 +198,21 @@ export const captureRuntime = async (
     // visiting them all starves the route loop on modest hardware. Explicit
     // input.routes take priority; discovered shell links are capped.
     const maxRoutes = input.maxRoutes ?? 30;
-    const seedRoutes = [...new Set([...(input.routes ?? ["/"]), ...shellLinks])];
+    const explicit = input.routes ?? [];
+    let fallbackRoutes: string[] = [];
+    if (explicit.length === 0 && shellLinks.length === 0) {
+      // Neither explicit routes nor discovered shell links: fall back to the
+      // static harvest's path list so the route loop still has fuel.
+      try {
+        const { readFile } = await import("node:fs/promises");
+        const paths = (await readFile(join(root, "paths_other.txt"), "utf8"))
+          .split("\n").map((l) => l.trim()).filter((l) => l.startsWith("/"));
+        fallbackRoutes = paths.slice(0, maxRoutes);
+      } catch {
+        fallbackRoutes = ["/"];
+      }
+    }
+    const seedRoutes = [...new Set([...(input.routes ?? ["/"]), ...shellLinks, ...fallbackRoutes])];
     const routes = seedRoutes.slice(0, maxRoutes);
     const perRoute: Record<string, string[]> = {};
     const allApis = new Set<string>();
@@ -205,9 +244,10 @@ export const captureRuntime = async (
         routes: string[];
         observe: { storage: unknown[]; headers: { name: string; url: string }[] };
       };
-      perRoute[key] = [...new Set([...(perRoute[key] ?? []), ...fresh.apis])];
-      for (const a of fresh.apis) allApis.add(a);
-      allDetail.push(...fresh.detail);
+      const keptApis = fresh.apis.filter((a) => !isNoiseUrl(a.split(" ").slice(1).join(" ") || a, origin));
+      perRoute[key] = [...new Set([...(perRoute[key] ?? []), ...keptApis])];
+      for (const a of keptApis) allApis.add(a);
+      allDetail.push(...fresh.detail.filter((d) => !isNoiseUrl(String(d.url), origin)));
       for (const r of fresh.routes) allVueRoutes.add(r);
       observeAcc.storage.push(...fresh.observe.storage);
       observeAcc.headers.push(...fresh.observe.headers);

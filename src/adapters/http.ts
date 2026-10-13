@@ -34,6 +34,26 @@ export const fetchUrl = async (
   url: string,
   options: FetchOptions = {},
 ): Promise<FetchResult> => {
+  // Default retry policy: initial + 2 retries on transient failures
+  // (network errors, timeouts, 5xx), 1s backoff — user-wide convention.
+  const maxAttempts = 3;
+  let last: FetchResult | undefined;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const r = await fetchOnce(url, options);
+    const transient =
+      r.status === 0 ||        // network error / timeout / TLS reset
+      r.status >= 500;         // server-side
+    if (!transient || attempt === maxAttempts) return r;
+    last = r;
+    await new Promise((res) => setTimeout(res, 1000));
+  }
+  return last!;
+};
+
+const fetchOnce = async (
+  url: string,
+  options: FetchOptions = {},
+): Promise<FetchResult> => {
   const maxBytes = options.maxBytes ?? 4 * 1024 * 1024;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 25000);

@@ -82,5 +82,7 @@ export const PHASE_TAGS: Record<string, string> = {
   hunt_begin: "[Phase 0-5 全链路·宿主驱动] 开局必调:建图+返回驱动手册(planner/worker 纪律)",
   hunt_record: "[Phase 0-5 写回] 带防幻觉闸门:URL 必须在台账、observed 须引系统记录",
   hunt_overview: "[Phase 0-5 态势] 每轮先读:目标/意图/事实/发现全貌",
+  run_diff: "[监控] 同目标两次 run 的攻击面 diff:新端点/新参数/资产变更",
+  probe_params: "[Phase 4 深化] 参数差分:逐个剔除参数对比响应,识别必填/开关参数",
   workflow_guide: "[必读] 返回完整方法论(Phase 0-5+纪律);开局先调这个",
 };

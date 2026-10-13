@@ -341,6 +341,42 @@ export const spiderMpaContract: ToolContract = {
   examples: [{ title: "crawl", input: { baseUrl: "https://target/", outputRoot: "/tmp/recon" } }],
 };
 
+
+export const runDiffContract: ToolContract = {
+  name: "run_diff",
+  title: "Diff two recon runs",
+  description:
+    "Structured diff between two recon outputRoots of the same target: added/removed API endpoints, new routes, new param sets, asset delta. Basis for attack-surface monitoring (cron the CLI auto + run-diff consecutive runs).",
+  kind: "runtime",
+  inputSchema: z.object({
+    oldRoot: z.string(),
+    newRoot: z.string(),
+  }),
+  outputSchema: z.object({ summary: z.string() }),
+  annotations: readOnlyAnnotations(),
+  examples: [{ title: "diff", input: { oldRoot: "/tmp/recon-old", newRoot: "/tmp/recon-new" } }],
+};
+
+export const probeParamsContract: ToolContract = {
+  name: "probe_params",
+  title: "Per-param differential probe",
+  description:
+    "For each merged endpoint: baseline request, then remove one query param at a time and diff status/body. Reveals required params (removal → 4xx) and behavior-switch params without guessing. GET endpoints only.",
+  kind: "runtime",
+  inputSchema: z.object({
+    mergedFile: z.string().describe("path to params_merged.json"),
+    outputRoot,
+    observationLedgerRoot: z.string().optional().describe("auto-record touched URLs into the hunt observation ledger"),
+    cookie: z.string().optional(),
+    proxy: z.string().optional(),
+    timeoutMs: z.number().optional(),
+    maxEndpoints: z.number().optional(),
+  }),
+  outputSchema: z.object({ probed: z.number() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "probe", input: { mergedFile: "/tmp/recon/params_merged.json", outputRoot: "/tmp/recon" } }],
+};
+
 export const ALL_CONTRACTS: readonly ToolContract[] = [
   dnsResolveContract,
   httpProbeContract,
@@ -355,6 +391,8 @@ export const ALL_CONTRACTS: readonly ToolContract[] = [
   saveEvidenceContract,
   autoPipelineContract,
   autoStatusContract,
+  runDiffContract,
+  probeParamsContract,
   huntContract,
   huntRecordContract,
   huntOverviewContract,

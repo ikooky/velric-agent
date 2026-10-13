@@ -143,6 +143,10 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
     }
   }
 
+
+/** GraphQL introspection disabled detection: explicit error mentioning it. */
+const introspectionBlocked = (body: string): boolean =>
+  /introspection.*(disabled|not enabled|allowed)|GraphQL introspection/i.test(body);
   // ---- Stage 6: report + evidence ----
   const apiStatic = join(root, "api_static.txt");
   let findings = 0;
@@ -168,6 +172,40 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
         poc: liveCalls.slice(0, 20).join("\n"),
       });
     }
+    // Secrets leaked into bundles (harvest's regex scan artifact)
+    const secretsFile = join(root, "secrets.txt");
+    if (await exists(secretsFile)) {
+      const lines = (await readFile(secretsFile, "utf8")).split("\n").filter(Boolean);
+      if (lines.length > 0) {
+        fList.push({
+          name: `Bundle 内疑似凭据/秘密 ${lines.length} 处`,
+          severity: "high",
+          summary: "harvest 秘密扫描在 JS bundle 中命中疑似 key/token/内网地址(见 secrets.txt)",
+          poc: lines.slice(0, 20).join("\n"),
+        });
+      }
+    }
+    // GraphQL introspection probe (deterministic, one POST)
+    try {
+      const gqlUrl = new URL("/graphql", base).href;
+      const { fetchUrl } = await import("../adapters/http.js");
+      const intro = await fetchUrl(gqlUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ query: "{ __schema { queryType { name } } }" }),
+        timeoutMs: 8000,
+      });
+      const looksGql = intro.status === 200 && /__schema|queryType|errors/.test(intro.body);
+      const denied = intro.status === 200 && introspectionBlocked(intro.body);
+      if (looksGql && !denied) {
+        fList.push({
+          name: "GraphQL endpoint 可达",
+          severity: "medium",
+          summary: `POST ${gqlUrl} 响应含 schema 结构(introspection ${denied ? "已禁用" : "疑似开放"})`,
+          poc: intro.body.slice(0, 500),
+        });
+      }
+    } catch { /* graphql probe is best-effort */ }
     const permTreeJson = await readJson<{ tree?: unknown[] }>(join(root, "permissions_tree.json"));
     if (permTreeJson?.tree && (permTreeJson.tree as unknown[]).length > 0) {
       fList.push({

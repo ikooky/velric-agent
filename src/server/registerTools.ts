@@ -19,7 +19,7 @@ import { classifyPaths, extractPathLiterals, extractRoutes } from "../domain/end
 
 type Handler = (input: Record<string, unknown>) => Promise<unknown>;
 
-const handlers: Readonly<Record<string, Handler>> = {
+export const handlers: Readonly<Record<string, Handler>> = {
   dns_resolve: async (raw) => {
     const input = z.object({ hosts: z.array(z.string()) }).parse(raw);
     const results = [];
@@ -211,7 +211,16 @@ const handlers: Readonly<Record<string, Handler>> = {
     const { readFile } = await import("node:fs/promises");
     const { join } = await import("node:path");
     try {
-      return JSON.parse(await readFile(join(p.outputRoot, "auto_status.json"), "utf8"));
+      const status = JSON.parse(await readFile(join(p.outputRoot, "auto_status.json"), "utf8"));
+      // Stage-level progress: pipeline.json is written stage-by-stage when the
+      // pipeline runs in-progress mode; merge what exists into the status.
+      try {
+        const pipeline = JSON.parse(await readFile(join(p.outputRoot, "pipeline.json"), "utf8"));
+        if (Array.isArray(pipeline.stages)) {
+          return { ...status, stages: pipeline.stages };
+        }
+      } catch { /* pipeline.json not written yet — fine */ }
+      return status;
     } catch {
       return { state: "unknown", hint: "call auto_recon first" };
     }
@@ -264,9 +273,31 @@ const handlers: Readonly<Record<string, Handler>> = {
     };
   },
   hunt_overview: async (raw) => {
-    const { huntOverview } = await import("../application/huntDriver.js");
+    const { huntOverview, exportLedgerEvidence } = await import("../application/huntDriver.js");
     const p = z.object({ outputRoot: z.string() }).parse(raw);
+    // Best-effort: snapshot the ledger as a content-addressed evidence blob on
+    // every overview read, so hunts self-verify without an explicit step.
+    try { await exportLedgerEvidence(p.outputRoot); } catch { /* best-effort */ }
     return huntOverview(p.outputRoot);
+  },
+  run_diff: async (raw) => {
+    const p = z.object({ oldRoot: z.string(), newRoot: z.string() }).parse(raw);
+    const { runDiff } = await import("../application/runDiff.js");
+    return runDiff(p);
+  },
+  probe_params: async (raw) => {
+    const p = z
+      .object({
+        mergedFile: z.string(),
+        outputRoot: z.string(),
+        cookie: z.string().optional(),
+        proxy: z.string().optional(),
+        timeoutMs: z.number().optional(),
+        maxEndpoints: z.number().optional(),
+      })
+      .parse(raw);
+    const { probeParams } = await import("../application/paramProbe.js");
+    return probeParams(p);
   },
   workflow_guide: async () => {
     const { WORKFLOW_GUIDE } = await import("./workflow.js");
@@ -293,24 +324,55 @@ const extractTouchedUrls = (
 ): { url: string; status: number | null }[] => {
   const urls: { url: string; status: number | null }[] = [];
   const add = (u: unknown, status: number | null = null): void => {
-    if (typeof u === "string" && /^https?:\/\//.test(u)) urls.push({ url: u, status });
+    if (typeof u === "string" && /^https?:\/\//.test(u)) {
+      // Upsert: a known-status observation upgrades an earlier statusless
+      // entry (e.g. the arg URL recorded before the result carried 200).
+      const prior = urls.find((e) => e.url === u);
+      if (!prior) urls.push({ url: u, status });
+      else if (prior.status == null && status != null) prior.status = status;
+    }
   };
+  // 1) explicit URL-ish args
   for (const key of ["url", "baseUrl", "seed", "urls", "seeds", "hosts"]) {
     const v = input[key];
     if (typeof v === "string") add(v);
     if (Array.isArray(v)) for (const x of v) add(x);
   }
-  if (out && typeof out === "object") {
-    const o = out as Record<string, unknown>;
-    if (typeof o.url === "string") add(o.url, typeof o.status === "number" ? o.status : null);
-  }
+  // 2) deep-walk the tool RESULT for any http(s) URL + adjacent status codes.
+  // Harvest/spider/runtime touch dozens of URLs that never appear in args;
+  // without this the evidence gate under-covers and would drop valid facts.
+  const seen = new Set<unknown>();
+  const MAX_WALK = 5000;
+  let walked = 0;
+  const walk = (node: unknown, depth: number): void => {
+    if (walked++ > MAX_WALK || depth > 6 || node == null) return;
+    if (typeof node === "string") {
+      if (/^https?:\/\//.test(node)) add(node);
+      return;
+    }
+    if (typeof node !== "object") return;
+    if (seen.has(node)) return;
+    seen.add(node);
+    if (Array.isArray(node)) {
+      for (const x of node) walk(x, depth + 1);
+      return;
+    }
+    const o = node as Record<string, unknown>;
+    if (typeof o.url === "string" && /^https?:\/\//.test(o.url) && typeof o.status === "number") {
+      add(o.url, o.status);
+    }
+    for (const v of Object.values(o)) walk(v, depth + 1);
+  };
+  walk(out, 0);
   return urls;
 };
 
 export const registerAllTools = (server: McpServer): void => {
   for (const contract of ALL_CONTRACTS) {
     const handler = handlers[contract.name];
-    if (!handler) continue;
+    // Fail loud at startup: a contract without a handler once shipped silently
+    // (workflow_guide) and masked the regression for days.
+    if (!handler) throw new Error(`no handler registered for contract: ${contract.name}`);
     server.registerTool(
       contract.name,
       {

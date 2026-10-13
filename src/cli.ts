@@ -56,6 +56,9 @@ Usage:
   velric-agent gen-report <report.json> <outdir> render findings markdown report
   velric-agent save-evidence <items.json> <outdir> content-addressed evidence blobs
   velric-agent auto <seed> <outdir>            deterministic pipeline (enrich→classify→recon→runtime→structure→report)
+  velric-agent run-diff <oldDir> <newDir>      diff two recon runs (attack-surface monitoring)
+  velric-agent probe-params <params_merged.json> <outdir>
+                                               per-param differential probe (--max N)
   velric-agent help
 
 Common flags: --proxy URL, --cookie STR, --timeout MS
@@ -287,6 +290,35 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
             timeoutMs: num(flags.timeout),
             skipRuntime: flags["skip-runtime"] === true,
             maxPages: num(flags["max-pages"]),
+          }),
+        );
+        return 0;
+      }
+      case "run-diff": {
+        const [oldRoot, newRoot] = positional;
+        if (!oldRoot || !newRoot) {
+          console.error("usage: run-diff <oldOutdir> <newOutdir>");
+          return 2;
+        }
+        const { runDiff } = await import("./application/runDiff.js");
+        out(await runDiff({ oldRoot, newRoot }));
+        return 0;
+      }
+      case "probe-params": {
+        const [mergedFile, dir] = positional;
+        if (!mergedFile || !dir) {
+          console.error("usage: probe-params <params_merged.json> <outdir> [--max N] [--cookie STR]");
+          return 2;
+        }
+        const { probeParams } = await import("./application/paramProbe.js");
+        out(
+          await probeParams({
+            mergedFile,
+            outputRoot: dir,
+            cookie: typeof flags.cookie === "string" ? flags.cookie : undefined,
+            proxy: typeof flags.proxy === "string" ? flags.proxy : undefined,
+            timeoutMs: num(flags.timeout),
+            maxEndpoints: num(flags.max),
           }),
         );
         return 0;

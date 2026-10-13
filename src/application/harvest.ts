@@ -34,6 +34,7 @@ export interface HarvestInput {
 
 export interface HarvestSummary {
   readonly entryUrl: string;
+  readonly robotsRoutes: number;
   readonly scriptsInHtml: number;
   readonly jsDownloaded: number;
   readonly manifestUrls: number;
@@ -41,6 +42,10 @@ export interface HarvestSummary {
   readonly apiEndpoints: number;
   readonly otherPaths: number;
   readonly routes: number;
+  readonly secrets: number;
+  /** Actual URLs requested (entry, scripts, robots/sitemap) — feeds the
+   * observation ledger so host evidence citations pass the gate. Capped. */
+  readonly touchedUrls: string[];
   readonly artifacts: { path: string; bytes: number }[];
 }
 
@@ -70,6 +75,28 @@ export const harvestStatic = async (
     throw { code: "fetch_failed", message: `entry unreachable: ${entry.error}` };
   }
   await writeFile(join(root, "index.html"), entry.body);
+
+  // robots.txt / sitemap.xml: public routing surface, feed both the route set
+  // and the extraction corpus (cheap: 2 requests, big coverage win).
+  const robotsRoutes = new Set<string>();
+  const fetchText = async (path: string): Promise<string | null> => {
+    const r = await fetchUrl(new URL(path, base).href, { proxy: input.proxy, cookie: input.cookie, timeoutMs });
+    return r.status === 200 && !r.contentType.includes("html") && r.body.length < 2_000_000 ? r.body : null;
+  };
+  const robots = await fetchText("/robots.txt");
+  if (robots) {
+    for (const m of robots.matchAll(/(?:Allow|Disallow):\s*(\/\S*)/g)) {
+      if (!m[1]!.includes("*")) robotsRoutes.add(m[1]!);
+    }
+    const sitemapUrls = [...robots.matchAll(/Sitemap:\s*(\S+)/g)].map((m) => m[1]!);
+    for (const sm of sitemapUrls.slice(0, 3)) {
+      const xml = await fetchText(sm.startsWith("http") ? sm : new URL(sm, base).href);
+      if (xml) for (const loc of xml.matchAll(/<loc>(?:<!\[CDATA\[)?([^<\]]+)/g)) {
+        const u = loc[1]!.trim();
+        try { robotsRoutes.add(new URL(u).pathname); } catch { /* skip */ }
+      }
+    }
+  }
 
   const seeds = new Set<string>();
   for (const re of [SCRIPT_SRC_RE, LINK_JS_RE]) {
@@ -144,6 +171,7 @@ export const harvestStatic = async (
     for (const r of extractRoutes(text)) routes.add(r);
   };
   consume(entry.body); // inline <script> API calls in the entry page
+  for (const r of robotsRoutes) routes.add(r);
   let files: string[] = [];
   try {
     files = await readdir(jsDir);
@@ -173,15 +201,35 @@ export const harvestStatic = async (
     [...allManifest].map((u) => basename(new URL(u).pathname)),
   );
 
+  // Secret scan over the harvested JS corpus — pure local regex, zero cost.
+  const corpus = await readJsCorpus(jsDir);
+  const { scanSecrets } = await import("../domain/secrets.js");
+  const secretHits = scanSecrets(corpus);
+  if (secretHits.length > 0) {
+    artifacts.push(
+      await writeArtifact(
+        input.outputRoot,
+        "secrets.txt",
+        secretHits.map((h) => `${h.name}\t${h.file}\t${h.match}`).join("\n"),
+      ),
+    );
+  }
+
+  const touched = new Set<string>([base, ...seeds, ...allManifest]);
+  if (robots) touched.add(new URL("/robots.txt", base).href);
+
   return {
     entryUrl: base,
+    robotsRoutes: robotsRoutes.size,
     scriptsInHtml: seeds.size,
+    touchedUrls: [...touched].slice(0, 500),
     jsDownloaded: have.size,
     manifestUrls: allManifest.size,
     unreachable,
     apiEndpoints: api.size,
     otherPaths: other.size,
     routes: routes.size,
+    secrets: secretHits.length,
     artifacts,
   };
 };
