@@ -51,6 +51,7 @@ export const runCoverage = async (input: CoverageInput): Promise<CoverageResult>
     executablePath: input.chromiumPath ?? "/usr/bin/chromium",
     headless: true,
     args: ["--no-sandbox", "--disable-dev-shm-usage"],
+    ...(input.proxy ? { proxy: { server: input.proxy } } : {}),
   });
   try {
     const context = await browser.newContext();
@@ -147,9 +148,8 @@ export const runCoverage = async (input: CoverageInput): Promise<CoverageResult>
       const before = await mark();
       await b.click({ timeout: 4000 }).catch(() => {});
       await page.waitForTimeout(700);
-      const apis = since ? await since(before) : [];
-      const apis2 = apis || [];
-      interactions.push({ route: page.url().replace(input.baseUrl, ""), kind: "toolbar", label, apis: [...new Set(apis2)] });
+      const apis = await since(before);
+      if (apis.length > 0) interactions.push({ route: page.url().replace(input.baseUrl, ""), kind: "toolbar", label, apis: [...new Set(apis)] });
       toolClicks++;
     }
 

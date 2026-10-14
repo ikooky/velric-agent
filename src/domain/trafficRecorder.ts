@@ -17,6 +17,7 @@ import { createHash } from "node:crypto";
 
 export interface TrafficRecorderInput {
   readonly outputRoot: string;
+  /** Preferred listen port; 0 = ephemeral. */
   readonly port?: number;
   readonly upstreamProxy?: string;
   /** Stop after this many exchanges (safety cap). */
@@ -44,29 +45,34 @@ export class TrafficRecorder {
   private counter = 0;
   private readonly blobDir: string;
   private readonly outDir: string;
+  private readonly preferredPort: number;
   private upstreamProxy?: string;
   private maxExchanges: number;
+  private upstreamAgent: import("undici").ProxyAgent | null = null;
 
   constructor(input: TrafficRecorderInput) {
     this.outDir = input.outputRoot;
     this.blobDir = join(input.outputRoot, "blobs");
+    this.preferredPort = input.port ?? 0;
     this.upstreamProxy = input.upstreamProxy;
     this.maxExchanges = input.maxExchanges ?? 10000;
   }
 
-  readonly start = async (port = 8788): Promise<number> => {
+  readonly start = async (port?: number): Promise<number> => {
+    const listenPort = port ?? this.preferredPort ?? 0;
     await mkdir(this.blobDir, { recursive: true });
     const server = createServer((req, res) => { void this.handleHttp(req, res); });
     server.on("connect", (req, clientSock, head) => { void this.handleConnect(req, clientSock, head); });
-    await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => server.listen(listenPort, "127.0.0.1", resolve));
     this.server = server;
     const addr = server.address();
-    return typeof addr === "object" && addr !== null ? addr.port : port;
+    return typeof addr === "object" && addr !== null ? addr.port : listenPort;
   };
 
   readonly stop = async (): Promise<void> => {
     if (this.server) await new Promise<void>((resolve) => this.server!.close(() => resolve()));
     this.server = null;
+    if (this.upstreamAgent) { await this.upstreamAgent.destroy().catch(() => {}); this.upstreamAgent = null; }
   };
 
   readonly getExchanges = (): readonly RecordedExchange[] => this.exchanges;
@@ -107,9 +113,13 @@ export class TrafficRecorder {
     const reqHash = body.length > 0 ? await this.spill(body) : null;
 
     try {
-      const dispatcher: Dispatcher | undefined = this.upstreamProxy
-        ? new (await import("undici")).ProxyAgent({ uri: this.upstreamProxy })
-        : undefined;
+      // One shared upstream agent for the recorder's lifetime (pooled sockets,
+      // destroyed in stop()) — not one per request.
+      if (this.upstreamProxy && !this.upstreamAgent) {
+        const { ProxyAgent } = await import("undici");
+        this.upstreamAgent = new ProxyAgent({ uri: this.upstreamProxy });
+      }
+      const dispatcher: Dispatcher | undefined = this.upstreamAgent ?? undefined;
       const r = await undiciRequest(String(req.url), {
         method: String(req.method ?? "GET"),
         headers: { ...omit(req.headers, ["host", "proxy-connection"]) as Record<string, string> },
@@ -139,29 +149,37 @@ export class TrafficRecorder {
 
   private readonly handleConnect = (req: IncomingMessage, clientSock: Duplex, head: Buffer): void => {
     const id = `x${++this.counter}`;
-    const [host, portStr] = (req.url ?? "").split(":");
-    const port = Number(portStr) || 443;
-    const srvSock = netConnect({ host: host!, port }, () => {
+    // IPv6-safe host:port split — bracket form [::1]:443, bare ::1:443, host:443
+    const raw = String(req.url ?? "");
+    const v6 = raw.startsWith("[") ? raw.match(/^\[([^\]]+)\](?::(\d+))?$/) : null;
+    const host = v6 ? v6[1]! : raw.slice(0, raw.lastIndexOf(":")) || raw;
+    const port = Number(v6 ? v6[2] : raw.slice(raw.lastIndexOf(":") + 1)) || 443;
+
+    let upBytes = 0;
+    let downBytes = 0;
+    let settled = false;
+    const finish = (status: number | null): void => {
+      if (settled) return; // exactly one record per tunnel — close fires on both ends
+      settled = true;
+      void this.record({
+        ts: new Date().toISOString(), id, method: "CONNECT", url: raw,
+        status, reqHeaders: flattenHeaders(req.headers), reqBodyHash: null, reqBodyBytes: upBytes,
+        respHeaders: null, respBodyHash: null, respBodyBytes: downBytes, via: "https-tunnel",
+      });
+    };
+    clientSock.on("data", (d: Buffer) => { upBytes += d.length; });
+
+    const srvSock = netConnect({ host, port });
+    srvSock.on("data", (d: Buffer) => { downBytes += d.length; });
+    srvSock.on("connect", () => {
       clientSock.write("HTTP/1.1 200 Connection Established\r\n\r\n");
       if (head.length > 0) srvSock.write(head);
       clientSock.pipe(srvSock).pipe(clientSock);
     });
-    let upBytes = 0;
-    let downBytes = 0;
-    clientSock.on("data", (d: Buffer) => { upBytes += d.length; });
-    srvSock.on("data", (d: Buffer) => { downBytes += d.length; });
-    const done = (): void => {
-      void this.record({
-        ts: new Date().toISOString(), id, method: "CONNECT", url: String(req.url),
-        status: 200, reqHeaders: flattenHeaders(req.headers), reqBodyHash: null, reqBodyBytes: upBytes,
-        respHeaders: null, respBodyHash: null, respBodyBytes: downBytes, via: "https-tunnel",
-      });
-      try { clientSock.destroy(); srvSock.destroy(); } catch { /* gone */ }
-    };
-    clientSock.on("close", done);
-    srvSock.on("close", done);
-    clientSock.on("error", () => {});
-    srvSock.on("error", () => {});
+    clientSock.on("close", () => { finish(200); try { srvSock.destroy(); } catch { /* gone */ } });
+    srvSock.on("close", () => { finish(200); try { clientSock.destroy(); } catch { /* gone */ } });
+    clientSock.on("error", () => { finish(null); try { srvSock.destroy(); } catch { /* gone */ } });
+    srvSock.on("error", () => { finish(502); try { clientSock.destroy(); } catch { /* gone */ } });
   };
 }
 

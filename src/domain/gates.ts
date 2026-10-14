@@ -95,7 +95,10 @@ export const analyzeGates = async (input: { jsDir: string; outputRoot: string })
   );
   const successValues = uniq(
     [...all.matchAll(CODE_FIELD_RE)]
-      .map((m) => m[0].split(/[=!]=/).pop()!.trim().replace(/^["']|["']$/g, ""))
+      // Strip the comparison operator chain (===, !==, ==, =) before the
+      // value — split(/[=!]=/) leaves a leading "=0" that fails validation
+      // and silently drops the dominant minified-bundle form.
+      .map((m) => m[0].replace(/^[^=]*[=!]==?\s*/, "").trim().replace(/^["']|["']$/g, ""))
       .filter((v) => /^-?\d{1,4}$/.test(v)),
   );
   const redirectTriggers = uniq([...all.matchAll(REDIRECT_RE)].map((m) => m[0].slice(0, 100)));

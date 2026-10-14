@@ -45,10 +45,14 @@ export const buildSiteMap = async (input: SiteMapInput): Promise<SiteMap> => {
 
   const routes = await readLines(join(root, "routes.txt"));
   const apis = await readLines(join(root, "api_merged.txt"));
-  const paramsRaw = await readJson<{ endpoints?: { method: string; path: string; fields: { name: string; in: string; confidence: string }[] }[] }>(join(root, "params_merged.json"));
+  // params_merged.json shape: paramMerge writes a TOP-LEVEL ARRAY of
+  // endpoints (accept that first); tolerate a legacy {endpoints:[...]} wrapper.
+  type ParamEntry = { method: string; path: string; fields: { name: string; in: string; confidence: string }[] };
+  const paramsRaw = (await readJson<ParamEntry[] | { endpoints?: ParamEntry[] }>(join(root, "params_merged.json"))) ?? [];
+  const paramEntries: ParamEntry[] = Array.isArray(paramsRaw) ? paramsRaw : paramsRaw.endpoints ?? [];
   const coverage = await readJson<{ interactions?: { route: string; kind: string; label: string }[] }>(join(root, "coverage.json"));
 
-  const params: SiteMap["params"] = (paramsRaw?.endpoints ?? []).map((e) => ({
+  const params: SiteMap["params"] = paramEntries.map((e) => ({
     method: e.method,
     path: e.path,
     transport: e.fields.some((f) => f.in === "body") ? "json" : "query",

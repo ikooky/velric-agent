@@ -19,6 +19,16 @@ describe("CLI usage alignment", () => {
         `case "${cmd}"`,
       );
     }
+    // Bidirectional: every dispatch case must also be advertised in USAGE —
+    // one-way alignment let 7 new commands ship silently unlisted.
+    const caseCmds = [...src.matchAll(/^\s+case "([a-z][a-z0-9-]*)":/gm)].map((m) => m[1]);
+    const mcpOnly = new Set(["mcp"]);
+    for (const cmd of caseCmds) {
+      if (mcpOnly.has(cmd)) continue;
+      expect(src, `cli.ts dispatches "${cmd}" but USAGE never mentions it`).toMatch(
+        new RegExp(`^\\s+velric-agent ${cmd}\\b`, "m"),
+      );
+    }
   });
 
   it("help exit code 0 and lists all commands", async () => {

@@ -68,12 +68,18 @@ export class AssetStore {
     const u = new URL(rawUrl);
     const host = u.hostname.toLowerCase();
     const service = this.upsert({ type: "service", value: `${u.protocol}//${host}${u.port ? ":" + u.port : ""}`, taskTag });
-    const endpoint = this.upsert({ type: "endpoint", value: `${service.value}${u.pathname}`, parent: service.key, taskTag, meta: { method: u.searchParams.size } });
-    if (u.searchParams.size > 0) endpoint.meta = { ...(endpoint.meta ?? {}), queryParams: [...u.searchParams.keys()] };
+    const endpoint = this.upsert({ type: "endpoint", value: `${service.value}${u.pathname}`, parent: service.key, taskTag });
+    if (u.searchParams.size > 0) endpoint.meta = { ...(endpoint.meta ?? {}), queryParamCount: u.searchParams.size, queryParams: [...u.searchParams.keys()] };
     // host chain: subdomain (if dotted) → root domain
     const parts = host.split(".").filter(Boolean);
     if (parts.length >= 2) {
-      const root = parts.slice(-2).join(".");
+      // Common multi-label public suffixes where last-2-labels would give a
+      // bare suffix (api.example.co.uk -> co.uk). Small built-in list; the
+      // full PSL is overkill for recon tagging.
+      const MULTI_SUFFIX = new Set(["co.uk", "org.uk", "ac.uk", "gov.uk", "com.au", "net.au", "org.au", "co.nz", "com.br", "com.cn", "com.tw", "com.hk", "co.jp", "co.kr", "co.in", "co.za", "com.sg", "com.my"]);
+      const last2 = parts.slice(-2).join(".");
+      const last3 = parts.slice(-3).join(".");
+      const root = parts.length >= 3 && MULTI_SUFFIX.has(last2) ? last3 : last2;
       const rootNode = this.upsert({ type: "root_domain", value: root, taskTag });
       let parentKey = rootNode.key;
       if (parts.length > 2) {
@@ -137,7 +143,7 @@ export class ExplorationGraph {
       this.nodes = new Map(raw.nodes.map((n) => [n.id, n]));
       this.edges = raw.edges ?? [];
       this.anchors = raw.anchors ?? [];
-      this.counter = raw.nodes.length;
+      this.counter = raw.nodes.reduce((mx, n) => Math.max(mx, Number(n.id.replace(/^n/, "")) || 0), 0);
     } catch { /* fresh */ }
   }
 

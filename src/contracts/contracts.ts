@@ -676,10 +676,10 @@ export const gatesContract: ToolContract = {
   name: "analyze_gates",
   title: "Auth-gate static analysis",
   description:
-    "api-recon Phase 2 port: grep recipes over harvested JS locating the render/interceptor/content gates (storage keys, code fields, permission APIs) with suggested HookConfig patches. Writes gates_report.json.",
+    "api-recon Phase 2: grep recipes over harvested JS locating the render/interceptor/content gates (storage keys, code fields, permission APIs) with suggested HookConfig patches. Writes gates_report.json.",
   kind: "runtime",
   inputSchema: z.object({ jsDir: z.string(), outputRoot, observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({ storageKeys: z.number() }),
+  outputSchema: z.object({ renderGate: z.object({ storageKeys: z.array(z.string()) }) }),
   annotations: readOnlyAnnotations(),
   examples: [{ title: "gates", input: { jsDir: "/tmp/recon/js", outputRoot: "/tmp/recon" } }],
 };
@@ -688,7 +688,7 @@ export const coverageContract: ToolContract = {
   name: "run_coverage",
   title: "Interactive coverage enumeration",
   description:
-    "api-recon Phase 3b port: drives headless Chromium through sidebar/tabs/table-actions/toolbar, records outbound API calls per interaction, builds the parameter trigger matrix. Writes coverage.json.",
+    "api-recon Phase 3b: drives headless Chromium through sidebar/tabs/table-actions/toolbar, records outbound API calls per interaction, builds the parameter trigger matrix. Writes coverage.json.",
   kind: "runtime",
   inputSchema: z.object({ baseUrl: z.string(), outputRoot, hook: z.record(z.string(), z.unknown()).optional(), cookie: z.string().optional(), chromiumPath: z.string().optional(), maxClicksPerCategory: z.number().optional(), observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ interactions: z.number() }),
@@ -712,7 +712,7 @@ export const trafficRecContract: ToolContract = {
   name: "traffic_record",
   title: "Traffic recording proxy",
   description:
-    "velric platform port: forward proxy recording every exchange (full req/resp for HTTP, tunnel metadata for HTTPS) to traffic.ndjson + sha256 blob store. Long-running; returns bound port.",
+    "velric platform: forward proxy recording every exchange (full req/resp for HTTP, tunnel metadata for HTTPS) to traffic.ndjson + sha256 blob store. Long-running; returns bound port.",
   kind: "runtime",
   inputSchema: z.object({ outputRoot, port: z.number().optional(), upstreamProxy: z.string().optional(), maxExchanges: z.number().optional(), observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ port: z.number() }),
@@ -724,7 +724,7 @@ export const assetGraphContract: ToolContract = {
   name: "asset_graph",
   title: "Asset graph store",
   description:
-    "velric dual-graph port (asset side): global shared asset truth store — upsert root_domain/subdomain/ip/service/endpoint with computed dedup keys and host-chain linking; URL upsert auto-creates the chain. Persists asset_graph.json.",
+    "velric dual-graph (asset side): global shared asset truth store — upsert root_domain/subdomain/ip/service/endpoint with computed dedup keys and host-chain linking; URL upsert auto-creates the chain. Persists asset_graph.json.",
   kind: "runtime",
   inputSchema: z.object({ outputRoot, action: z.enum(["upsert", "upsert_url", "counts", "query"]), type: z.enum(["root_domain", "subdomain", "ip", "service", "app", "endpoint"]).optional(), value: z.string().optional(), parent: z.string().optional(), meta: z.record(z.string(), z.unknown()).optional(), taskTag: z.string().optional(), observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ ok: z.boolean() }),
@@ -736,7 +736,7 @@ export const expGraphContract: ToolContract = {
   name: "exploration_graph",
   title: "Exploration lineage graph",
   description:
-    "velric dual-graph port (exploration side): per-run goal→intent→fact→finding lineage with spawns/derived_from/yields/proves edges and asset anchors; lineage/overview queries. Persists exploration_graph.json.",
+    "velric dual-graph (exploration side): per-run goal→intent→fact→finding lineage with spawns/derived_from/yields/proves edges and asset anchors; lineage/overview queries. Persists exploration_graph.json.",
   kind: "runtime",
   inputSchema: z.object({ outputRoot, action: z.enum(["add_node", "add_edge", "anchor", "set_state", "lineage", "overview"]), kind: z.enum(["goal", "intent", "fact", "finding", "hint"]).optional(), summary: z.string().optional(), payload: z.record(z.string(), z.unknown()).optional(), from: z.string().optional(), rel: z.enum(["spawns", "derived_from", "yields", "proves"]).optional(), to: z.string().optional(), nodeId: z.string().optional(), assetKey: z.string().optional(), state: z.enum(["open", "met", "dead", "pending"]).optional(), observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ ok: z.boolean() }),
@@ -748,7 +748,7 @@ export const evidenceContract: ToolContract = {
   name: "evidence_store",
   title: "Finding evidence store",
   description:
-    "velric evidence port: sha256-addressed blob store for finding evidence (request/response/command output), deduped across findings, indexed in evidence_index.json.",
+    "velric evidence: sha256-addressed blob store for finding evidence (request/response/command output), deduped across findings, indexed in evidence_index.json.",
   kind: "runtime",
   inputSchema: z.object({ outputRoot, action: z.enum(["put", "get", "list"]), file: z.string().optional(), hash: z.string().optional(), tag: z.string().optional(), observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ hash: z.string().nullable() }),

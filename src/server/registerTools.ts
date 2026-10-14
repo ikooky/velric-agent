@@ -449,13 +449,23 @@ export const handlers: Readonly<Record<string, Handler>> = {
     return buildSiteMap(p);
   },
   traffic_record: async (raw) => {
-    const p = z.object({ outputRoot: z.string(), port: z.number().optional(), upstreamProxy: z.string().optional(), maxExchanges: z.number().optional() }).parse(raw);
+    const p = z.object({ outputRoot: z.string(), port: z.number().optional(), upstreamProxy: z.string().optional(), maxExchanges: z.number().optional(), stop: z.boolean().optional() }).parse(raw);
+    // One recorder per process, keyed by outputRoot; stop:true tears it down
+    // (an explicit lifecycle instead of an untracked immortal listener).
+    const g = globalThis as { __velricRecorders?: Map<string, import("../domain/trafficRecorder.js").TrafficRecorder> };
+    const recs = g.__velricRecorders ?? (g.__velricRecorders = new Map());
+    if (p.stop) {
+      const rec = recs.get(p.outputRoot);
+      if (rec) { await rec.stop(); recs.delete(p.outputRoot); return { port: 0, stopped: true, exchanges: rec.getExchanges().length }; }
+      return { port: 0, stopped: false, exchanges: 0 };
+    }
+    const existing = recs.get(p.outputRoot);
+    if (existing) return { port: -1, note: "recorder already bound for this outputRoot; pass stop:true to release" };
     const { TrafficRecorder } = await import("../domain/trafficRecorder.js");
     const rec = new TrafficRecorder(p);
-    const port = await rec.start(p.port ?? 0);
-    // MCP 调用即启即停语义: 单次调用内录制窗口=请求生命周期; 长跑由 CLI 守进程
-    void rec;
-    return { port, note: "recorder bound; use CLI 'traffic-recorder --daemon' for long-running capture" };
+    const port = await rec.start();
+    recs.set(p.outputRoot, rec);
+    return { port, note: "recorder bound; call again with stop:true to release" };
   },
   asset_graph: async (raw) => {
     const p = z.object({ outputRoot: z.string(), action: z.enum(["upsert", "upsert_url", "counts", "query"]), type: z.enum(["root_domain", "subdomain", "ip", "service", "app", "endpoint"]).optional(), value: z.string().optional(), parent: z.string().optional(), meta: z.record(z.string(), z.unknown()).optional(), taskTag: z.string().optional() }).parse(raw);

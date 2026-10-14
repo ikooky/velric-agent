@@ -83,6 +83,13 @@ Usage:
   velric-agent login-replay <url> <u> <p> <outdir>  login + cookie export
   velric-agent backup-unpack <urls.txt> <outdir>  dump unpack + secret scan
   velric-agent sqlite-read <file.db> <outdir>   SQLite leak reader
+  velric-agent analyze-gates <jsDir> <outdir>   auth-gate static analysis
+  velric-agent coverage <baseUrl> <outdir>     interactive coverage enumeration
+  velric-agent site-map <baseUrl> <outdir>     structured site map
+  velric-agent traffic-recorder <outdir>       traffic recording proxy
+  velric-agent asset-graph <dir> <action>      asset graph store
+  velric-agent exploration-graph <dir> <action>  exploration lineage graph
+  velric-agent evidence <dir> <action>         evidence blob store
   velric-agent help
 
 Common flags: --proxy URL | --proxy-pool FILE, --rps N (global rate limit), --cookie STR, --timeout MS
