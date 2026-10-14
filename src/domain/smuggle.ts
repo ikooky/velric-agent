@@ -1,7 +1,8 @@
 import { fetchUrl } from "../adapters/http.js";
 import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { Client } from "undici";
+import net from "node:net";
+import tls from "node:tls";
 
 /** HTTP request-smuggling differential probe: paired requests that differ in
  *  exactly ONE canonicalization dimension (path normalization, CL/TE framing,
@@ -70,42 +71,40 @@ export const probeSmuggle = async (input: SmuggleInput): Promise<SmuggleResult> 
     }
   }
 
-  // CL+TE both present: raw client request — fetch APIs may strip the
-  // conflicting pair before it reaches the wire.
+  // CL+TE both present — BYTE-LEVEL raw socket. HTTP client libraries
+  // (undici, node fetch, node:http) all re-frame the body and undici
+  // rejects the conflicting pair outright ("invalid transfer-encoding
+  // header") before anything reaches the wire; only a hand-written
+  // request guarantees the exact CL+TE bytes arrive at the server.
   try {
-    const client = new Client(base, { connect: { rejectUnauthorized: false } });
+    const u = new URL(base);
+    const port = Number(u.port || (u.protocol === "https:" ? 443 : 80));
     const t0 = Date.now();
-    const resP = client.request({
-      path: "/healthz-velric",
-      method: "POST",
-      headers: {
-        "content-type": "application/x-www-form-urlencoded",
-        "content-length": "6",
-        "transfer-encoding": "chunked",
-      },
-      body: "0\r\n\r\n",
+    const raw = `POST /healthz-velric HTTP/1.1\r\nHost: ${u.hostname}\r\ncontent-type: application/x-www-form-urlencoded\r\ncontent-length: 6\r\ntransfer-encoding: chunked\r\n\r\n0\r\n\r\n`;
+    const res = await new Promise<{ status: number; ms: number }>((resolve) => {
+      const sock: net.Socket = u.protocol === "https:"
+        ? tls.connect({ host: u.hostname, port, rejectUnauthorized: false, servername: u.hostname })
+        : net.connect({ host: u.hostname, port });
+      let head = "";
+      const finish = (status: number): void => { sock.destroy(); resolve({ status, ms: Date.now() - t0 }); };
+      const timer = setTimeout(() => finish(-1), input.timeoutMs ?? 8000);
+      sock.on("error", () => { clearTimeout(timer); finish(0); });
+      sock.on("connect", () => { sock.write(raw); });
+      sock.on("data", (d: Buffer) => {
+        head += d.toString("latin1");
+        const m = head.match(/^HTTP\/[\d.]+\s+(\d{3})/);
+        if (m) { clearTimeout(timer); finish(Number(m[1])); } // status line is all we need
+      });
+      sock.on("close", () => { clearTimeout(timer); if (!/^HTTP\//.test(head)) finish(0); });
     });
-    let raceTimer: NodeJS.Timeout | undefined;
-    const res = await Promise.race([
-      resP.then(async (r) => {
-        const { statusCode } = r;
-        await r.body.dump?.().catch(() => {});
-        return { status: statusCode, ms: Date.now() - t0 };
-      }),
-      new Promise<{ status: number; ms: number }>((resolve) => {
-        raceTimer = setTimeout(() => resolve({ status: -1, ms: Date.now() - t0 }), input.timeoutMs ?? 8000);
-      }),
-    ]);
-    if (raceTimer) clearTimeout(raceTimer); // else the timer pins the loop for its full span
     probed++;
     // 400 from either parser = the pair was rejected (good). A clean
     // 200-family on CL+TE both = framing ambiguity.
     if (res.status >= 200 && res.status < 300) {
       differentials.push({ dimension: "CL+TE", variant: "both headers on POST", baselineStatus: baseline.status, variantStatus: res.status, baselineMs: 0, variantMs: res.ms, note: "both CL and TE accepted — framing ambiguity" });
     }
-    await client.close().catch(() => {});
   } catch {
-    /* raw client unavailable (e.g. via proxy) — skipped */
+    /* raw socket unavailable (e.g. via SOCKS proxy) — skipped */
   }
 
   const result: SmuggleResult = { baseUrl: base, probed, differentials, artifacts: [] };

@@ -77,3 +77,42 @@ describe("preload", () => {
     expect(script).toContain("__API_RECON_PRELOAD__");
   });
 });
+describe("smuggle", () => {
+  it("CL+TE probe sends exact conflicting bytes on the wire and captures a 2xx differential", async () => {
+    const net = await import("node:net");
+    // Raw byte server: node's http parser itself resolves CL+TE conflicts
+    // (TE wins, CL is dropped from req.headers), so the ONLY way to assert
+    // the conflicting pair actually reached the wire is to inspect bytes.
+    let wireSawConflict = false;
+    const srv = net.createServer((s) => {
+      let buf = "";
+      s.on("data", (d: Buffer) => {
+        buf += d.toString("latin1");
+        if (/content-length: 6\r\ntransfer-encoding: chunked\r\n\r\n0\r\n\r\n/.test(buf)) {
+          wireSawConflict = true;
+          s.end("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        } else if (/^GET /.test(buf) || /^POST /.test(buf)) {
+          s.end("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+        }
+      });
+    });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    const port = (srv.address() as { port: number }).port;
+    try {
+      const { probeSmuggle } = await import("../src/domain/smuggle.js");
+      const out = await probeSmuggle({
+        baseUrl: `http://127.0.0.1:${port}/`,
+        outputRoot: `/tmp/velric-smoke-smuggle`,
+        timeoutMs: 2000,
+      });
+      // Both polarity assertions:
+      expect(wireSawConflict).toBe(true); // exact CL+TE bytes reached the wire
+      const clte = out.differentials.find((d) => d.dimension === "CL+TE");
+      expect(clte).toBeDefined(); // 2xx on CL+TE = framing ambiguity reported
+      expect(clte!.variantStatus).toBeGreaterThanOrEqual(200);
+      expect(clte!.variantStatus).toBeLessThan(300);
+    } finally {
+      srv.close();
+    }
+  }, 20000);
+});
