@@ -27,6 +27,15 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 
 **验证**
 - `auth-probe` — 匿名 vs 带 cookie 双探，产出鉴权面清单(含边缘阻断识别)
+- `oidc-probe` — OAuth/OIDC/SAML 配置发现与弱配置检查
+- `smuggle-probe` — 请求走私差分(路径规范化变体+CL/TE)
+- `ws-origin-check` — WS 跨域校验(CSWSH 预筛)
+- `graphql-deep` — GraphQL 全量内省+schema diff
+- `proto-decode` — 二进制 WS 帧 protobuf 猜测解码
+- `nuclei-lite` — 模板匹配(暴露面板/泄漏特征)
+- `login-replay` — 登录自动重放,导出会话 cookie
+- `backup-unpack` — 备份/转储解包+秘密扫描
+- `sqlite-read` — SQLite 泄漏文件解析
 - `idor-prescreen` — id 类参数数值邻域差分预筛(只读)
 - `git-restore` — 泄漏 .git 源码树还原
 - `dom-sinks` — DOM-XSS 污点链静态分析
@@ -69,7 +78,7 @@ velric-agent help
 
 ## MCP 接入
 
-`velric-agent mcp` 启动 stdio MCP server:33 个工具 + 2 个 resources(`velric://driver-playbook`、`velric://workflow-guide`)+ 1 个 prompt(`hunt-driver`)。
+`velric-agent mcp` 启动 stdio MCP server:43 个工具 + 2 个 resources(`velric://driver-playbook`、`velric://workflow-guide`)+ 1 个 prompt(`hunt-driver`)。
 
 ```json
 {

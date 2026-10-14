@@ -598,6 +598,79 @@ export const wsOriginContract: ToolContract = {
   examples: [{ title: "ws", input: { url: "wss://target/ws", outputRoot: "/tmp/recon" } }],
 };
 
+
+export const graphqlDeepContract: ToolContract = {
+  name: "graphql_deep",
+  title: "GraphQL deep introspection",
+  description:
+    "Full introspection with minimal-query fallback, schema parse (types/queries/mutations/subscriptions), SDL export, optional diff vs previous schema. Writes graphql_schema.txt + graphql_deep.json.",
+  kind: "runtime",
+  inputSchema: z.object({ endpoint: z.string(), outputRoot, previousSchemaFile: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ introspected: z.boolean() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "gql", input: { endpoint: "https://target/graphql", outputRoot: "/tmp/recon" } }],
+};
+
+export const protoDecodeContract: ToolContract = {
+  name: "proto_decode",
+  title: "Protobuf heuristic decode",
+  description:
+    "Wire-format walk over binary WS frames (varint/tag pairs, wire types 0-5) producing a field-number/type table — candidate schema for private protocols without a .proto file. Writes proto_decode.json.",
+  kind: "runtime",
+  inputSchema: z.object({ data: z.string(), encoding: z.enum(["hex", "base64"]).optional(), outputRoot, observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ looksLikeProtobuf: z.boolean() }),
+  annotations: readOnlyAnnotations(),
+  examples: [{ title: "proto", input: { data: "CgR0ZXN0", outputRoot: "/tmp/recon" } }],
+};
+
+export const nucleiLiteContract: ToolContract = {
+  name: "nuclei_lite",
+  title: "Template matcher",
+  description:
+    "nuclei-style template engine (status/word/regex matchers) with a curated built-in set: exposed panels (kibana/grafana/jenkins/nacos), actuator env, swagger, git/env leaks, directory listing. Read-only GETs. Writes nuclei_lite.json.",
+  kind: "runtime",
+  inputSchema: z.object({ baseUrl: z.string(), outputRoot, proxy: z.string().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ matched: z.number() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "scan", input: { baseUrl: "https://target/", outputRoot: "/tmp/recon" } }],
+};
+
+export const loginReplayContract: ToolContract = {
+  name: "login_replay",
+  title: "Login auto-replay",
+  description:
+    "Detects a login form, fills credentials via headless Chromium, submits, and exports the authenticated cookie header for use by runtime capture / auth probes. Writes login_replay.json.",
+  kind: "runtime",
+  inputSchema: z.object({ baseUrl: z.string(), username: z.string(), password: z.string(), outputRoot, chromiumPath: z.string().optional(), proxy: z.string().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ submitted: z.boolean() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "login", input: { baseUrl: "https://target/login", username: "u", password: "p", outputRoot: "/tmp/recon" } }],
+};
+
+export const backupUnpackContract: ToolContract = {
+  name: "backup_unpack",
+  title: "Backup/dump unpack + secret scan",
+  description:
+    "Downloads .zip/.tar.gz/.sql/.json dump URLs found by paths probing, unpacks in memory (fflate), scans every text entry with the secret scanner. Writes backup_unpack.json.",
+  kind: "runtime",
+  inputSchema: z.object({ urls: z.array(z.string()), outputRoot, proxy: z.string().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ processed: z.number() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "unpack", input: { urls: ["https://target/backup.zip"], outputRoot: "/tmp/recon" } }],
+};
+
+export const sqliteReadContract: ToolContract = {
+  name: "sqlite_read",
+  title: "SQLite leak reader",
+  description:
+    "Parses a leaked .db file (WASM sqlite, no native deps): tables + row counts, sensitive table/column flags, row samples from password/token/user tables. Writes sqlite_read.json.",
+  kind: "runtime",
+  inputSchema: z.object({ file: z.string(), outputRoot, observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ opened: z.boolean() }),
+  annotations: readOnlyAnnotations(),
+  examples: [{ title: "db", input: { file: "/tmp/recon/leak.db", outputRoot: "/tmp/recon" } }],
+};
+
 export const ALL_CONTRACTS: readonly ToolContract[] = [
   dnsResolveContract,
   httpProbeContract,
@@ -632,6 +705,12 @@ export const ALL_CONTRACTS: readonly ToolContract[] = [
   smuggleContract,
   archiveContract,
   wsOriginContract,
+  graphqlDeepContract,
+  protoDecodeContract,
+  nucleiLiteContract,
+  loginReplayContract,
+  backupUnpackContract,
+  sqliteReadContract,
   huntContract,
   huntRecordContract,
   huntOverviewContract,

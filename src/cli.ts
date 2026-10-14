@@ -77,6 +77,12 @@ Usage:
   velric-agent smuggle-probe <baseUrl> <outdir>  request-smuggling differential
   velric-agent archive-recover <url> <outdir>  blocked-page archive recovery
   velric-agent ws-origin-check <wsUrl> <outdir>  WS cross-origin check (CSWSH)
+  velric-agent graphql-deep <endpoint> <outdir>  GraphQL introspection + schema
+  velric-agent proto-decode <hex|base64> <outdir>  protobuf heuristic decode
+  velric-agent nuclei-lite <baseUrl> <outdir>   template matcher (panels/leaks)
+  velric-agent login-replay <url> <u> <p> <outdir>  login + cookie export
+  velric-agent backup-unpack <urls.txt> <outdir>  dump unpack + secret scan
+  velric-agent sqlite-read <file.db> <outdir>   SQLite leak reader
   velric-agent help
 
 Common flags: --proxy URL | --proxy-pool FILE, --rps N (global rate limit), --cookie STR, --timeout MS
@@ -539,6 +545,50 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
         if (!u || !dir) { console.error("usage: ws-origin-check <wsUrl> <outdir>"); return 2; }
         const { probeWsOrigin } = await import("./domain/wsOrigin.js");
         out(await probeWsOrigin({ url: u, outputRoot: dir }));
+        return 0;
+      }
+      case "graphql-deep": {
+        const [ep, dir] = positional;
+        if (!ep || !dir) { console.error("usage: graphql-deep <endpoint> <outdir> [--prev FILE]"); return 2; }
+        const { probeGraphqlDeep } = await import("./domain/graphqlDeep.js");
+        out(await probeGraphqlDeep({ endpoint: ep, outputRoot: dir, previousSchemaFile: typeof flags.prev === "string" ? flags.prev : undefined, proxy: await resolveProxy(flags) }));
+        return 0;
+      }
+      case "proto-decode": {
+        const [data, dir] = positional;
+        if (!data || !dir) { console.error("usage: proto-decode <hex|base64> <outdir> [--enc hex|base64]"); return 2; }
+        const { decodeProtoHeuristic } = await import("./domain/protoDecode.js");
+        out(await decodeProtoHeuristic({ data, encoding: (flags.enc === "hex" ? "hex" : "base64") as "hex" | "base64", outputRoot: dir }));
+        return 0;
+      }
+      case "nuclei-lite": {
+        const [b, dir] = positional;
+        if (!b || !dir) { console.error("usage: nuclei-lite <baseUrl> <outdir>"); return 2; }
+        const { runNucleiLite } = await import("./domain/nucleiLite.js");
+        out(await runNucleiLite({ baseUrl: b, outputRoot: dir, proxy: await resolveProxy(flags) }));
+        return 0;
+      }
+      case "login-replay": {
+        const [b, user, pass, dir] = positional;
+        if (!b || !user || !pass || !dir) { console.error("usage: login-replay <loginUrl> <user> <pass> <outdir> [--chromium PATH]"); return 2; }
+        const { replayLogin } = await import("./domain/loginReplay.js");
+        out(await replayLogin({ baseUrl: b, username: user, password: pass, outputRoot: dir, chromiumPath: typeof flags.chromium === "string" ? flags.chromium : undefined, proxy: await resolveProxy(flags) }));
+        return 0;
+      }
+      case "backup-unpack": {
+        const [urlFile, dir] = positional;
+        if (!urlFile || !dir) { console.error("usage: backup-unpack <urls.txt> <outdir>"); return 2; }
+        const { readFile: rf } = await import("node:fs/promises");
+        const urls = (await rf(urlFile, "utf8")).split("\n").map((l) => l.trim()).filter(Boolean);
+        const { unpackBackups } = await import("./domain/backupUnpack.js");
+        out(await unpackBackups({ urls, outputRoot: dir, proxy: await resolveProxy(flags) }));
+        return 0;
+      }
+      case "sqlite-read": {
+        const [f, dir] = positional;
+        if (!f || !dir) { console.error("usage: sqlite-read <file.db> <outdir>"); return 2; }
+        const { readSqlite } = await import("./domain/sqliteRead.js");
+        out(await readSqlite({ file: f, outputRoot: dir }));
         return 0;
       }
       default:

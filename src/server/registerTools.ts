@@ -403,6 +403,36 @@ export const handlers: Readonly<Record<string, Handler>> = {
     const { probeWsOrigin } = await import("../domain/wsOrigin.js");
     return probeWsOrigin(p);
   },
+  graphql_deep: async (raw) => {
+    const p = z.object({ endpoint: z.string(), outputRoot: z.string(), previousSchemaFile: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional() }).parse(raw);
+    const { probeGraphqlDeep } = await import("../domain/graphqlDeep.js");
+    return probeGraphqlDeep(p);
+  },
+  proto_decode: async (raw) => {
+    const p = z.object({ data: z.string(), encoding: z.enum(["hex", "base64"]).optional(), outputRoot: z.string() }).parse(raw);
+    const { decodeProtoHeuristic } = await import("../domain/protoDecode.js");
+    return decodeProtoHeuristic(p);
+  },
+  nuclei_lite: async (raw) => {
+    const p = z.object({ baseUrl: z.string(), outputRoot: z.string(), proxy: z.string().optional() }).parse(raw);
+    const { runNucleiLite } = await import("../domain/nucleiLite.js");
+    return runNucleiLite(p);
+  },
+  login_replay: async (raw) => {
+    const p = z.object({ baseUrl: z.string(), username: z.string(), password: z.string(), outputRoot: z.string(), chromiumPath: z.string().optional(), proxy: z.string().optional() }).parse(raw);
+    const { replayLogin } = await import("../domain/loginReplay.js");
+    return replayLogin(p);
+  },
+  backup_unpack: async (raw) => {
+    const p = z.object({ urls: z.array(z.string()), outputRoot: z.string(), proxy: z.string().optional() }).parse(raw);
+    const { unpackBackups } = await import("../domain/backupUnpack.js");
+    return unpackBackups(p);
+  },
+  sqlite_read: async (raw) => {
+    const p = z.object({ file: z.string(), outputRoot: z.string() }).parse(raw);
+    const { readSqlite } = await import("../domain/sqliteRead.js");
+    return readSqlite(p);
+  },
   workflow_guide: async () => {
     const { WORKFLOW_GUIDE } = await import("./workflow.js");
     return WORKFLOW_GUIDE;

@@ -98,5 +98,11 @@ export const PHASE_TAGS: Record<string, string> = {
   probe_smuggle: "[Phase 4 深化] 请求走私差分:规范化变体+CL/TE 组合",
   archive_recover: "[辅助] 被墙页面恢复:Wayback/archive.today 阶梯",
   ws_origin_check: "[Phase 4 深化] WS 跨域校验(CSWSH 预筛)+认证位置标注",
+  graphql_deep: "[Phase 4 深化] GraphQL 全量内省+schema 解析+diff",
+  proto_decode: "[Phase 4 深化] 二进制 WS 帧 protobuf 猜测解码",
+  nuclei_lite: "[Phase 2 探测] 模板化匹配:暴露面板/泄漏特征",
+  login_replay: "[Phase 3 运行时] 登录自动重放,导出会话 cookie",
+  backup_unpack: "[Phase 4 深化] 备份/转储解包+秘密扫描",
+  sqlite_read: "[Phase 4 深化] SQLite 泄漏文件解析",
   workflow_guide: "[必读] 返回完整方法论(Phase 0-5+纪律);开局先调这个",
 };
