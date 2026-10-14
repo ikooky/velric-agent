@@ -78,16 +78,25 @@ export const probeCors = async (input: CorsProbeInput): Promise<CorsProbeResult>
         acac: (r.headers["access-control-allow-credentials"] ?? "").toLowerCase() === "true",
       };
     };
+    // Each method's response is judged AS A PAIR — merging ACAO from one
+    // response with ACAC from another fabricates a combination the server
+    // never emitted. The worse PER-RESPONSE verdict wins.
+    const judge = (acao: string | null, acac: boolean): "reflect" | "wildcard" | "null" | "static" | "none" => {
+      if (acao === "*") return "wildcard";
+      if (acao === "null") return "null";
+      if (acao && origin !== "null" && sameHost(acao, origin)) return "reflect";
+      if (acao) return "static";
+      return "none";
+    };
+    const rank = { none: 0, static: 1, wildcard: 2, null: 3, reflect: 4 } as const;
     const pre = await probe("OPTIONS");
     const act = await probe("GET");
-    const acao = pre.acao ?? act.acao;
-    const acac = pre.acac || act.acac;
-    let verdict: "reflect" | "wildcard" | "null" | "static" | "none" = "none";
-    if (acao === "*") verdict = "wildcard";
-    else if (acao === "null") verdict = "null";
-    else if (acao && origin !== "null" && sameHost(acao, origin)) verdict = "reflect";
-    else if (acao) verdict = "static";
-    results.push({ origin, acao, acac, verdict });
+    const preV = judge(pre.acao, pre.acac);
+    const actV = judge(act.acao, act.acac);
+    const usePre = rank[preV] >= rank[actV];
+    const acao = usePre ? pre.acao : act.acao;
+    const acac = usePre ? pre.acac : act.acac;
+    results.push({ origin, acao, acac, verdict: usePre ? preV : actV });
   }
 
   const misconfigured = results.some((r) =>

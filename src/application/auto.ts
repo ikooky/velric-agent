@@ -129,8 +129,11 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
   } else {
     // checkpointed: reuse counts from the durable artifact the stage wrote
     try {
-      const sync = JSON.parse(await readFile(join(root, "asset_graph_sync.json"), "utf8")) as { counts?: Record<string, number> };
-      assetCounts = sync.counts ?? {};
+      const sync = JSON.parse(await readFile(join(root, "asset_graph_sync.json"), "utf8")) as { counts?: Record<string, number>; perRunCounts?: Record<string, number> };
+      // perRunCounts mirrors the fresh-run return shape (counts is the
+      // cumulative AssetStore total — a different number than a fresh run
+      // would report for the same stage).
+      assetCounts = sync.perRunCounts ?? sync.counts ?? {};
     } catch { /* artifact absent — zero counts */ }
     stages.push({ stage: "enrich", status: "skip", detail: "checkpoint" });
   }
@@ -328,10 +331,17 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
   const apiStatic = join(root, "api_static.txt");
   let findings = 0;
   const fList: unknown[] = [];
+  // Freshness gate: artifacts written BEFORE this run began belong to a
+  // previous seed — feeding them into this seed's findings is cross-target
+  // contamination. Same mtime rule as the runtime salvage path.
+  const fresh = async (p: string): Promise<boolean> => {
+    if (!(await exists(p))) return false;
+    return (await statMtime(p)) >= runStartMs - 1000;
+  };
   // auto-findings: exposed API surface from artifacts (deterministic heuristics)
   try {
-    const apiList = (await exists(apiStatic) ? (await readFile(apiStatic, "utf8")).split("\n").filter(Boolean) : []);
-    const runtimeJson = await readJson<{ uniqueCalls?: string[] }>(join(root, "runtime_api.json"));
+    const apiList = (await fresh(apiStatic) ? (await readFile(apiStatic, "utf8")).split("\n").filter(Boolean) : []);
+    const runtimeJson = (await fresh(join(root, "runtime_api.json"))) ? await readJson<{ uniqueCalls?: string[] }>(join(root, "runtime_api.json")) : undefined;
     const liveCalls = runtimeJson?.uniqueCalls ?? [];
     if (apiList.length > 0) {
       fList.push({
@@ -351,7 +361,7 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
     }
     // Non-web open ports are direct findings
     const portsFile = join(root, "ports_open.txt");
-    if (await exists(portsFile)) {
+    if (await fresh(portsFile)) {
       const lines = (await readFile(portsFile, "utf8")).split("\n").filter(Boolean);
       const risky = lines.filter((l) => /redis|mongodb|elasticsearch|mysql|postgres|memcached|kafka|docker|kubelet|solr|kibana|vnc|rdp|mssql|oracle/.test(l));
       if (risky.length > 0) {
@@ -365,7 +375,7 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
     }
     // Sensitive paths that survived soft-404 calibration
     const sensFile = join(root, "sensitive_paths.txt");
-    if (await exists(sensFile)) {
+    if (await fresh(sensFile)) {
       const lines = (await readFile(sensFile, "utf8")).split("\n").filter(Boolean);
       const high = lines.filter((l) => /^200/.test(l) && /\.git|\.env|swagger|api-docs|actuator\/env|heapdump|druid|pprof|backup|dump\.sql|WEB-INF/.test(l));
       if (high.length > 0) {
@@ -389,7 +399,7 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
       }
     }
     // CORS misconfiguration
-    const corsJson = await readJson<{ misconfigured: boolean; results: { origin: string; acao: string | null; acac: boolean; verdict: string }[] }>(join(root, "cors_probe.json"));
+    const corsJson = (await fresh(join(root, "cors_probe.json"))) ? await readJson<{ misconfigured: boolean; results: { origin: string; acao: string | null; acac: boolean; verdict: string }[] }>(join(root, "cors_probe.json")) : undefined;
     if (corsJson?.misconfigured) {
       const bad = corsJson.results.filter((r) => r.acac && (r.verdict === "reflect" || r.verdict === "null"));
       fList.push({
@@ -401,7 +411,7 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
     }
     // Source-map leaks
     const smFile = join(root, "sourcemaps.txt");
-    if (await exists(smFile)) {
+    if (await fresh(smFile)) {
       const lines = (await readFile(smFile, "utf8")).split("\n").filter(Boolean);
       if (lines.length > 0) {
         fList.push({
@@ -413,7 +423,7 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
       }
     }
     // WAF/CDN presence (informational, recorded as fact via report meta)
-    const fpJson = await readJson<{ waf: string[] }>(join(root, "fingerprint.json"));
+    const fpJson = (await fresh(join(root, "fingerprint.json"))) ? await readJson<{ waf: string[] }>(join(root, "fingerprint.json")) : undefined;
     if (fpJson && fpJson.waf.length > 0) {
       fList.push({
         name: `WAF/CDN 在位: ${fpJson.waf.join(", ")}`,
@@ -423,7 +433,7 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
       });
     }
     // Anonymous-reachable endpoints (auth surface)
-    const authJson = await readJson<{ anonymous: { url: string }[]; authRequired: { url: string }[]; edgeBlocked?: boolean }>(join(root, "auth_surface.json"));
+    const authJson = (await fresh(join(root, "auth_surface.json"))) ? await readJson<{ anonymous: { url: string }[]; authRequired: { url: string }[]; edgeBlocked?: boolean }>(join(root, "auth_surface.json")) : undefined;
     if (authJson?.edgeBlocked) {
       fList.push({
         name: "边缘级阻断(全站同码 403/429)",
@@ -441,7 +451,7 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
       });
     }
     // DOM-XSS taint chains
-    const domJson = await readJson<{ chains: { file: string; source: string; sink: string }[] }>(join(root, "dom_sinks.json"));
+    const domJson = (await fresh(join(root, "dom_sinks.json"))) ? await readJson<{ chains: { file: string; source: string; sink: string }[] }>(join(root, "dom_sinks.json")) : undefined;
     if (domJson && domJson.chains.length > 0) {
       fList.push({
         name: `DOM-XSS 候选链 ${domJson.chains.length} 条`,
@@ -451,7 +461,7 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
       });
     }
     // JWT weak secrets
-    const jwtJson = await readJson<{ analyses: { tokenPreview: string; algNone: boolean; weakSecret: string | null; expired: boolean | null }[] }>(join(root, "jwt_analysis.json"));
+    const jwtJson = (await fresh(join(root, "jwt_analysis.json"))) ? await readJson<{ analyses: { tokenPreview: string; algNone: boolean; weakSecret: string | null; expired: boolean | null }[] }>(join(root, "jwt_analysis.json")) : undefined;
     const weakJwts = jwtJson?.analyses.filter((a) => a.weakSecret || a.algNone) ?? [];
     if (weakJwts.length > 0) {
       fList.push({
@@ -463,7 +473,7 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
     }
     // Secrets leaked into bundles (harvest's regex scan artifact)
     const secretsFile = join(root, "secrets.txt");
-    if (await exists(secretsFile)) {
+    if (await fresh(secretsFile)) {
       const lines = (await readFile(secretsFile, "utf8")).split("\n").filter(Boolean);
       if (lines.length > 0) {
         fList.push({

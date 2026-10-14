@@ -126,6 +126,9 @@ export class TrafficRecorder {
   };
 
   private readonly record = async (rec: RecordedExchange): Promise<void> => {
+    // The cap applies to EVERY recording path (handleHttp previously
+    // enforced it, but CONNECT finish() and recordLogOnly pushed unbounded).
+    if (this.exchanges.length >= this.maxExchanges) return;
     this.exchanges.push(rec);
     await appendFile(join(this.outDir, "traffic.ndjson"), JSON.stringify(rec) + "\n").catch(() => {});
   };

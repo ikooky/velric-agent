@@ -167,7 +167,8 @@ export const prescreenIdor = async (input: IdorInput): Promise<IdorResult> => {
 
   for (const { e, idFields } of targets) {
     for (const f of idFields.slice(0, 2)) {
-      const base = new URL(e.path);
+      let base: URL;
+      try { base = new URL(e.path); } catch { continue; } // one relative path must not crash the whole probe
       const name = f.name.replace(/\[\]$/, "");
       // Recorded query may carry the original value.
       const original = base.searchParams.get(name) ?? "1";

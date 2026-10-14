@@ -134,6 +134,10 @@ export const huntBegin = async (input: HuntBeginInput): Promise<{ outputRoot: st
   let g = await loadGraph(root);
   if (g.goal === "" || g.goal !== input.goal) {
     g = { goal: input.goal, constraints: [], goals: [], intents: [], facts: [], findings: [], assets: [], nextId: 1 };
+    // The observation ledger vouches for THIS hunt's citations. A stale
+    // ledger from the previous goal would keep vouching for the new hunt's
+    // fabricated URLs — reset it with the graph.
+    try { await (await import("node:fs/promises")).rm(join(root, LEDGER_FILE), { force: true }); } catch { /* absent */ }
   }
   // goals stay host-managed: the host decomposes via hunt_record(intents...)
   await saveGraph(root, g);
@@ -225,6 +229,9 @@ export const huntRecord = async (input: HuntRecordInput): Promise<{ graph: Graph
       // cite LEDGERED URLs, same as facts/findings (a bare "done, checked
       // manually" reason with fabricated URLs is dropped).
       const rtxt = m.reason ?? "";
+      // citedUrls([]) passes every() vacuously — require at least one
+      // ledger-verified citation, symmetric with the findings gate.
+      if (citedUrls(rtxt).length === 0) { drop(`goal#${m.id} met-reason cites no URL — cannot verify against ledger`); continue; }
       if (!urlOk(rtxt)) { drop(`goal#${m.id} met-reason url not in ledger`); continue; }
       goal.met = true;
       goal.metReason = rtxt.slice(0, 300);
@@ -301,6 +308,10 @@ export const huntRecord = async (input: HuntRecordInput): Promise<{ graph: Graph
     const txt = `${f.summary ?? ""} ${f.poc ?? ""}`;
     if (citedUrls(txt).length === 0) { drop(`finding '${String(f.name).slice(0, 40)}' cites no URL — cannot verify against ledger`); continue; }
     if (!urlOk(txt)) { drop(`finding '${String(f.name).slice(0, 40)}' url not in ledger`); continue; }
+    // Findings are the STRONGEST claims — they get the same digest check as
+    // facts: a cited URL requested with any random status must not vouch
+    // for "RCE at /api/x" unless the claimed status matches the ledger.
+    if (!digestOk(f.poc ?? "", f.summary ?? "")) { drop(`finding '${String(f.name).slice(0, 40)}' status digest mismatch vs ledger`); continue; }
     const id = g.nextId++;
     g.findings.push({
       id,

@@ -162,7 +162,9 @@ export const enrichAssets = async (input: EnrichInput): Promise<EnrichResult> =>
   for (const a of list) counts[a.type] = (counts[a.type] ?? 0) + 1;
   const artifacts = [
     await writeArtifact(input.outputRoot, "assets.json", JSON.stringify(list, null, 2)),
-    await writeArtifact(input.outputRoot, "asset_graph_sync.json", JSON.stringify(assetSyncSummary, null, 2)),
+    // perRunCounts mirrors the fresh-run return shape so resume readers get
+    // the same numbers a fresh run would have reported (counts is cumulative).
+    await writeArtifact(input.outputRoot, "asset_graph_sync.json", JSON.stringify({ ...assetSyncSummary, perRunCounts: counts }, null, 2)),
   ];
   return { assets: list, counts, artifacts };
 };

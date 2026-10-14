@@ -98,7 +98,10 @@ const fetchOnce = async (
 
   // Per-host throttle when a global rate limit is configured.
   if (globalRps > 0) {
-    try { await acquire(new URL(url).hostname, { rps: globalRps }); } catch { /* unthrottled */ }
+    // acquire() returns {promise, cancel} — await the PROMISE; awaiting the
+    // wrapper object itself resolves immediately (thenable check misses it)
+    // and the rate limit silently never throttles anything.
+    try { await acquire(new URL(url).hostname, { rps: globalRps }).promise; } catch { /* unthrottled */ }
   }
   try {
     const res = await undiciFetch(url, {

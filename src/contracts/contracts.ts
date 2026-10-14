@@ -388,7 +388,9 @@ export const subdomainsContract: ToolContract = {
   description:
     "crt.sh certificate transparency + CNAME chain walking + high-frequency wordlist DNS brute (142 prefixes: api/dev/admin/uat/gray/jenkins/k8s/grafana...). Writes subdomains.txt.",
   kind: "runtime",
-  inputSchema: z.object({ domain: z.string(), outputRoot, observationLedgerRoot: LEDGER }),
+  inputSchema: z.object({
+      proxy: z.string().optional().describe("egress proxy URI"),
+      timeoutMs: z.number().optional().describe("per-request timeout"), domain: z.string(), outputRoot, observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ total: z.array(z.string()), crtSh: z.array(z.string()), bruteFound: z.array(z.object({ host: z.string(), ips: z.array(z.string()) })), wildcardDns: z.boolean() }),
   annotations: writingAnnotations(),
   examples: [{ title: "enum", input: { domain: "example.com", outputRoot: "/tmp/recon" } }],
@@ -400,7 +402,9 @@ export const portScanContract: ToolContract = {
   description:
     "TCP connect scan of top 67 ports (web/db/middleware/admin). Non-web open ports (redis/mongodb/es...) are direct findings. Writes ports_open.txt.",
   kind: "runtime",
-  inputSchema: z.object({ host: z.string(), outputRoot, ports: z.array(z.number()).optional(), observationLedgerRoot: LEDGER }),
+  inputSchema: z.object({
+      proxy: z.string().optional().describe("egress proxy URI"),
+      timeoutMs: z.number().optional().describe("per-request timeout"), host: z.string(), outputRoot, ports: z.array(z.number()).optional(), observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ open: z.array(z.object({ port: z.number(), service: z.string() })), scanned: z.number() }),
   annotations: writingAnnotations(),
   examples: [{ title: "scan", input: { host: "1.2.3.4", outputRoot: "/tmp/recon" } }],
@@ -412,7 +416,8 @@ export const pathsContract: ToolContract = {
   description:
     "Built-in 68 high-signal paths (.git/config, .env, swagger, actuator, druid, phpinfo, backup dumps...) with soft-404 calibration (random-path baseline; isomorphic responses are not findings). Writes sensitive_paths.txt.",
   kind: "runtime",
-  inputSchema: z.object({ baseUrl: z.string(), outputRoot, paths: z.array(z.string()).optional(), cookie: z.string().optional(), observationLedgerRoot: LEDGER }),
+  inputSchema: z.object({
+      proxy: z.string().optional().describe("egress proxy URI"), baseUrl: z.string(), outputRoot, paths: z.array(z.string()).optional(), cookie: z.string().optional(), observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ found: z.array(z.unknown()) }),
   annotations: writingAnnotations(),
   examples: [{ title: "probe", input: { baseUrl: "https://target/", outputRoot: "/tmp/recon" } }],
@@ -424,7 +429,8 @@ export const corsContract: ToolContract = {
   description:
     "Origin variants (evil / suffix-reflection / null / localhost) via OPTIONS; flags ACAO reflection + ACAC true. Writes cors_probe.json.",
   kind: "runtime",
-  inputSchema: z.object({ baseUrl: z.string(), outputRoot, origins: z.array(z.string()).optional(), observationLedgerRoot: LEDGER }),
+  inputSchema: z.object({
+      proxy: z.string().optional().describe("egress proxy URI"), baseUrl: z.string(), outputRoot, origins: z.array(z.string()).optional(), observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ misconfigured: z.boolean() }),
   annotations: writingAnnotations(),
   examples: [{ title: "cors", input: { baseUrl: "https://api.target/", outputRoot: "/tmp/recon" } }],
@@ -436,7 +442,8 @@ export const fingerprintContract: ToolContract = {
   description:
     "WAF/CDN identification from header signatures (cloudflare/aliyun/qcloud/safedog/baota...), HTTP method enumeration (OPTIONS Allow + PUT/TRACE), Set-Cookie security audit (Secure/HttpOnly/SameSite). Writes fingerprint.json.",
   kind: "runtime",
-  inputSchema: z.object({ baseUrl: z.string(), outputRoot, cookie: z.string().optional(), observationLedgerRoot: LEDGER }),
+  inputSchema: z.object({
+      proxy: z.string().optional().describe("egress proxy URI"), baseUrl: z.string(), outputRoot, cookie: z.string().optional(), observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ waf: z.array(z.string()) }),
   annotations: writingAnnotations(),
   examples: [{ title: "fp", input: { baseUrl: "https://target/", outputRoot: "/tmp/recon" } }],
@@ -448,7 +455,8 @@ export const waybackContract: ToolContract = {
   description:
     "web.archive.org CDX API: historical 200-URLs for the domain — dead admin panels, old API versions. Feeds the endpoint pool. Writes wayback_urls.txt.",
   kind: "runtime",
-  inputSchema: z.object({ target: z.string(), outputRoot, maxUrls: z.number().optional(), observationLedgerRoot: LEDGER }),
+  inputSchema: z.object({
+      proxy: z.string().optional().describe("egress proxy URI"), target: z.string(), outputRoot, maxUrls: z.number().optional(), observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ urls: z.array(z.string()) }),
   annotations: writingAnnotations(),
   examples: [{ title: "wb", input: { target: "example.com", outputRoot: "/tmp/recon" } }],
@@ -460,7 +468,8 @@ export const sourcemapsContract: ToolContract = {
   description:
     "Checks every harvested JS for sourceMappingURL + probes <file>.map (local then remote via baseUrl). Leaked maps = recoverable original sources. Writes sourcemaps.txt.",
   kind: "runtime",
-  inputSchema: z.object({ outputRoot, jsDir: z.string().optional(), baseUrl: z.string().optional(), observationLedgerRoot: LEDGER }),
+  inputSchema: z.object({
+      proxy: z.string().optional().describe("egress proxy URI"), outputRoot, jsDir: z.string().optional(), baseUrl: z.string().optional(), observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ leaked: z.array(z.unknown()) }),
   annotations: writingAnnotations(),
   examples: [{ title: "sm", input: { outputRoot: "/tmp/recon" } }],
@@ -472,7 +481,9 @@ export const batchContract: ToolContract = {
   description:
     "Runs the auto pipeline for every seed in seeds.txt (one dir per target) + comparison summary (batch_summary.md). Optional webhook notify on completion. Long-running: returns started; poll each target's pipeline.json.",
   kind: "runtime",
-  inputSchema: z.object({ seedsFile: z.string(), outputRoot, chromiumPath: z.string().optional(), skipRuntime: z.boolean().optional(), notifyWebhook: z.string().optional(), observationLedgerRoot: LEDGER }),
+  inputSchema: z.object({
+      proxy: z.string().optional().describe("egress proxy URI"),
+      cookie: z.string().optional().describe("auth cookie header"), seedsFile: z.string(), outputRoot, chromiumPath: z.string().optional(), skipRuntime: z.boolean().optional(), notifyWebhook: z.string().optional(), observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ started: z.boolean(), statusFile: z.string() }),
   annotations: writingAnnotations(),
   examples: [{ title: "batch", input: { seedsFile: "/tmp/seeds.txt", outputRoot: "/tmp/batch" } }],
@@ -521,7 +532,8 @@ export const domSinksContract: ToolContract = {
   description:
     "Static taint analysis over harvested JS: location.hash/search/referrer/name → innerHTML/eval/document.write/insertAdjacentHTML/jQuery chains. Outputs candidate sinks + trigger context. Writes dom_sinks.json.",
   kind: "runtime",
-  inputSchema: z.object({ jsDir: z.string(), outputRoot, observationLedgerRoot: LEDGER }),
+  inputSchema: z.object({
+      proxy: z.string().optional().describe("egress proxy URI"), jsDir: z.string(), outputRoot, observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ chains: z.array(z.object({ file: z.string(), source: z.string(), sink: z.string(), excerpt: z.string() })) }),
   annotations: writingAnnotations(),
   examples: [{ title: "dom", input: { jsDir: "/tmp/recon/js", outputRoot: "/tmp/recon" } }],
@@ -533,7 +545,8 @@ export const jwtContract: ToolContract = {
   description:
     "Collects JWTs (secrets.txt / js corpus / raw token), decodes header+payload (alg/exp/claims), flags alg=none, cracks HS256 against a weak-secret dictionary. Writes jwt_analysis.json.",
   kind: "runtime",
-  inputSchema: z.object({ outputRoot, secretsFile: z.string().optional(), jsDir: z.string().optional(), token: z.string().optional(), observationLedgerRoot: LEDGER }),
+  inputSchema: z.object({
+      proxy: z.string().optional().describe("egress proxy URI"), outputRoot, secretsFile: z.string().optional(), jsDir: z.string().optional(), token: z.string().optional(), observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ tokens: z.number() }),
   annotations: writingAnnotations(),
   examples: [{ title: "jwt", input: { outputRoot: "/tmp/recon", jsDir: "/tmp/recon/js" } }],

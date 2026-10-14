@@ -264,4 +264,3 @@ export const readJsCorpus = async (
   return out;
 };
 
-export { originOf };

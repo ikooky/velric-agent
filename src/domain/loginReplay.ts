@@ -62,6 +62,7 @@ export const replayLogin = async (input: LoginReplayInput): Promise<LoginReplayR
       return r;
     }
 
+    const preSubmitCookies = await context.cookies();
     await page.locator(userSel!).fill(input.username);
     await page.locator(passSel!).fill(input.password);
     // Submit: form submit button → Enter → JS submit fallback.
@@ -78,7 +79,17 @@ export const replayLogin = async (input: LoginReplayInput): Promise<LoginReplayR
 
     const cookies = await context.cookies();
     const cookieHeader = cookies.length > 0 ? cookies.map((c) => `${c.name}=${c.value}`).join("; ") : null;
-    const submitted = cookies.length > 0;
+    // Success oracle — cookie COUNT alone is not evidence of login (sites set
+    // pre-auth cookies — csrf/guest/locale — before any credentials check).
+    // Evidence that auth actually happened:
+    //  a) a cookie set AFTER submit that wasn't in the pre-submit jar, or
+    //  b) the browser landed somewhere other than the login path.
+    const preNames = new Set(preSubmitCookies.map((c) => c.name));
+    const gainedAuthCookie = cookies.some((c) => !preNames.has(c.name) && /sess|token|auth|sid|jwt|login/i.test(c.name));
+    const leftLoginPage = (() => {
+      try { return new URL(page.url()).pathname !== new URL(input.baseUrl).pathname; } catch { return false; }
+    })();
+    const submitted = gainedAuthCookie || leftLoginPage;
 
     const result: LoginReplayResult = {
       baseUrl: input.baseUrl,

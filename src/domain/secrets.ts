@@ -11,7 +11,8 @@ export const SECRET_PATTERNS: readonly SecretPattern[] = [
   { name: "slack_token", re: /\bxox[abprs]-[A-Za-z0-9-]{10,250}\b/ },
   { name: "google_api_key", re: /\bAIza[0-9A-Za-z_\-]{35}\b/ },
   { name: "private_key_block", re: /-----BEGIN (?:RSA |EC |OPENSSH |PGP )?PRIVATE KEY-----/ },
-  { name: "jwt", re: /\beyJ[A-Za-z0-9_\-]{6,}\.[A-Za-z0-9_\-]{6,}\.[A-Za-z0-9_\-]{6,}\b/ },
+  // \b fails on empty alg=none signatures — lookahead keeps them matchable (see jwt.ts)
+  { name: "jwt", re: /\beyJ[A-Za-z0-9_\-]{6,}\.[A-Za-z0-9_\-]{6,}\.[A-Za-z0-9_\-]{0,}(?![A-Za-z0-9_\-])/ },
   { name: "amqp_url", re: /\bamqps?:\/\/[^\s"'>){,]{10,200}/ },
   {
     name: "db_url",

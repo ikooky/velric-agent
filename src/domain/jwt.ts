@@ -31,7 +31,10 @@ export interface JwtInspectResult {
 
 // Signature segment may be EMPTY (alg=none: "header.payload.") or short —
 // the {0,} quantifier keeps those tokens capturable.
-const JWT_RE = /\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{0,}\b/g;
+// Signature segment may be EMPTY (alg=none: "header.payload.") or short.
+// Trailing \b FAILS after an empty signature (no word char follows), so the
+// canonical alg=none token never matched — use a lookahead instead.
+const JWT_RE = /\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{0,}(?![A-Za-z0-9_-])/g;
 
 const b64u = (s: string): Buffer => Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64");
 

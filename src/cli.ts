@@ -158,7 +158,7 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
             url,
             cookie: typeof flags.cookie === "string" ? flags.cookie : undefined,
             proxy: await resolveProxy(flags),
-            timeoutMs: typeof flags.timeout === "string" ? Number(flags.timeout) : undefined,
+            timeoutMs: num(flags.timeout),
           }),
         );
         return 0;
@@ -175,7 +175,7 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
             outputRoot: dir,
             proxy: await resolveProxy(flags),
             cookie: typeof flags.cookie === "string" ? flags.cookie : undefined,
-            timeoutMs: typeof flags.timeout === "string" ? Number(flags.timeout) : undefined,
+            timeoutMs: num(flags.timeout),
           }),
         );
         return 0;
@@ -389,7 +389,8 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
           return 2;
         }
         const { discoverSubdomains } = await import("./domain/subdomains.js");
-        out(await discoverSubdomains({ domain, outputRoot: dir, proxy: await resolveProxy(flags) }));
+        const wl = typeof flags.wordlist === "string" && flags.wordlist.trim() !== "" ? (await import("node:fs/promises")).readFile(flags.wordlist, "utf8").then((t) => t.split("\n").map((l) => l.trim()).filter((l) => l !== "" && !l.startsWith("#"))).catch(() => undefined) : undefined;
+        out(await discoverSubdomains({ domain, outputRoot: dir, proxy: await resolveProxy(flags), wordlist: await wl }));
         return 0;
       }
       case "port-scan": {

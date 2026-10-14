@@ -45,9 +45,7 @@ export const saveEvidence = async (input: EvidenceInput): Promise<EvidenceResult
   const manifestPath = join(input.outputRoot, "manifest.json");
   let existing: { blobs?: { hash: string }[] } = {};
   try { existing = JSON.parse(await readFile(manifestPath, "utf8")) as { blobs?: { hash: string }[] }; } catch { /* fresh */ }
-  const priorHashes = new Set((existing.blobs ?? []).map((b) => b.hash));
   const merged = [...(existing.blobs ?? []).filter((b) => !blobs.some((n) => n.hash === b.hash)), ...blobs];
-  void priorHashes;
   await writeFile(manifestPath, JSON.stringify({ generatedAt: new Date().toISOString(), blobs: merged }, null, 2), "utf8");
   return { blobs, manifestPath };
 };

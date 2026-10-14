@@ -31,7 +31,10 @@ const typeOf = (v: unknown): string => {
 };
 
 /** Flatten a JSON message into dotted field paths with types + samples. */
-const flatten = (v: unknown, prefix: string, out: Map<string, { types: Set<string>; samples: string[] }>): void => {
+const FLATTEN_DEPTH_CAP = 24; // adversarial deep nesting must not blow the stack
+
+const flatten = (v: unknown, prefix: string, out: Map<string, { types: Set<string>; samples: string[] }>, depth = 0): void => {
+  if (depth > FLATTEN_DEPTH_CAP) return; // drop deeper levels silently
   if (v === null || typeof v !== "object") {
     const cur = out.get(prefix) ?? { types: new Set<string>(), samples: [] };
     cur.types.add(typeOf(v));
@@ -43,11 +46,11 @@ const flatten = (v: unknown, prefix: string, out: Map<string, { types: Set<strin
     const cur = out.get(prefix) ?? { types: new Set<string>(), samples: [] };
     cur.types.add("array");
     out.set(prefix, cur);
-    for (const x of v.slice(0, 5)) flatten(x, `${prefix}[]`, out);
+    for (const x of v.slice(0, 5)) flatten(x, `${prefix}[]`, out, depth + 1);
     return;
   }
   for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
-    flatten(val, prefix ? `${prefix}.${k}` : k, out);
+    flatten(val, prefix ? `${prefix}.${k}` : k, out, depth + 1);
   }
 };
 

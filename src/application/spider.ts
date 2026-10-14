@@ -110,4 +110,3 @@ export const spiderMpa = async (input: SpiderInput): Promise<SpiderSummary> => {
   };
 };
 
-export { pooled };

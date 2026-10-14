@@ -593,12 +593,10 @@ export const handlers: Readonly<Record<string, Handler>> = {
   export_findings: async (raw) => {
     const p = z.object({ reportJsonFile: z.string(), outputRoot: z.string(), format: z.enum(["csv", "json", "md-all"]) }).parse(raw);
     const { readFile } = await import("node:fs/promises");
-    const { join } = await import("node:path");
     const { generateReportExports } = await import("../application/report.js");
     const rep = JSON.parse(await readFile(p.reportJsonFile, "utf8")) as { findings?: unknown[] };
     const findings = (rep.findings ?? []) as never[];
     const files = await generateReportExports({ outputRoot: p.outputRoot, format: p.format, findings });
-    void join;
     return { files: files.length };
   },
   evidence_bind: async (raw) => {
