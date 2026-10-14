@@ -50,7 +50,7 @@ export const runCoverage = async (input: CoverageInput): Promise<CoverageResult>
   const browser = await chromium.launch({
     executablePath: input.chromiumPath ?? "/usr/bin/chromium",
     headless: true,
-    args: ["--no-sandbox", "--disable-dev-shm-usage"],
+    args: process.getuid?.() === 0 ? ["--no-sandbox", "--disable-dev-shm-usage"] : ["--disable-dev-shm-usage"],
     ...(input.proxy ? { proxy: { server: input.proxy } } : {}),
   });
   try {

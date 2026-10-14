@@ -16,6 +16,7 @@ export interface BatchInput {
 }
 
 export interface BatchResult {
+  readonly note?: string;
   readonly targets: {
     seed: string;
     outDir: string;
@@ -34,10 +35,9 @@ export const runBatch = async (input: BatchInput): Promise<BatchResult> => {
   const seeds = seedsRaw.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
   await mkdir(input.outputRoot, { recursive: true });
 
-  const results: BatchResult["targets"] = [];
   const conc = Math.max(1, Math.min(input.concurrency ?? 1, 4));
   let cursor = 0;
-  const runOne = async (seed: string): Promise<void> => {
+  const runOne = async (seed: string): Promise<BatchResult["targets"][number]> => {
     const slug = seed.replace(/^https?:\/\//, "").replace(/[^a-zA-Z0-9.-]/g, "_").slice(0, 60);
     const outDir = join(input.outputRoot, slug);
     try {
@@ -67,19 +67,26 @@ export const runBatch = async (input: BatchInput): Promise<BatchResult> => {
         const fd = r.stages.find((st) => st.stage === "auto_findings")?.detail ?? "";
         findings = Number(fd.match(/(\d+)\s*findings?/i)?.[1] ?? 0);
       }
-      results.push({ seed, outDir, stagesOk, stagesTotal: r.stages.length, apiEndpoints: apiCount, findings });
+      return { seed, outDir, stagesOk, stagesTotal: r.stages.length, apiEndpoints: apiCount, findings };
     } catch (e) {
-      results.push({ seed, outDir, stagesOk: 0, stagesTotal: 0, apiEndpoints: 0, findings: 0, error: String((e as Error).message ?? e).slice(0, 150) });
+      return { seed, outDir, stagesOk: 0, stagesTotal: 0, apiEndpoints: 0, findings: 0, error: String((e as Error).message ?? e).slice(0, 150) };
     }
   };
 
+  const indexed: { seed: string; res: BatchResult["targets"][number] }[] = [];
   const worker = async (): Promise<void> => {
     while (cursor < seeds.length) {
-      const seed = seeds[cursor++]!;
-      await runOne(seed);
+      const idx = cursor++;
+      const seed = seeds[idx]!;
+      const res = await runOne(seed);
+      indexed.push({ seed, res });
     }
   };
   await Promise.all(Array.from({ length: conc }, worker));
+  // Deterministic output: batch_summary and targets[] follow seed-file order,
+  // not completion order.
+  const bySeed = new Map(indexed.map((x) => [x.seed, x.res]));
+  const results: BatchResult["targets"] = seeds.map((sd) => bySeed.get(sd)).filter((x): x is BatchResult["targets"][number] => x !== undefined);
 
   const lines = [
     `# 批量侦察汇总 — ${seeds.length} 目标`,
@@ -93,12 +100,27 @@ export const runBatch = async (input: BatchInput): Promise<BatchResult> => {
   await writeFile(path, body);
 
   if (input.notifyWebhook) {
+    // Anti-exfiltration posture: https-only, and the notification body never
+    // carries seed hostnames — only per-target ok/err status and counts.
+    let okproto = true;
+    try {
+      const u = new URL(input.notifyWebhook);
+      okproto = u.protocol === "https:";
+    } catch { okproto = false; }
+    if (!okproto) {
+      return {
+        targets: results,
+        summary: `${results.filter((r) => !r.error).length}/${results.length} ok`,
+        artifacts: [{ path, bytes: Buffer.byteLength(body) }],
+        note: "notifyWebhook refused: https required, hostnames withheld",
+      };
+    }
     try {
       const { fetchUrl } = await import("../adapters/http.js");
       await fetchUrl(input.notifyWebhook, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text: `velric batch done: ${results.length} targets\n${results.map((r) => `${r.seed}: ${r.error ? "ERR" : r.apiEndpoints + " eps"}`).join("\n")}` }),
+        body: JSON.stringify({ text: `velric batch done: ${results.length} targets\n${results.map((r, i) => `#${i + 1}: ${r.error ? "ERR" : r.apiEndpoints + " eps"}`).join("\n")}` }),
         timeoutMs: 10000,
       });
     } catch { /* webhook best-effort */ }

@@ -76,6 +76,13 @@ const cookieValue = (v: string): string => {
   return v;
 };
 
+const chromiumSandboxArgs = (): string[] => {
+  // --no-sandbox only when actually running as root (container convention);
+  // an unprivileged user keeps the renderer sandbox for hostile-bundle safety.
+  const base = ["--disable-dev-shm-usage", "--ignore-certificate-errors"];
+  return process.getuid?.() === 0 ? ["--no-sandbox", ...base] : base;
+};
+
 /** Find a usable Chromium executable: explicit path, then common Linux names. */
 const findChromium = async (): Promise<string> => {
   const { access } = await import("node:fs/promises");
@@ -126,12 +133,7 @@ export const captureRuntime = async (
   const browser = await chromium.launch({
     executablePath: execPath,
     headless: input.headless ?? true,
-    args: [
-      "--no-sandbox",
-      "--disable-dev-shm-usage",
-      "--ignore-certificate-errors",
-      ...(input.proxy ? [`--proxy-server=${input.proxy}`] : []),
-    ],
+    args: [...chromiumSandboxArgs(), ...(input.proxy ? [`--proxy-server=${input.proxy}`] : [])],
   });
 
   try {

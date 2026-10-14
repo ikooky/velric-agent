@@ -193,7 +193,8 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
       try {
         const st = await statMtime(raPath);
         stale = st < runStartMs - 1000; // written before this run began → previous run's data
-      } catch { stale = false; }
+      } catch { stale = true; // stat failed: fail closed — treat as stale rather than trusting unknown provenance
+      }
       if (!stale && await exists(raPath)) {
         try {
           const salvaged = await readJson<{ uniqueCalls?: string[] }>(join(root, "runtime_api.json"));

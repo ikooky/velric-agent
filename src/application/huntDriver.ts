@@ -46,26 +46,37 @@ const LEDGER_FILE = "observation_ledger.json";
 
 export const ledgerPath = (root: string): string => join(root, LEDGER_FILE);
 
+// Per-root append queue: read-modify-write must not interleave across
+// concurrent MCP tool calls sharing one ledger root.
+const ledgerQueues = new Map<string, Promise<unknown>>();
+const serialized = <T>(root: string, fn: () => Promise<T>): Promise<T> => {
+  const prev = ledgerQueues.get(root) ?? Promise.resolve();
+  const next = prev.then(fn, fn);
+  ledgerQueues.set(root, next.catch(() => {}));
+  return next;
+};
+
 /** Append what a tool truly requested/observed. Called by the MCP server for
  * every tool execution (never by the host). */
-export const appendLedger = async (
-  root: string,
-  entries: LedgerEntry[],
-): Promise<void> => {
-  await mkdir(root, { recursive: true });
-  const prev = await readLedger(root);
-  // Upsert by URL: a statusless older entry upgrades when a later observation
-  // carries a status; a URL never duplicates in the ledger.
-  const byUrl = new Map<string, LedgerEntry>();
-  for (const e of [...prev, ...entries]) {
-    const prior = byUrl.get(e.url);
-    if (!prior) byUrl.set(e.url, e);
-    else if (prior.status == null && e.status != null) byUrl.set(e.url, { ...prior, status: e.status });
-  }
-  const next = [...byUrl.values()];
-  const { writeFile } = await import("node:fs/promises");
-  await writeFile(ledgerPath(root), JSON.stringify(next, null, 2));
-};
+export const appendLedger = (root: string, entries: LedgerEntry[]): Promise<void> =>
+  serialized(root, async () => {
+    await mkdir(root, { recursive: true });
+    const prev = await readLedger(root);
+    // Upsert by URL: a statusless older entry upgrades when a later observation
+    // carries a status; a URL never duplicates in the ledger.
+    const byUrl = new Map<string, LedgerEntry>();
+    for (const e of [...prev, ...entries]) {
+      const prior = byUrl.get(e.url);
+      if (!prior) byUrl.set(e.url, e);
+      else if (prior.status == null && e.status != null) byUrl.set(e.url, { ...prior, status: e.status });
+    }
+    const next = [...byUrl.values()];
+    const { writeFile, rename } = await import("node:fs/promises");
+    // Atomic publish: concurrent appenders never expose a torn ledger.
+    const tmp = ledgerPath(root) + ".tmp";
+    await writeFile(tmp, JSON.stringify(next, null, 2));
+    await rename(tmp, ledgerPath(root));
+  });
 
 export const readLedger = async (root: string): Promise<LedgerEntry[]> => {
   try {
@@ -162,21 +173,29 @@ export const huntRecord = async (input: HuntRecordInput): Promise<{ graph: Graph
 
   const digestOk = (evidence: string, summary: string): boolean => {
     const txt = `${evidence} ${summary}`;
-    for (const [k, statuses] of statusByUrl) {
-      if (txt.includes(k)) {
-        // URL cited verbatim: sufficient when the ledger entry carries no
-        // status (e.g. harvest downloads record null status). With a status,
-        // require the status to appear too — the citation must reflect reality.
-        const known = [...statuses].filter((s): s is number => typeof s === "number");
-        return known.length === 0 || known.some((s) => txt.includes(String(s)));
+    // EVERY cited URL must satisfy its own status check — a stray earlier
+    // ledger entry must not vouch for a citation it doesn't cover.
+    const cited = citedUrls(txt);
+    if (cited.length === 0) return false;
+    for (const cu of cited) {
+      const statuses = statusByUrl.get(norm(cu)) ?? statusByUrl.get(cu);
+      if (!statuses) {
+        // not ledgered verbatim — allow same-origin relative-path match
+        let matched = false;
+        for (const [k, st] of statusByUrl) {
+          try {
+            const u = new URL(k);
+            const stArr = [...st];
+            if (cu.includes(u.pathname) || (new URL(cu, "http://l.invalid").pathname === u.pathname)) { matched = stArr.length === 0 || stArr.some((sv) => txt.includes(String(sv))); break; }
+          } catch { /* malformed */ }
+        }
+        if (!matched) return false;
+        continue;
       }
-      // relative-path citation matching a ledgered absolute URL on same origin
-      try {
-        const u = new URL(k);
-        if (txt.includes(u.pathname) && [...statuses].some((s) => txt.includes(String(s)))) return true;
-      } catch { /* skip malformed */ }
+      const known = [...statuses].filter((sv): sv is number => typeof sv === "number");
+      if (known.length > 0 && !known.some((sv) => txt.includes(String(sv)))) return false;
     }
-    return false;
+    return true;
   };
 
   let accepted = 0;
@@ -199,8 +218,9 @@ export const huntRecord = async (input: HuntRecordInput): Promise<{ graph: Graph
     if (goal && !goal.met) {
       goal.met = true;
       goal.metReason = m.reason?.slice(0, 300);
+      accepted++; // count only real open→met transitions
     }
-    accepted++;
+    // unknown id or already met: not accepted — no inflation
   }
 
   // intents (create; optionally set state)

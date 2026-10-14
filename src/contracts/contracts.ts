@@ -95,6 +95,7 @@ export const captureRuntimeContract: ToolContract = {
   kind: "runtime",
   inputSchema: z.object({
     observationLedgerRoot: z.string().optional().describe("auto-record touched URLs into the hunt observation ledger"),
+    maxRoutes: z.number().int().min(1).max(200).optional(),
     baseUrl: z.string(),
     outputRoot,
     routes: z.array(z.string()).optional(),
@@ -174,7 +175,7 @@ export const enrichAssetsContract: ToolContract = {
     timeoutMs: z.number().int().min(1000).max(120000).optional(),
     http: z.boolean().optional().describe("probe web services (default true)"),
   }),
-  outputSchema: z.object({ assets: z.number() }),
+  outputSchema: z.object({ assets: z.array(z.unknown()) }),
   annotations: writingAnnotations(),
   examples: [{ title: "enrich", input: { seeds: ["example.com"], outputRoot: "/tmp/recon" } }],
 };
@@ -212,7 +213,7 @@ export const autoPipelineContract: ToolContract = {
     skipRuntime: z.boolean().optional(),
     maxPages: z.number().int().min(1).max(200).optional(),
   }),
-  outputSchema: z.object({ stages: z.number() }),
+  outputSchema: z.object({ started: z.boolean(), statusFile: z.string() }),
   annotations: writingAnnotations(),
   examples: [{ title: "auto", input: { seed: "example.com", outputRoot: "/tmp/recon" } }],
 };
@@ -297,7 +298,7 @@ export const workflowGuideContract: ToolContract = {
     "Returns the full recon methodology (Phase 0-5: classify → static → auth gates → runtime → perm tree → merge/report) plus execution disciplines (observed/inferred, no-CVE-matching-as-finding, serial chains step-by-step, route diversity). READ THIS FIRST before calling other tools.",
   kind: "policy",
   inputSchema: z.object({}),
-  outputSchema: z.object({ phases: z.number() }),
+  outputSchema: z.string(),
   annotations: readOnlyAnnotations(),
   examples: [{ title: "read guide", input: {} }],
 };
@@ -313,7 +314,7 @@ export const saveEvidenceContract: ToolContract = {
     outputRoot,
     observationLedgerRoot: z.string().optional().describe("auto-record touched URLs into the hunt observation ledger"),
   }),
-  outputSchema: z.object({ blobs: z.number() }),
+  outputSchema: z.object({ blobs: z.array(z.object({ hash: z.string(), bytes: z.number() })) }),
   annotations: writingAnnotations(),
   examples: [{ title: "evidence", input: { itemsFile: "/tmp/recon/evidence_items.json", outputRoot: "/tmp/recon" } }],
 };
@@ -411,7 +412,7 @@ export const pathsContract: ToolContract = {
     "Built-in 65 high-signal paths (.git/config, .env, swagger, actuator, druid, phpinfo, backup dumps...) with soft-404 calibration (random-path baseline; isomorphic responses are not findings). Writes sensitive_paths.txt.",
   kind: "runtime",
   inputSchema: z.object({ baseUrl: z.string(), outputRoot, paths: z.array(z.string()).optional(), cookie: z.string().optional(), observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({ found: z.number() }),
+  outputSchema: z.object({ found: z.array(z.unknown()) }),
   annotations: writingAnnotations(),
   examples: [{ title: "probe", input: { baseUrl: "https://target/", outputRoot: "/tmp/recon" } }],
 };
@@ -435,7 +436,7 @@ export const fingerprintContract: ToolContract = {
     "WAF/CDN identification from header signatures (cloudflare/aliyun/qcloud/safedog/baota...), HTTP method enumeration (OPTIONS Allow + PUT/TRACE), Set-Cookie security audit (Secure/HttpOnly/SameSite). Writes fingerprint.json.",
   kind: "runtime",
   inputSchema: z.object({ baseUrl: z.string(), outputRoot, cookie: z.string().optional(), observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({ waf: z.number() }),
+  outputSchema: z.object({ waf: z.array(z.string()) }),
   annotations: writingAnnotations(),
   examples: [{ title: "fp", input: { baseUrl: "https://target/", outputRoot: "/tmp/recon" } }],
 };
@@ -447,7 +448,7 @@ export const waybackContract: ToolContract = {
     "web.archive.org CDX API: historical 200-URLs for the domain — dead admin panels, old API versions. Feeds the endpoint pool. Writes wayback_urls.txt.",
   kind: "runtime",
   inputSchema: z.object({ target: z.string(), outputRoot, maxUrls: z.number().optional(), observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({ urls: z.number() }),
+  outputSchema: z.object({ urls: z.array(z.string()) }),
   annotations: writingAnnotations(),
   examples: [{ title: "wb", input: { target: "example.com", outputRoot: "/tmp/recon" } }],
 };
@@ -459,7 +460,7 @@ export const sourcemapsContract: ToolContract = {
     "Checks every harvested JS for sourceMappingURL + probes <file>.map (local then remote via baseUrl). Leaked maps = recoverable original sources. Writes sourcemaps.txt.",
   kind: "runtime",
   inputSchema: z.object({ outputRoot, jsDir: z.string().optional(), baseUrl: z.string().optional(), observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({ leaked: z.number() }),
+  outputSchema: z.object({ leaked: z.array(z.unknown()) }),
   annotations: writingAnnotations(),
   examples: [{ title: "sm", input: { outputRoot: "/tmp/recon" } }],
 };
@@ -471,7 +472,7 @@ export const batchContract: ToolContract = {
     "Runs the auto pipeline for every seed in seeds.txt (one dir per target) + comparison summary (batch_summary.md). Optional webhook notify on completion. Long-running: returns started; poll each target's pipeline.json.",
   kind: "runtime",
   inputSchema: z.object({ seedsFile: z.string(), outputRoot, chromiumPath: z.string().optional(), skipRuntime: z.boolean().optional(), notifyWebhook: z.string().optional(), observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({ targets: z.number() }),
+  outputSchema: z.object({ started: z.boolean(), statusFile: z.string() }),
   annotations: writingAnnotations(),
   examples: [{ title: "batch", input: { seedsFile: "/tmp/seeds.txt", outputRoot: "/tmp/batch" } }],
 };
@@ -521,7 +522,7 @@ export const domSinksContract: ToolContract = {
   kind: "runtime",
   inputSchema: z.object({ jsDir: z.string(), outputRoot, observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ chains: z.number() }),
-  annotations: readOnlyAnnotations(),
+  annotations: writingAnnotations(),
   examples: [{ title: "dom", input: { jsDir: "/tmp/recon/js", outputRoot: "/tmp/recon" } }],
 };
 
@@ -533,7 +534,7 @@ export const jwtContract: ToolContract = {
   kind: "runtime",
   inputSchema: z.object({ outputRoot, secretsFile: z.string().optional(), jsDir: z.string().optional(), token: z.string().optional(), observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ tokens: z.number() }),
-  annotations: readOnlyAnnotations(),
+  annotations: writingAnnotations(),
   examples: [{ title: "jwt", input: { outputRoot: "/tmp/recon", jsDir: "/tmp/recon/js" } }],
 };
 
@@ -557,7 +558,7 @@ export const oidcContract: ToolContract = {
     "Discovers /.well-known/openid-configuration, oauth-authorization-server, SAML metadata; static weakness checks (implicit flow, fragment response, missing PKCE). Writes oidc_probe.json.",
   kind: "runtime",
   inputSchema: z.object({ baseUrl: z.string(), outputRoot, proxy: z.string().optional(), observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({ found: z.number() }),
+  outputSchema: z.object({ found: z.array(z.unknown()) }),
   annotations: writingAnnotations(),
   examples: [{ title: "oidc", input: { baseUrl: "https://target/", outputRoot: "/tmp/recon" } }],
 };
@@ -569,7 +570,7 @@ export const smuggleContract: ToolContract = {
     "Paired GETs differing in one canonicalization dimension (dot-segment, double-slash, encoded-slash, case, semicolon) + CL+TE POST. Status divergence across variants = parser disagreement. Read-only. Writes smuggle_probe.json.",
   kind: "runtime",
   inputSchema: z.object({ baseUrl: z.string(), outputRoot, proxy: z.string().optional(), observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({ differentials: z.number() }),
+  outputSchema: z.object({ differentials: z.array(z.object({ dimension: z.string(), variantStatus: z.number() })) }),
   annotations: writingAnnotations(),
   examples: [{ title: "smuggle", input: { baseUrl: "https://target/", outputRoot: "/tmp/recon" } }],
 };
@@ -630,7 +631,7 @@ export const nucleiLiteContract: ToolContract = {
     "nuclei-style template engine (status/word/regex matchers) with a curated built-in set: exposed panels (kibana/grafana/jenkins/nacos), actuator env, swagger, git/env leaks, directory listing. Read-only GETs. Writes nuclei_lite.json.",
   kind: "runtime",
   inputSchema: z.object({ baseUrl: z.string(), outputRoot, proxy: z.string().optional(), observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({ matched: z.number() }),
+  outputSchema: z.object({ matched: z.array(z.object({ id: z.string(), severity: z.string() })) }),
   annotations: writingAnnotations(),
   examples: [{ title: "scan", input: { baseUrl: "https://target/", outputRoot: "/tmp/recon" } }],
 };

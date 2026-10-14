@@ -126,6 +126,7 @@ export const handlers: Readonly<Record<string, Handler>> = {
         routeTimeoutMs: z.number().optional(),
         recordWs: z.boolean().optional(),
         apiPattern: z.string().optional(),
+        maxRoutes: z.number().int().min(1).max(200).optional(),
       })
       .parse(raw);
     return captureRuntime({
@@ -583,32 +584,36 @@ const extractTouchedUrls = (
     if (typeof v === "string") add(v);
     if (Array.isArray(v)) for (const x of v) add(x);
   }
-  // 2) deep-walk the tool RESULT for any http(s) URL + adjacent status codes.
-  // Harvest/spider/runtime touch dozens of URLs that never appear in args;
-  // without this the evidence gate under-covers and would drop valid facts.
+  // 2) request-bearing result fields only. A deep walk over the whole result
+  // would also harvest URLs merely QUOTED in response bodies (a target API
+  // echoing arbitrary links) — the evidence gate must only vouch for URLs
+  // the tool itself requested.
+  const REQUEST_FIELDS = ["url", "finalUrl", "requested", "touched", "fetched", "visited", "crawled", "endpoint", "host", "target", "service", "value", "path", "url_ish"];
   const seen = new Set<unknown>();
-  const MAX_WALK = 5000;
+  const MAX_WALK = 2000;
   let walked = 0;
-  const walk = (node: unknown, depth: number): void => {
+  const isRequestField = (key: string): boolean => REQUEST_FIELDS.includes(key) || /(?:url|host|origin|endpoint|requested|touched|fetched|visited)/i.test(key);
+  const walk = (node: unknown, key: string, depth: number): void => {
     if (walked++ > MAX_WALK || depth > 6 || node == null) return;
     if (typeof node === "string") {
-      if (/^https?:\/\//.test(node)) add(node);
+      if (isRequestField(key) && /^https?:\/\//.test(node)) add(node);
       return;
     }
     if (typeof node !== "object") return;
     if (seen.has(node)) return;
     seen.add(node);
     if (Array.isArray(node)) {
-      for (const x of node) walk(x, depth + 1);
+      for (const x of node) walk(x, key, depth);
       return;
     }
     const o = node as Record<string, unknown>;
+    // {url, status} records are the canonical request+observation pair.
     if (typeof o.url === "string" && /^https?:\/\//.test(o.url) && typeof o.status === "number") {
       add(o.url, o.status);
     }
-    for (const v of Object.values(o)) walk(v, depth + 1);
+    for (const [k, v] of Object.entries(o)) walk(v, k, depth + 1);
   };
-  walk(out, 0);
+  walk(out, "", 0);
   return urls;
 };
 

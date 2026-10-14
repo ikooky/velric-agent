@@ -8,8 +8,11 @@ import { captureRuntime } from "./application/runtime.js";
 import { DEFAULT_HOOK_CONFIG } from "./domain/preload.js";
 import { PRODUCT_IDENTITY } from "./identity.js";
 
-const num = (v: string | boolean | undefined): number | undefined =>
-  typeof v === "string" && v.trim() !== "" ? Number(v) : undefined;
+const num = (v: string | boolean | undefined): number | undefined => {
+  if (typeof v !== "string" || v.trim() === "") return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined; // NaN flags silently corrupt timeouts/slices
+};
 
 /** Minimal argv parser: command-first, --flag value pairs, --bool flags. */
 interface ParsedArgs {
