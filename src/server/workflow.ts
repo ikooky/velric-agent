@@ -110,6 +110,7 @@ export const PHASE_TAGS: Record<string, string> = {
   traffic_query: "[平台层] 流量检索:host/status/method/文本过滤+单体取回",
   export_findings: "[Phase 5 交付] findings 导出:csv/json/单条 md",
   scopesentry_sync: "[平台层] ScopeSentry 推送:子域建扫描任务/资产查询",
+  evidence_bind: "[平台层] 证据绑定:角色/版本冲突拒绝/重排/md-zip 导出",
   graphql_deep: "[Phase 4 深化] GraphQL 全量内省+schema 解析+diff",
   proto_decode: "[Phase 4 深化] 二进制 WS 帧 protobuf 猜测解码",
   nuclei_lite: "[Phase 2 探测] 模板化匹配:暴露面板/泄漏特征",

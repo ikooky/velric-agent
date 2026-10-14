@@ -715,7 +715,7 @@ export const trafficRecContract: ToolContract = {
   description:
     "velric platform: forward proxy recording every exchange (full req/resp for HTTP, tunnel metadata for HTTPS) to traffic.ndjson + sha256 blob store. Long-running; returns bound port.",
   kind: "runtime",
-  inputSchema: z.object({ outputRoot, port: z.number().optional(), upstreamProxy: z.string().optional(), maxExchanges: z.number().optional(), observationLedgerRoot: LEDGER }),
+  inputSchema: z.object({ outputRoot, port: z.number().optional(), upstreamProxy: z.string().optional(), maxExchanges: z.number().optional(), mitm: z.boolean().optional(), observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ port: z.number() }),
   annotations: writingAnnotations(),
   examples: [{ title: "rec", input: { outputRoot: "/tmp/recon" } }],
@@ -818,6 +818,19 @@ export const scopesentryContract: ToolContract = {
   examples: [{ title: "push", input: { baseUrl: "http://ss.example:8082", apiKey: "ssk_x", action: "push_subdomains", name: "recon", node: ["n1"], template: "t1", subdomainsFile: "/tmp/recon/subdomains.txt" } }],
 };
 
+
+export const evidenceBindContract: ToolContract = {
+  name: "evidence_bind",
+  title: "Finding↔evidence binding lifecycle",
+  description:
+    "Ordered evidence bindings per finding with roles (baseline/proof/verification/supporting), optimistic-version conflict rejection, update/unbind/reorder, and md-zip export. Persists evidence_bindings.json.",
+  kind: "runtime",
+  inputSchema: z.object({ outputRoot, action: z.enum(["bind", "update", "unbind", "reorder", "get", "export"]), findingId: z.string().optional(), expectedVersion: z.number().optional(), refs: z.array(z.object({ hash: z.string(), role: z.enum(["baseline", "proof", "verification", "supporting"]), note: z.string().optional() })).optional(), bindingId: z.string().optional(), role: z.enum(["baseline", "proof", "verification", "supporting"]).optional(), note: z.string().optional(), order: z.array(z.string()).optional(), zipPath: z.string().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ version: z.number() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "bind", input: { outputRoot: "/tmp/recon", action: "bind", findingId: "f1", expectedVersion: 0, refs: [{ hash: "a".repeat(64), role: "proof" }] } }],
+};
+
 export const ALL_CONTRACTS: readonly ToolContract[] = [
   dnsResolveContract,
   httpProbeContract,
@@ -870,6 +883,7 @@ export const ALL_CONTRACTS: readonly ToolContract[] = [
   trafficQueryContract,
   reportExportContract,
   scopesentryContract,
+  evidenceBindContract,
   huntContract,
   huntRecordContract,
   huntOverviewContract,

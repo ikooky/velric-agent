@@ -97,6 +97,7 @@ Usage:
   velric-agent retest <dir> <action>           finding retest lifecycle
   velric-agent traffic-query <dir> <action>    traffic search/get
   velric-agent export-findings <f> <dir> <fmt> findings csv/json/md export
+  velric-agent evidence-bind <dir> <action>     evidence binding lifecycle
   velric-agent help
 
 Common flags: --proxy URL | --proxy-pool FILE, --rps N (global rate limit), --cookie STR, --timeout MS
@@ -630,7 +631,7 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
         const [dir] = positional;
         if (!dir) { console.error("usage: traffic-recorder <outdir> [--port N] [--upstream P] [--max N] [--daemon] [--seconds S]"); return 2; }
         const { TrafficRecorder } = await import("./domain/trafficRecorder.js");
-        const rec = new TrafficRecorder({ outputRoot: dir, port: num(flags.port), upstreamProxy: typeof flags.upstream === "string" ? flags.upstream : undefined, maxExchanges: num(flags.max) });
+        const rec = new TrafficRecorder({ outputRoot: dir, port: num(flags.port), upstreamProxy: typeof flags.upstream === "string" ? flags.upstream : undefined, maxExchanges: num(flags.max), mitm: flags.mitm === true });
         const port = await rec.start(num(flags.port) || 0);
         console.error(`recorder listening on 127.0.0.1:${port}`);
         if (flags.daemon) {
@@ -740,6 +741,29 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
         const files = await generateReportExports({ outputRoot: dir, format: fmt as "csv" | "json" | "md-all", findings: (rep.findings ?? []) as never[] });
         out({ files });
         return 0;
+      }
+      case "evidence-bind": {
+        const [dir, action] = positional;
+        if (!dir || !action) { console.error("usage: evidence-bind <outdir> bind <findingId> <expectedV> <refsJson>|update|unbind|reorder|get <findingId>|export <findingId> <zipPath>"); return 2; }
+        const mod = await import("./domain/evidenceBinding.js");
+        if (action === "get") { out(await mod.getBindings(dir, positional[2] ?? "")); return 0; }
+        if (action === "export") { out(await mod.exportBindings({ root: dir, findingId: positional[2] ?? "", zipPath: positional[3] ?? "evidence.zip" })); return 0; }
+        if (action === "bind") {
+          const refs = JSON.parse(positional[4] ?? "[]");
+          out(await mod.bindEvidence({ root: dir, findingId: positional[2] ?? "", expectedVersion: Number(positional[3] ?? 0), refs }));
+          return 0;
+        }
+        if (action === "reorder") {
+          const order = JSON.parse(positional[4] ?? "[]");
+          out(await mod.reorderBindings({ root: dir, findingId: positional[2] ?? "", expectedVersion: Number(positional[3] ?? 0), order }));
+          return 0;
+        }
+        if (action === "update" || action === "unbind") {
+          const fn = action === "update" ? mod.updateBinding : mod.unbindEvidence;
+          out(await fn({ root: dir, findingId: positional[2] ?? "", bindingId: positional[3] ?? "", expectedVersion: Number(positional[4] ?? 0) } as never));
+          return 0;
+        }
+        console.error("unknown action"); return 2;
       }
       default:
         console.error(`unknown command: ${command}\n`);

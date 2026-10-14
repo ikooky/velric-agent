@@ -450,7 +450,7 @@ export const handlers: Readonly<Record<string, Handler>> = {
     return buildSiteMap(p);
   },
   traffic_record: async (raw) => {
-    const p = z.object({ outputRoot: z.string(), port: z.number().optional(), upstreamProxy: z.string().optional(), maxExchanges: z.number().optional(), stop: z.boolean().optional() }).parse(raw);
+    const p = z.object({ outputRoot: z.string(), port: z.number().optional(), upstreamProxy: z.string().optional(), maxExchanges: z.number().optional(), stop: z.boolean().optional(), mitm: z.boolean().optional() }).parse(raw);
     // One recorder per process, keyed by outputRoot; stop:true tears it down
     // (an explicit lifecycle instead of an untracked immortal listener).
     const g = globalThis as { __velricRecorders?: Map<string, import("../domain/trafficRecorder.js").TrafficRecorder> };
@@ -613,6 +613,33 @@ export const handlers: Readonly<Record<string, Handler>> = {
     const { readFile } = await import("node:fs/promises");
     const subs = (await readFile(p.subdomainsFile, "utf8")).split("\n").map((l) => l.trim()).filter(Boolean);
     return { ok: true, result: await ss.pushSubdomains(cfg, { name: p.name, node: p.node, template: p.template, subdomains: subs }) };
+  },
+  evidence_bind: async (raw) => {
+    const p = z.object({ outputRoot: z.string(), action: z.enum(["bind", "update", "unbind", "reorder", "get", "export"]), findingId: z.string().optional(), expectedVersion: z.number().optional(), refs: z.array(z.object({ hash: z.string(), role: z.enum(["baseline", "proof", "verification", "supporting"]), note: z.string().optional() })).optional(), bindingId: z.string().optional(), role: z.enum(["baseline", "proof", "verification", "supporting"]).optional(), note: z.string().optional(), order: z.array(z.string()).optional(), zipPath: z.string().optional() }).parse(raw);
+    const mod = await import("../domain/evidenceBinding.js");
+    if (p.action === "bind") {
+      if (!p.findingId || !p.refs) throw new Error("findingId+refs required");
+      return mod.bindEvidence({ root: p.outputRoot, findingId: p.findingId, expectedVersion: p.expectedVersion ?? 0, refs: p.refs });
+    }
+    if (p.action === "update") {
+      if (!p.findingId || !p.bindingId) throw new Error("findingId+bindingId required");
+      return mod.updateBinding({ root: p.outputRoot, findingId: p.findingId, bindingId: p.bindingId, expectedVersion: p.expectedVersion ?? 0, role: p.role, note: p.note });
+    }
+    if (p.action === "unbind") {
+      if (!p.findingId || !p.bindingId) throw new Error("findingId+bindingId required");
+      return mod.unbindEvidence({ root: p.outputRoot, findingId: p.findingId, bindingId: p.bindingId, expectedVersion: p.expectedVersion ?? 0 });
+    }
+    if (p.action === "reorder") {
+      if (!p.findingId || !p.order) throw new Error("findingId+order required");
+      return mod.reorderBindings({ root: p.outputRoot, findingId: p.findingId, expectedVersion: p.expectedVersion ?? 0, order: p.order });
+    }
+    if (p.action === "export") {
+      if (!p.findingId || !p.zipPath) throw new Error("findingId+zipPath required");
+      return mod.exportBindings({ root: p.outputRoot, findingId: p.findingId, zipPath: p.zipPath });
+    }
+    if (!p.findingId) throw new Error("findingId required");
+    const b = await mod.getBindings(p.outputRoot, p.findingId);
+    return b ?? { findingId: p.findingId, version: 0, bindings: [] };
   },
   workflow_guide: async () => {
     const { WORKFLOW_GUIDE } = await import("./workflow.js");

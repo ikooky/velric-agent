@@ -57,3 +57,74 @@ describe("gates operator parsing", () => {
     expect(g.interceptorGate.successValues).toContain("200");
   });
 });
+
+describe("trafficRecorder MITM", () => {
+  it("decrypts HTTPS via in-process CA and records the exchange", async () => {
+    const { TrafficRecorder, searchTraffic } = await import("../src/domain/trafficRecorder.js");
+    const { createOrLoadCA } = await import("../src/domain/mitm.js");
+    const forge = (await import("node-forge")).default;
+    const tls = await import("node:tls");
+    const { connect } = await import("node:net");
+    const { readFileSync } = await import("node:fs");
+    const dir = await mkdtemp(join(tmpdir(), "velric-mitm-"));
+
+    // self-signed HTTPS target
+    const tKeys = forge.pki.rsa.generateKeyPair(2048);
+    const tCert = forge.pki.createCertificate();
+    tCert.publicKey = tKeys.publicKey;
+    tCert.serialNumber = "77";
+    tCert.validity.notBefore = new Date();
+    tCert.validity.notAfter = new Date(Date.now() + 86400000);
+    tCert.setSubject([{ name: "commonName", value: "127.0.0.1" }]);
+    tCert.setIssuer([{ name: "commonName", value: "127.0.0.1" }]);
+    tCert.setExtensions([{ name: "subjectAltName", altNames: [{ type: 7, ip: "127.0.0.1" }] }]);
+    tCert.sign(tKeys.privateKey, forge.md.sha256.create());
+    const tlsServer = tls.createServer({ key: forge.pki.privateKeyToPem(tKeys.privateKey), cert: forge.pki.certificateToPem(tCert) }, (sock) => {
+      let buf = "";
+      sock.on("data", (d) => {
+        buf += d.toString();
+        if (buf.includes("\r\n\r\n")) {
+          sock.write("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 19\r\nConnection: close\r\n\r\nsecret-https-body-x");
+          sock.end();
+        }
+      });
+    });
+    await new Promise<void>((r) => tlsServer.listen(18993, "127.0.0.1", r));
+
+    const rec = new TrafficRecorder({ outputRoot: dir, mitm: true });
+    const port = await rec.start(0);
+
+    const result = await new Promise<{ clientGot: string }>((resolve, reject) => {
+      const sock = connect(port, "127.0.0.1", () => {
+        sock.write("CONNECT 127.0.0.1:18993 HTTP/1.1\r\nHost: 127.0.0.1:18993\r\n\r\n");
+      });
+      let hs = "";
+      let clientTls: import("node:tls").TLSSocket | null = null;
+      const timer = setTimeout(() => reject(new Error("timeout")), 15000);
+      sock.on("data", (d) => {
+        if (clientTls) return;
+        hs += d.toString();
+        if (hs.includes("200")) {
+          const caPem = readFileSync(join(dir, "mitm-ca.cert.pem"), "utf8");
+          clientTls = tls.connect({ socket: sock, rejectUnauthorized: false }, () => {
+            clientTls!.write("GET /mitm-test HTTP/1.1\r\nHost: 127.0.0.1:18993\r\nConnection: close\r\n\r\n");
+          });
+          clientTls.on("data", (dd) => { clearTimeout(timer); resolve({ clientGot: dd.toString().split("\r\n\r\n").pop() ?? "" }); });
+          clientTls.on("error", (e) => { clearTimeout(timer); reject(e); });
+        }
+      });
+      sock.on("error", (e) => { clearTimeout(timer); reject(e); });
+    });
+    expect(result.clientGot).toContain("secret-https-body-x");
+
+    await new Promise((r) => setTimeout(r, 800));
+    const q = await searchTraffic({ outputRoot: dir, text: "mitm-test" });
+    expect(q.total).toBeGreaterThanOrEqual(1);
+    const https = q.exchanges.find((e) => e.url.startsWith("https://"));
+    expect(https, "decrypted exchange recorded").toBeTruthy();
+    expect(https!.status).toBe(200);
+    expect(https!.respBodyBytes).toBe(19);
+    await rec.stop();
+    tlsServer.close();
+  });
+});
