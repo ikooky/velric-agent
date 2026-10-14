@@ -17,6 +17,8 @@ export interface HookConfig {
   readonly respMax: number;
   readonly extractUrlsFromResponse: boolean;
   readonly neutralizeVueRouter: boolean;
+  /** Record EventSource (SSE) endpoints instead of letting them hang. */
+  readonly recordSse: boolean;
   readonly observe: {
     readonly storageReads: boolean;
     readonly cookieReads: boolean;
@@ -39,6 +41,7 @@ export const DEFAULT_HOOK_CONFIG: HookConfig = {
   respMax: 600,
   extractUrlsFromResponse: true,
   neutralizeVueRouter: true,
+  recordSse: true,
   observe: { storageReads: false, cookieReads: false, xhrHeaders: true },
 };
 
@@ -311,6 +314,19 @@ const PARTS: readonly string[] = [
   "    };",
   "    return rawSend.apply(this, arguments);",
   "  };",
+  "  // --- SSE (EventSource) hook: record the endpoint, never subscribe ---",
+  "  const RawEventSource = window.EventSource;",
+  "  if (RawEventSource) {",
+  "    window.EventSource = function (url, cfg) {",
+  "      try { window.__API_RECON_LOG__.add('SSE ' + String(url).split('?')[0]); } catch (e) {}",
+  "      if (CONFIG.recordSse === false) return new RawEventSource(url, cfg);",
+  "      // Record-only stub: opening would hang the page for streaming APIs.",
+  "      const stub = new RawEventSource('data:text/event-stream,');",
+  "      stub.close();",
+  "      return stub;",
+  "    };",
+  "    window.EventSource.prototype = RawEventSource.prototype;",
+  "  }",
   "})();",
 ];
 

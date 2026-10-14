@@ -591,6 +591,87 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
         out(await readSqlite({ file: f, outputRoot: dir }));
         return 0;
       }
+      case "analyze-gates": {
+        const [jsDir, dir] = positional;
+        if (!jsDir || !dir) { console.error("usage: analyze-gates <jsDir> <outdir>"); return 2; }
+        const { analyzeGates } = await import("./domain/gates.js");
+        out(await analyzeGates({ jsDir, outputRoot: dir }));
+        return 0;
+      }
+      case "coverage": {
+        const [b, dir] = positional;
+        if (!b || !dir) { console.error("usage: coverage <baseUrl> <outdir> [--cookie C] [--chromium P] [--max N]"); return 2; }
+        const { runCoverage } = await import("./domain/coverage.js");
+        out(await runCoverage({ baseUrl: b, outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, chromiumPath: typeof flags.chromium === "string" ? flags.chromium : undefined, maxClicksPerCategory: num(flags.max), proxy: await resolveProxy(flags) }));
+        return 0;
+      }
+      case "site-map": {
+        const [b, dir] = positional;
+        if (!b || !dir) { console.error("usage: site-map <baseUrl> <outdir> [--mode m] [--app t]"); return 2; }
+        const { buildSiteMap } = await import("./domain/siteMap.js");
+        out(await buildSiteMap({ baseUrl: b, outputRoot: dir, runtimeMode: (flags.mode === "depth" || flags.mode === "coverage" || flags.mode === "both" ? flags.mode : "static-only"), appType: typeof flags.app === "string" ? flags.app : undefined }));
+        return 0;
+      }
+      case "traffic-recorder": {
+        const [dir] = positional;
+        if (!dir) { console.error("usage: traffic-recorder <outdir> [--port N] [--upstream P] [--max N] [--daemon] [--seconds S]"); return 2; }
+        const { TrafficRecorder } = await import("./domain/trafficRecorder.js");
+        const rec = new TrafficRecorder({ outputRoot: dir, port: num(flags.port), upstreamProxy: typeof flags.upstream === "string" ? flags.upstream : undefined, maxExchanges: num(flags.max) });
+        const port = await rec.start(num(flags.port) || 0);
+        console.error(`recorder listening on 127.0.0.1:${port}`);
+        if (flags.daemon) {
+          const secs = num(flags.seconds) || 3600;
+          await new Promise((r) => setTimeout(r, secs * 1000));
+        } else {
+          console.error("press Ctrl-C to stop; exchanges: " + rec.getExchanges().length);
+          await new Promise(() => {});
+        }
+        await rec.stop();
+        return 0;
+      }
+      case "asset-graph": {
+        const [dir, action] = positional;
+        if (!dir || !action) { console.error("usage: asset-graph <outdir> counts|query <type>|upsert <type> <value>|upsert_url <url>"); return 2; }
+        const { AssetStore } = await import("./domain/graphs.js");
+        const st = new AssetStore(dir);
+        await st.load();
+        if (action === "counts") { out(st.countsByType()); return 0; }
+        if (action === "query") { out(st.queryByType((positional[2] ?? "subdomain") as never).slice(0, 300)); return 0; }
+        if (action === "upsert") { st.upsert({ type: positional[2] as never, value: positional[3] ?? "" }); await st.save(); out({ ok: true }); return 0; }
+        if (action === "upsert_url") { st.upsertUrl(positional[2] ?? ""); await st.save(); out({ ok: true }); return 0; }
+        console.error("unknown action"); return 2;
+      }
+      case "exploration-graph": {
+        const [dir, action] = positional;
+        if (!dir || !action) { console.error("usage: exploration-graph <outdir> overview|add_node <kind> <summary>|add_edge <from> <rel> <to>|anchor <node> <asset>|lineage <node>|set_state <node> <state>"); return 2; }
+        const { ExplorationGraph } = await import("./domain/graphs.js");
+        const g = new ExplorationGraph(dir);
+        await g.load();
+        if (action === "overview") { out(g.overview()); return 0; }
+        if (action === "add_node") { const n = g.addNode(positional[2] as never, positional[3] ?? ""); await g.save(); out({ id: n.id }); return 0; }
+        if (action === "add_edge") { g.addEdge(positional[2] ?? "", positional[3] as never, positional[4] ?? ""); await g.save(); out({ ok: true }); return 0; }
+        if (action === "anchor") { g.anchor(positional[2] ?? "", positional[3] ?? ""); await g.save(); out({ ok: true }); return 0; }
+        if (action === "lineage") { out(g.lineage(positional[2] ?? "")); return 0; }
+        if (action === "set_state") { g.setState(positional[2] ?? "", positional[3] as never); await g.save(); out({ ok: true }); return 0; }
+        console.error("unknown action"); return 2;
+      }
+      case "evidence": {
+        const [dir, action] = positional;
+        if (!dir || !action) { console.error("usage: evidence <outdir> put <file> [tag]|get <hash>|list"); return 2; }
+        const { EvidenceStore } = await import("./domain/graphs.js");
+        const store = new EvidenceStore(dir);
+        await store.load();
+        if (action === "put") {
+          const { readFile: rf } = await import("node:fs/promises");
+          const blob = await store.put(await rf(positional[2] ?? ""), positional[3]);
+          await store.save();
+          out({ hash: blob.hash, bytes: blob.bytes });
+          return 0;
+        }
+        if (action === "get") { const b = await store.get(positional[2] ?? ""); out({ found: b !== null, bytes: b?.length ?? 0 }); return 0; }
+        if (action === "list") { out(store.entries()); return 0; }
+        console.error("unknown action"); return 2;
+      }
       default:
         console.error(`unknown command: ${command}\n`);
         console.log(USAGE);

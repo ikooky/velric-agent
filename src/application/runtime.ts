@@ -348,7 +348,7 @@ export const captureRuntime = async (
       details: allDetail.length,
       wsEndpoints: wsUniq,
       wsFrames: wsFrames.length,
-      sseEndpoints: [],
+      sseEndpoints: [...new Set([...allApis].filter((a) => a.startsWith("SSE ")).map((a) => a.slice(4)))],
       artifacts,
     };
   } finally {

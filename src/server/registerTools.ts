@@ -433,6 +433,107 @@ export const handlers: Readonly<Record<string, Handler>> = {
     const { readSqlite } = await import("../domain/sqliteRead.js");
     return readSqlite(p);
   },
+  analyze_gates: async (raw) => {
+    const p = z.object({ jsDir: z.string(), outputRoot: z.string() }).parse(raw);
+    const { analyzeGates } = await import("../domain/gates.js");
+    return analyzeGates(p);
+  },
+  run_coverage: async (raw) => {
+    const p = z.object({ baseUrl: z.string(), outputRoot: z.string(), hook: z.record(z.string(), z.unknown()).optional(), cookie: z.string().optional(), chromiumPath: z.string().optional(), maxClicksPerCategory: z.number().optional() }).parse(raw);
+    const { runCoverage } = await import("../domain/coverage.js");
+    return runCoverage(p);
+  },
+  build_site_map: async (raw) => {
+    const p = z.object({ baseUrl: z.string(), outputRoot: z.string(), runtimeMode: z.enum(["depth", "coverage", "both", "static-only"]).optional(), appType: z.string().optional(), limitations: z.string().optional() }).parse(raw);
+    const { buildSiteMap } = await import("../domain/siteMap.js");
+    return buildSiteMap(p);
+  },
+  traffic_record: async (raw) => {
+    const p = z.object({ outputRoot: z.string(), port: z.number().optional(), upstreamProxy: z.string().optional(), maxExchanges: z.number().optional() }).parse(raw);
+    const { TrafficRecorder } = await import("../domain/trafficRecorder.js");
+    const rec = new TrafficRecorder(p);
+    const port = await rec.start(p.port ?? 0);
+    // MCP 调用即启即停语义: 单次调用内录制窗口=请求生命周期; 长跑由 CLI 守进程
+    void rec;
+    return { port, note: "recorder bound; use CLI 'traffic-recorder --daemon' for long-running capture" };
+  },
+  asset_graph: async (raw) => {
+    const p = z.object({ outputRoot: z.string(), action: z.enum(["upsert", "upsert_url", "counts", "query"]), type: z.enum(["root_domain", "subdomain", "ip", "service", "app", "endpoint"]).optional(), value: z.string().optional(), parent: z.string().optional(), meta: z.record(z.string(), z.unknown()).optional(), taskTag: z.string().optional() }).parse(raw);
+    const { AssetStore } = await import("../domain/graphs.js");
+    const st = new AssetStore(p.outputRoot);
+    await st.load();
+    if (p.action === "upsert_url") {
+      if (!p.value) throw new Error("value required");
+      st.upsertUrl(p.value, p.taskTag);
+    } else if (p.action === "upsert") {
+      if (!p.type || !p.value) throw new Error("type+value required");
+      st.upsert({ type: p.type, value: p.value, parent: p.parent, taskTag: p.taskTag, meta: p.meta });
+    } else if (p.action === "counts") {
+      return { ok: true, counts: st.countsByType() };
+    } else if (p.action === "query") {
+      if (!p.type) throw new Error("type required");
+      return { ok: true, assets: st.queryByType(p.type).slice(0, 500).map((a) => ({ key: a.key, value: a.value, parent: a.parent })) };
+    }
+    await st.save();
+    return { ok: true };
+  },
+  exploration_graph: async (raw) => {
+    const p = z.object({ outputRoot: z.string(), action: z.enum(["add_node", "add_edge", "anchor", "set_state", "lineage", "overview"]), kind: z.enum(["goal", "intent", "fact", "finding", "hint"]).optional(), summary: z.string().optional(), payload: z.record(z.string(), z.unknown()).optional(), from: z.string().optional(), rel: z.enum(["spawns", "derived_from", "yields", "proves"]).optional(), to: z.string().optional(), nodeId: z.string().optional(), assetKey: z.string().optional(), state: z.enum(["open", "met", "dead", "pending"]).optional() }).parse(raw);
+    const { ExplorationGraph } = await import("../domain/graphs.js");
+    const g = new ExplorationGraph(p.outputRoot);
+    await g.load();
+    if (p.action === "add_node") {
+      if (!p.kind || !p.summary) throw new Error("kind+summary required");
+      const n = g.addNode(p.kind, p.summary, p.payload);
+      await g.save();
+      return { ok: true, node: { id: n.id, kind: n.kind, summary: n.summary } };
+    }
+    if (p.action === "add_edge") {
+      if (!p.from || !p.rel || !p.to) throw new Error("from+rel+to required");
+      g.addEdge(p.from, p.rel, p.to);
+      await g.save();
+      return { ok: true };
+    }
+    if (p.action === "anchor") {
+      if (!p.nodeId || !p.assetKey) throw new Error("nodeId+assetKey required");
+      g.anchor(p.nodeId, p.assetKey);
+      await g.save();
+      return { ok: true };
+    }
+    if (p.action === "set_state") {
+      if (!p.nodeId || !p.state) throw new Error("nodeId+state required");
+      g.setState(p.nodeId, p.state);
+      await g.save();
+      return { ok: true };
+    }
+    if (p.action === "lineage") {
+      if (!p.nodeId) throw new Error("nodeId required");
+      return { ok: true, lineage: g.lineage(p.nodeId) };
+    }
+    const ov = g.overview();
+    await g.save();
+    return { ok: true, overview: ov };
+  },
+  evidence_store: async (raw) => {
+    const p = z.object({ outputRoot: z.string(), action: z.enum(["put", "get", "list"]), file: z.string().optional(), hash: z.string().optional(), tag: z.string().optional() }).parse(raw);
+    const { EvidenceStore } = await import("../domain/graphs.js");
+    const store = new EvidenceStore(p.outputRoot);
+    await store.load();
+    if (p.action === "put") {
+      if (!p.file) throw new Error("file required");
+      const { readFile: rf } = await import("node:fs/promises");
+      const buf = await rf(p.file);
+      const blob = await store.put(buf, p.tag);
+      await store.save();
+      return { hash: blob.hash, bytes: blob.bytes };
+    }
+    if (p.action === "get") {
+      if (!p.hash) throw new Error("hash required");
+      const buf = await store.get(p.hash);
+      return { hash: p.hash, bytes: buf ? buf.length : 0, found: buf !== null };
+    }
+    return { entries: store.entries() };
+  },
   workflow_guide: async () => {
     const { WORKFLOW_GUIDE } = await import("./workflow.js");
     return WORKFLOW_GUIDE;

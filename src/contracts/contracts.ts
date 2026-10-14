@@ -671,6 +671,91 @@ export const sqliteReadContract: ToolContract = {
   examples: [{ title: "db", input: { file: "/tmp/recon/leak.db", outputRoot: "/tmp/recon" } }],
 };
 
+
+export const gatesContract: ToolContract = {
+  name: "analyze_gates",
+  title: "Auth-gate static analysis",
+  description:
+    "api-recon Phase 2 port: grep recipes over harvested JS locating the render/interceptor/content gates (storage keys, code fields, permission APIs) with suggested HookConfig patches. Writes gates_report.json.",
+  kind: "runtime",
+  inputSchema: z.object({ jsDir: z.string(), outputRoot, observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ storageKeys: z.number() }),
+  annotations: readOnlyAnnotations(),
+  examples: [{ title: "gates", input: { jsDir: "/tmp/recon/js", outputRoot: "/tmp/recon" } }],
+};
+
+export const coverageContract: ToolContract = {
+  name: "run_coverage",
+  title: "Interactive coverage enumeration",
+  description:
+    "api-recon Phase 3b port: drives headless Chromium through sidebar/tabs/table-actions/toolbar, records outbound API calls per interaction, builds the parameter trigger matrix. Writes coverage.json.",
+  kind: "runtime",
+  inputSchema: z.object({ baseUrl: z.string(), outputRoot, hook: z.record(z.string(), z.unknown()).optional(), cookie: z.string().optional(), chromiumPath: z.string().optional(), maxClicksPerCategory: z.number().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ interactions: z.number() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "cov", input: { baseUrl: "https://target/", outputRoot: "/tmp/recon" } }],
+};
+
+export const siteMapContract: ToolContract = {
+  name: "build_site_map",
+  title: "Structured site map",
+  description:
+    "api-recon Phase 5 deliverable: aggregates routes.txt/api_merged.txt/params_merged.json/coverage.json into one structured site_map.json (apis/params/features/limitations).",
+  kind: "runtime",
+  inputSchema: z.object({ baseUrl: z.string(), outputRoot, runtimeMode: z.enum(["depth", "coverage", "both", "static-only"]).optional(), appType: z.string().optional(), limitations: z.string().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ apis: z.number() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "map", input: { baseUrl: "https://target/", outputRoot: "/blobs/recon" } }],
+};
+
+export const trafficRecContract: ToolContract = {
+  name: "traffic_record",
+  title: "Traffic recording proxy",
+  description:
+    "velric platform port: forward proxy recording every exchange (full req/resp for HTTP, tunnel metadata for HTTPS) to traffic.ndjson + sha256 blob store. Long-running; returns bound port.",
+  kind: "runtime",
+  inputSchema: z.object({ outputRoot, port: z.number().optional(), upstreamProxy: z.string().optional(), maxExchanges: z.number().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ port: z.number() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "rec", input: { outputRoot: "/tmp/recon" } }],
+};
+
+export const assetGraphContract: ToolContract = {
+  name: "asset_graph",
+  title: "Asset graph store",
+  description:
+    "velric dual-graph port (asset side): global shared asset truth store — upsert root_domain/subdomain/ip/service/endpoint with computed dedup keys and host-chain linking; URL upsert auto-creates the chain. Persists asset_graph.json.",
+  kind: "runtime",
+  inputSchema: z.object({ outputRoot, action: z.enum(["upsert", "upsert_url", "counts", "query"]), type: z.enum(["root_domain", "subdomain", "ip", "service", "app", "endpoint"]).optional(), value: z.string().optional(), parent: z.string().optional(), meta: z.record(z.string(), z.unknown()).optional(), taskTag: z.string().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ ok: z.boolean() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "asset", input: { outputRoot: "/tmp/recon", action: "counts" } }],
+};
+
+export const expGraphContract: ToolContract = {
+  name: "exploration_graph",
+  title: "Exploration lineage graph",
+  description:
+    "velric dual-graph port (exploration side): per-run goal→intent→fact→finding lineage with spawns/derived_from/yields/proves edges and asset anchors; lineage/overview queries. Persists exploration_graph.json.",
+  kind: "runtime",
+  inputSchema: z.object({ outputRoot, action: z.enum(["add_node", "add_edge", "anchor", "set_state", "lineage", "overview"]), kind: z.enum(["goal", "intent", "fact", "finding", "hint"]).optional(), summary: z.string().optional(), payload: z.record(z.string(), z.unknown()).optional(), from: z.string().optional(), rel: z.enum(["spawns", "derived_from", "yields", "proves"]).optional(), to: z.string().optional(), nodeId: z.string().optional(), assetKey: z.string().optional(), state: z.enum(["open", "met", "dead", "pending"]).optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ ok: z.boolean() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "node", input: { outputRoot: "/tmp/recon", action: "add_node", kind: "goal", summary: "map target" } }],
+};
+
+export const evidenceContract: ToolContract = {
+  name: "evidence_store",
+  title: "Finding evidence store",
+  description:
+    "velric evidence port: sha256-addressed blob store for finding evidence (request/response/command output), deduped across findings, indexed in evidence_index.json.",
+  kind: "runtime",
+  inputSchema: z.object({ outputRoot, action: z.enum(["put", "get", "list"]), file: z.string().optional(), hash: z.string().optional(), tag: z.string().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ hash: z.string().nullable() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "put", input: { outputRoot: "/tmp/recon", action: "put", file: "/tmp/poc.txt" } }],
+};
+
 export const ALL_CONTRACTS: readonly ToolContract[] = [
   dnsResolveContract,
   httpProbeContract,
@@ -711,6 +796,13 @@ export const ALL_CONTRACTS: readonly ToolContract[] = [
   loginReplayContract,
   backupUnpackContract,
   sqliteReadContract,
+  gatesContract,
+  coverageContract,
+  siteMapContract,
+  trafficRecContract,
+  assetGraphContract,
+  expGraphContract,
+  evidenceContract,
   huntContract,
   huntRecordContract,
   huntOverviewContract,
