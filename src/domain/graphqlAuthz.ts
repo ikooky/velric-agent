@@ -98,8 +98,12 @@ export const probeGraphqlAuthz = async (input: GraphqlAuthzInput): Promise<Graph
     }
   }
 
-  const unauthed = anonymous.filter((a) => a.dataLeak).map((a) => `${a.kind}:${a.field}`);
-  const bodyStr = JSON.stringify({ probed: ops.length, anonymous, lowPriv, unauthed }, null, 2);
+  // Danger ranking: mutations that write/delete/reset are the escalation
+  // surface; plain read queries leaking anonymously are info-disclosure.
+  const DANGER_RE = /^(?:delete|remove|drop|update|set|reset|create|add|insert|put|post|grant|assign|revoke|promote|disable|enable|impersonate|makeAdmin|updateRole)/i;
+  const ranked = anonymous.filter((a) => a.dataLeak).map((a) => ({ op: `${a.kind}:${a.field}`, danger: a.kind === "mutation" && DANGER_RE.test(a.field) ? "high" : a.kind === "mutation" ? "medium" : "info" }));
+  const unauthed = ranked.map((r) => r.op);
+  const bodyStr = JSON.stringify({ probed: ops.length, anonymous, lowPriv, unauthed, unauthedRanked: ranked }, null, 2);
   const path = join(input.outputRoot, "graphql_authz.json");
   await writeFile(path, bodyStr, "utf8");
   return { probed: ops.length, anonymous, lowPriv, unauthed, artifacts: [{ path, bytes: Buffer.byteLength(bodyStr) }] };

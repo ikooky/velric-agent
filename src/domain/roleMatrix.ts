@@ -88,11 +88,10 @@ export const probeRoleMatrix = async (input: RoleMatrixInput): Promise<RoleMatri
     if (!url) continue;
     for (const role of roleNames) {
       const header = input.roles[role]!;
-      const isBearer = /^bearer /i.test(header) || !/^cookie/i.test(header);
       const r = await fetchUrl(url, {
         ...opts,
         method: "GET",
-        headers: isBearer && !/^cookie/i.test(header) ? { authorization: header } : { cookie: header.replace(/^cookie:\s*/i, "") },
+        headers: /^bearer /i.test(header) ? { authorization: header } : { cookie: header.replace(/^cookie:\s*/i, "") },
       });
       matrix.push({ role, endpoint: url, status: r.status, access: accessOf(r.status) });
     }
@@ -116,17 +115,15 @@ export const probeRoleMatrix = async (input: RoleMatrixInput): Promise<RoleMatri
   // DIFFERENTIAL itself: low-priv role allowed + high-priv semantics.
   const escalations: RoleMatrixResult["escalations"] = [];
   const roleRank = (n: string): number => n.toLowerCase().indexOf("admin") >= 0 || n.toLowerCase().indexOf("root") >= 0 ? 1 : 0;
+  // A denied role's verdict only counts when its credential WORKS somewhere
+  // (allowed on >=1 other endpoint) — otherwise "denied everywhere" is just
+  // an expired cookie, not evidence of enforcement.
+  const credentialWorks = (role: string): boolean => matrix.some((m) => m.role === role && m.access === "allowed");
   for (const a of accessByEndpoint) {
+    const credibleDenied = a.deniedRoles.filter(credentialWorks);
     for (const r of a.allowedRoles) {
-      if (roleRank(r) === 0 && a.deniedRoles.length > 0) {
-        // low-priv allowed while SOMEONE is denied — suspicious but the
-        // denied one may just be an invalid cookie. Only flag when the
-        // denied set includes a role that is otherwise broadly successful
-        // (i.e. its cookie works elsewhere).
-        const deniedCells = matrix.filter((m) => m.role === r && m.access === "denied");
-        const deniedOkElsewhere = matrix.some((m) => m.role !== r && m.access === "allowed" && a.deniedRoles.includes(m.role));
-        void deniedCells; void deniedOkElsewhere;
-        escalations.push({ endpoint: a.endpoint, role: r, note: "low-priv role allowed on permission endpoint — verify against declared model" });
+      if (roleRank(r) === 0 && credibleDenied.length > 0) {
+        escalations.push({ endpoint: a.endpoint, role: r, note: `low-priv role allowed while ${credibleDenied.join(",")} (valid creds) denied — verify against declared model` });
       }
     }
   }

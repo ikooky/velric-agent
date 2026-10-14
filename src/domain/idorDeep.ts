@@ -96,6 +96,12 @@ export const probeIdorDeep = async (input: IdorDeepInput): Promise<IdorDeepResul
       const baseCall = await fetchUrl(url.toString(), { ...opts, method, body: baseBody });
       if (baseCall.status === 0 || baseCall.status >= 400) continue;
       const baseFp = `${baseCall.status}:${baseCall.sha256?.slice(0, 16) ?? ""}`;
+      // Baseline stability: fetch the SAME url twice — if the body hash moves
+      // between two identical requests the endpoint embeds per-request noise
+      // (timestamp/nonce/render id) and raw-hash differentials are worthless;
+      // degrade to status-only verdicts for this endpoint.
+      const baseCall2 = await fetchUrl(url.toString(), { ...opts, method, body: baseBody });
+      const noisy = baseCall2.status === baseCall.status && (baseCall2.sha256?.slice(0, 16) ?? "") !== (baseCall.sha256?.slice(0, 16) ?? "");
 
       for (const v of variantsOf(original, objectIds)) {
         let target: string;
@@ -114,7 +120,8 @@ export const probeIdorDeep = async (input: IdorDeepInput): Promise<IdorDeepResul
         if (r.status === 0) continue;
         const fp = `${r.status}:${r.sha256?.slice(0, 16) ?? ""}`;
         const common = { url: target, method: e.method, param: id.kind === "path" ? `segment:${original}` : id.name, location: id.kind, original, variant: v, originalStatus: baseCall.status, variantStatus: r.status };
-        if (fp === baseFp) {
+        const effFp = noisy ? `${r.status}:` : fp;
+        if (effFp === (noisy ? `${baseCall.status}:` : baseFp)) {
           candidates.push({ ...common, contentDiff: false, verdict: "same-response" });
         } else if (r.status === 404) {
           candidates.push({ ...common, contentDiff: false, verdict: "not-found" });
