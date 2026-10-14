@@ -845,6 +845,30 @@ export const replayTamperContract: ToolContract = {
   examples: [{ title: "replay", input: { recordRoot: "/tmp/recon", outputRoot: "/tmp/recon" } }],
 };
 
+export const wafAdaptContract: ToolContract = {
+  name: "waf_adapt",
+  title: "WAF-adaptive payload delivery",
+  description:
+    "Fires a payload, fingerprints WAF interception (cloudflare/aws/akamai/imperva/f5/sucuri/modsecurity + generic), retries through a deterministic mutation ladder (case-vary, inline-comment, url/double/hex encode, unicode, charcode, whitespace, null-byte) until the payload gets a non-WAF response. Writes waf_adapt.json.",
+  kind: "runtime",
+  inputSchema: z.object({ url: z.string(), payload: z.string(), outputRoot, param: z.string().optional(), in: z.enum(["query", "body", "header", "path"]).optional(), method: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxAttempts: z.number().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ deliveredBy: z.string().nullable(), wafFingerprint: z.object({ name: z.string() }).nullable() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "waf", input: { url: "https://target/search?q=1", payload: "1' UNION SELECT--", outputRoot: "/tmp/recon" } }],
+};
+
+export const sessionCrawlContract: ToolContract = {
+  name: "session_crawl",
+  title: "Session-keeping deep crawl",
+  description:
+    "Authenticated crawler with live session maintenance: re-login on 401/login-redirect expiry, token refresh tracking, BFS over the endpoint surface (merged.json or explicit list) with same-origin link extraction. Keeps crawling where the anonymous spider stops. Writes session_crawl.json.",
+  kind: "runtime",
+  inputSchema: z.object({ baseUrl: z.string(), outputRoot, loginUrl: z.string(), username: z.string(), password: z.string(), loginMode: z.enum(["form", "json"]).optional(), usernameField: z.string().optional(), passwordField: z.string().optional(), endpoints: z.array(z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxPages: z.number().optional(), maxRelogins: z.number().optional(), headers: z.record(z.string(), z.string()).optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ crawled: z.number(), relogins: z.number() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "crawl", input: { baseUrl: "https://target", outputRoot: "/tmp/recon", loginUrl: "https://target/login", username: "u", password: "p" } }],
+};
+
 export const deobfContract: ToolContract = {
   name: "deobfuscate_js",
   title: "JS deobfuscation pre-pass",
@@ -1021,6 +1045,8 @@ export const ALL_CONTRACTS: readonly ToolContract[] = [
   oobConfirmContract,
   replayTamperContract,
   deobfContract,
+  wafAdaptContract,
+  sessionCrawlContract,
   roleMatrixContract,
   jwtAttackContract,
   idorDeepContract,

@@ -631,6 +631,16 @@ export const handlers: Readonly<Record<string, Handler>> = {
     const { replayTamper } = await import("../domain/replayTamper.js");
     return replayTamper({ ...p, rules: (p.rules ?? []).map((x) => ({ ...x, label: x.label ?? `${x.field}=${String(x.value)}` })) });
   },
+  waf_adapt: async (raw) => {
+    const p = z.object({ url: z.string(), payload: z.string(), outputRoot: z.string(), param: z.string().optional(), in: z.enum(["query", "body", "header", "path"]).optional(), method: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxAttempts: z.number().optional() }).parse(raw);
+    const { probeWafAdapt } = await import("../domain/wafAdapt.js");
+    return probeWafAdapt(p);
+  },
+  session_crawl: async (raw) => {
+    const p = z.object({ baseUrl: z.string(), outputRoot: z.string(), loginUrl: z.string(), username: z.string(), password: z.string(), loginMode: z.enum(["form", "json"]).optional(), usernameField: z.string().optional(), passwordField: z.string().optional(), endpoints: z.array(z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxPages: z.number().optional(), maxRelogins: z.number().optional(), headers: z.record(z.string(), z.string()).optional() }).parse(raw);
+    const { crawlSession } = await import("../domain/sessionCrawl.js");
+    return crawlSession(p);
+  },
   deobfuscate_js: async (raw) => {
     const p = z.object({ jsDir: z.string(), outputRoot: z.string(), maxFiles: z.number().optional(), maxFileBytes: z.number().optional() }).parse(raw);
     const { deobfuscateCorpus } = await import("../domain/deobf.js");
