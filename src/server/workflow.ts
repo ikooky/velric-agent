@@ -9,54 +9,49 @@ export const WORKFLOW_GUIDE = `# velric-agent 侦察工作流
 
 宿主 agent 请先通读本指南再调工具。工具不是孤立的——它们有明确的阶段依赖与门禁。
 
-## Phase 0 — 分类
-先判断目标类型:
-- SPA(重 script bundle、__NUXT__/__NEXT_DATA__/data-v-app 标记) → 走 Phase 1 harvest
-- MPA(服务端表单、少量脚本) → 走 Phase 1 spider
-- 拿不准 → auto_recon 自动分类分流(推荐起点)
+## Phase 0 — 指纹与分类
+- \`fingerprint\` 先行:WAF/CDN 在位识别(命中则全局限速降并发)、HTTP 方法枚举、Cookie 安全审计
+- 判断目标类型:SPA(重 script bundle、__NUXT__/__NEXT_DATA__/data-v-app 标记) → 走 Phase 1 harvest;MPA(服务端渲染多页) → 走 spider
 
-## Phase 1 — 静态
-SPA: harvest_static 下载 JS bundle → extract_routes 提路由 → api_static.txt 端点清单
-MPA: spider_mpa 爬页面 → forms.txt 表单参数 + api_inline.txt 内联接口
-产出: 端点清单、路由表、chunkmap。
+## Phase 1 — 资产面
+- 域名种子 → \`subdomain_enum\`(crt.sh + CNAME 链 + 词表爆破)
+- IP/主机 → \`port_scan\`(非 Web 开放端口直出 finding)
+- 历史面 → \`wayback_urls\`(死接口/老管理面回收)
+- \`enrich_assets\` 建资产图,后续工具以它为轴
 
-### Phase 1b — 参数逆向
-以 path 为锚扩窗找组包对象: grep '(params|data|body)\\\\s*:\\\\s*\\\\{' 。候选字段 → param_candidates。
-传输形态标注: query|json|form|graphql|multipart|encrypted。
-必填/可选的结论必须等 Phase 3 多样本 + Phase 5 合并。
+## Phase 2 — 静态侦察
+- SPA → \`harvest_static\`(bundle 提取 API/路由,内置 robots/sitemap 合并 + secrets 正则扫描)
+- MPA → \`spider_mpa\` + \`extract_routes\`
+- \`probe_paths\` 敏感路径(soft-404 校准后仍 200 才算命中;401/403 = 存在但受保护)
+- \`detect_sourcemaps\` 生产 .map 泄漏检测
 
-## Phase 2 — 鉴权三道门
-在收割的 JS 里 grep:
-- 渲染门: isLogin/getToken/cookie/localStorage → 怎么判断已登录
-- 拦截器门: response_code/errno/axios interceptor → 什么触发跳 /login
-- 内容门: menu/permission/role/acl/routes → 菜单权限从哪来
+## Phase 3 — 运行时
+- \`capture_runtime\`(需 Chromium)抓真实 XHR/fetch/WS 帧;无浏览器时静态面兜底
+- \`merge_params\` 汇参数矩阵
+- \`ws_schema\` 把 WS 帧解析成字段表(私有协议接口文档)
 
-## Phase 3 — 运行时(须已过 Phase 1,有 routes 喂给 --routes)
-capture_runtime 无头浏览器录制真实流量 → runtime_api.json + param_samples.json。
-重 SPA 建议 --wait 5000-8000 --per-route 2500+。非标准 API 风格用 --api-pattern(如 Discourse 的 .json 后缀)。
-参数触发矩阵: 列表首屏/搜索/高级筛选/新建编辑各录一次,diff 出 optional。
+## Phase 4 — 深化验证
+- \`probe_params\` 参数差分(必填/开关参数识别)
+- \`auth_probe\` 鉴权面测绘(匿名可达 vs 需鉴权清单)
+- \`idor_prescreen\` IDOR 候选预筛(只读差分,候选交宿主复核)
+- \`git_restore\` 泄漏 .git 源码还原
+- \`dom_sinks\` DOM-XSS 污点链静态扫描
+- \`jwt_inspect\` JWT 解码 + 弱密钥爆破
+- \`probe_cors\` CORS 配置缺陷
 
-## Phase 4 — 权限树
-build_perm_tree 从 JS 权限模块重建权限层级(userRouteAuth 或通用 RBAC: hasPermi/roles 守卫)。
-产出 permissions_tree.json + 放行 stub。
+## 收尾
+- \`gen_report\` + \`save_evidence\`(sha256 寻址证据 blob);\`run_diff\` 对比两次 run 的面变更
+- 多目标 → \`auto_batch\`(每目标一目录 + 汇总对比)
+- 全链一条龙 → \`auto_recon\`(异步)+ \`auto_status\` 轮询;stage 级 checkpoint 断点续跑
 
-## Phase 5 — 合并与报告
-- merge_params: param_samples.json 多样本合并 → 端点参数矩阵(置信度标注)
-- enrich_assets: 种子 → 资产图(DNS+HTTP)
-- gen_report: findings → report.md
-- save_evidence: sha256 证据留存
-- auto_recon: 一条命令走完 0→5(deterministic 管道)
-- hunt: LLM 编排版(planner/worker 循环,自主派意图+反幻觉闸门) — 宿主只需给 goal
-
-## 纪律
-- 初次受阻(404/被过滤/无回显)≠此路不通:换编码/方法/参数/路径走完再判死路。
-- 观察分 observed(直接看到)/inferred(推断)。证伪与证实同等有价值。
-- 发现只记增量;换措辞重记已有结论=污染。
-- 确认漏洞必须真实触发过+可复现证据;版本号/CVE 匹配、"看起来可注入"严禁当 finding。
-- 串行利用链分步推进:后一步依赖前一步的实际产出,前置不存在就别假想后续。
-- 路线多样:2-3 条机理不同的路线并存,某条交出逼近目标的实证再聚焦。
-- 封锁路线不无理由重试:只有材料性新机理(新入口/新参数/明显不同构造)才重开。
+## 门禁(不可绕过)
+1. 观察台账反幻觉闸门:宿主叙述的事实/PoC URL 必须来自台账真实记录,状态码一致,否则 drop
+2. 响应状态码必须真实可见才可写入结论;软 404 页面不得当作命中
+3. 所有输出到 report 的条目须带证据(文件/URL/状态码)
+4. 诚实报告:各阶段数量、未覆盖模块、每条结论的来源(静态/运行时/合并)
+5. secrets/dom-sinks/idor 类预筛结果 = 候选,不是实锤,须宿主复核后才可升级结论
 `;
+
 
 /** Server-level instructions (shown in initialize handshake). */
 export const SERVER_INSTRUCTIONS = `velric-agent — Agent 自主渗透测试工具包(API 面侦察)。
@@ -79,6 +74,7 @@ export const PHASE_TAGS: Record<string, string> = {
   gen_report: "[Phase 5 报告] 消费 findings JSON;收尾用",
   save_evidence: "[Phase 5 存证] 任意阶段产物均可存证",
   auto_recon: "[Phase 0-5 全链路] 确定性管道,一条命令;新手起点",
+  auto_status: "[Phase * 轮询] auto_recon 异步状态:pipeline.json 进度/阶段明细/耗时",
   hunt_begin: "[Phase 0-5 全链路·宿主驱动] 开局必调:建图+返回驱动手册(planner/worker 纪律)",
   hunt_record: "[Phase 0-5 写回] 带防幻觉闸门:URL 必须在台账、observed 须引系统记录",
   hunt_overview: "[Phase 0-5 态势] 每轮先读:目标/意图/事实/发现全貌",

@@ -1,7 +1,6 @@
 import { createHmac } from "node:crypto";
 import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { fetchUrl } from "../adapters/http.js";
 
 /** JWT analysis: decode payloads from harvested tokens (secret-scan bycatch),
  *  weak-HS256 dictionary crack, alg=none detection. All local except optional
@@ -42,19 +41,6 @@ const WEAK_SECRETS = [
   "hello", "freedom", "whatever", "qazwsx", "trustno1", "baseball", "shadow",
   "hnweb", "jwt", "sign", "signin", "auth", "sso", "passport", "session",
 ];
-
-const crack = (token: string): string | null => {
-  const [h, p, s] = token.split(".");
-  if (!h || !p || !s) return null;
-  const header = JSON.parse(b64u(h).toString("utf8")) as { alg?: string };
-  if (!header.alg?.toUpperCase().startsWith("HS")) return null;
-  const signingInput = `${h}.${p}`;
-  for (const w of WEAK_SECRETS) {
-    const sig = createHmac("sha256", w).update(signingInput).digest("base64url");
-    if (sig === s) return w;
-  }
-  return null;
-};
 
 export const inspectJwt = async (input: JwtInspectInput): Promise<JwtInspectResult> => {
   await mkdir(input.outputRoot, { recursive: true });

@@ -131,7 +131,7 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
           await httpProbe({
             url,
             cookie: typeof flags.cookie === "string" ? flags.cookie : undefined,
-            proxy: typeof flags.proxy === "string" ? flags.proxy : undefined,
+            proxy: await resolveProxy(flags),
             timeoutMs: typeof flags.timeout === "string" ? Number(flags.timeout) : undefined,
           }),
         );
@@ -147,7 +147,7 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
           await harvestStatic({
             baseUrl: base,
             outputRoot: dir,
-            proxy: typeof flags.proxy === "string" ? flags.proxy : undefined,
+            proxy: await resolveProxy(flags),
             cookie: typeof flags.cookie === "string" ? flags.cookie : undefined,
             timeoutMs: typeof flags.timeout === "string" ? Number(flags.timeout) : undefined,
           }),
@@ -196,7 +196,7 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
             baseUrl: base,
             outputRoot: dir,
             cookie: typeof flags.cookie === "string" ? flags.cookie : undefined,
-            proxy: typeof flags.proxy === "string" ? flags.proxy : undefined,
+            proxy: await resolveProxy(flags),
             maxPages: typeof flags.max === "string" ? Number(flags.max) : undefined,
             depth: typeof flags.depth === "string" ? Number(flags.depth) : undefined,
             exclude: typeof flags.exclude === "string" ? flags.exclude : undefined,
@@ -221,7 +221,7 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
             baseUrl: base,
             outputRoot: dir,
             chromiumPath: typeof flags.chromium === "string" ? flags.chromium : undefined,
-            proxy: typeof flags.proxy === "string" ? flags.proxy : undefined,
+            proxy: await resolveProxy(flags),
             routes: strList(flags.routes),
             maxRoutes: num(flags["max-routes"]),
             waitMs: num(flags.wait),
@@ -271,7 +271,7 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
           await enrichAssets({
             seeds,
             outputRoot: dir,
-            proxy: typeof flags.proxy === "string" ? flags.proxy : undefined,
+            proxy: await resolveProxy(flags),
             cookie: typeof flags.cookie === "string" ? flags.cookie : undefined,
             timeoutMs: num(flags.timeout),
             http: flags["no-http"] !== true,
@@ -317,7 +317,7 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
             seed,
             outputRoot: dir,
             chromiumPath: typeof flags.chromium === "string" ? flags.chromium : undefined,
-            proxy: typeof flags.proxy === "string" ? flags.proxy : undefined,
+            proxy: await resolveProxy(flags),
             cookie: typeof flags.cookie === "string" ? flags.cookie : undefined,
             timeoutMs: num(flags.timeout),
             skipRuntime: flags["skip-runtime"] === true,
@@ -349,7 +349,7 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
             mergedFile,
             outputRoot: dir,
             cookie: typeof flags.cookie === "string" ? flags.cookie : undefined,
-            proxy: typeof flags.proxy === "string" ? flags.proxy : undefined,
+            proxy: await resolveProxy(flags),
             timeoutMs: num(flags.timeout),
             maxEndpoints: num(flags.max),
           }),
@@ -363,7 +363,7 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
           return 2;
         }
         const { discoverSubdomains } = await import("./domain/subdomains.js");
-        out(await discoverSubdomains({ domain, outputRoot: dir, proxy: typeof flags.proxy === "string" ? flags.proxy : undefined }));
+        out(await discoverSubdomains({ domain, outputRoot: dir, proxy: await resolveProxy(flags) }));
         return 0;
       }
       case "port-scan": {
@@ -384,7 +384,7 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
           return 2;
         }
         const { probePaths } = await import("./domain/pathProbe.js");
-        out(await probePaths({ baseUrl: base, outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, proxy: typeof flags.proxy === "string" ? flags.proxy : undefined }));
+        out(await probePaths({ baseUrl: base, outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, proxy: await resolveProxy(flags) }));
         return 0;
       }
       case "cors": {
@@ -394,7 +394,7 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
           return 2;
         }
         const { probeCors } = await import("./domain/cors.js");
-        out(await probeCors({ baseUrl: base, outputRoot: dir, proxy: typeof flags.proxy === "string" ? flags.proxy : undefined }));
+        out(await probeCors({ baseUrl: base, outputRoot: dir, proxy: await resolveProxy(flags) }));
         return 0;
       }
       case "fingerprint": {
@@ -404,7 +404,7 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
           return 2;
         }
         const { fingerprint } = await import("./domain/fingerprint.js");
-        out(await fingerprint({ baseUrl: base, outputRoot: dir, proxy: typeof flags.proxy === "string" ? flags.proxy : undefined }));
+        out(await fingerprint({ baseUrl: base, outputRoot: dir, proxy: await resolveProxy(flags) }));
         return 0;
       }
       case "wayback": {
@@ -414,7 +414,7 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
           return 2;
         }
         const { fetchWayback } = await import("./domain/sourcemap.js");
-        out(await fetchWayback({ target, outputRoot: dir, maxUrls: num(flags.max), proxy: typeof flags.proxy === "string" ? flags.proxy : undefined }));
+        out(await fetchWayback({ target, outputRoot: dir, maxUrls: num(flags.max), proxy: await resolveProxy(flags) }));
         return 0;
       }
       case "sourcemaps": {
@@ -424,7 +424,7 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
           return 2;
         }
         const { detectSourceMaps } = await import("./domain/sourcemap.js");
-        out(await detectSourceMaps({ outputRoot: outDir, jsDir: dir, baseUrl: typeof flags.base === "string" ? flags.base : undefined, proxy: typeof flags.proxy === "string" ? flags.proxy : undefined }));
+        out(await detectSourceMaps({ outputRoot: outDir, jsDir: dir, baseUrl: typeof flags.base === "string" ? flags.base : undefined, proxy: await resolveProxy(flags) }));
         return 0;
       }
       case "auto-batch": {
@@ -437,7 +437,7 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
         out(await runBatch({
           seedsFile, outputRoot: dir,
           chromiumPath: typeof flags.chromium === "string" ? flags.chromium : undefined,
-          proxy: typeof flags.proxy === "string" ? flags.proxy : undefined,
+          proxy: await resolveProxy(flags),
           cookie: typeof flags.cookie === "string" ? flags.cookie : undefined,
           skipRuntime: flags["skip-runtime"] === true,
           notifyWebhook: typeof flags.notify === "string" ? flags.notify : undefined,

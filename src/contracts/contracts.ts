@@ -199,7 +199,7 @@ export const autoPipelineContract: ToolContract = {
   name: "auto_recon",
   title: "Autonomous recon pipeline",
   description:
-    "Starts the full recon pipeline asynchronously (returns immediately; poll auto_status until state=done): enrich asset graph → classify SPA/MPA → static recon (harvest/spider) → runtime capture → perm tree + param matrix → findings/report/evidence. State lives in outputRoot only.",
+    "Starts the full recon pipeline asynchronously (returns immediately; poll auto_status until state=done): fingerprint → subdomains → enrich → classify → harvest/spider → runtime → perm tree + params → sensitive paths → CORS → sourcemaps → auth surface → dom sinks → JWT → findings/report/evidence. Stage-level checkpoint (resume by default, --fresh to rerun). State lives in outputRoot only.",
   kind: "runtime",
   inputSchema: z.object({
     observationLedgerRoot: z.string().optional().describe("auto-record touched URLs into the hunt observation ledger"),
@@ -384,7 +384,7 @@ export const subdomainsContract: ToolContract = {
   name: "subdomain_enum",
   title: "Subdomain enumeration",
   description:
-    "crt.sh certificate transparency + CNAME chain walking + high-frequency wordlist DNS brute (~140 prefixes: api/dev/admin/uat/gray/jenkins/k8s/grafana...). Writes subdomains.txt.",
+    "crt.sh certificate transparency + CNAME chain walking + high-frequency wordlist DNS brute (142 prefixes: api/dev/admin/uat/gray/jenkins/k8s/grafana...). Writes subdomains.txt.",
   kind: "runtime",
   inputSchema: z.object({ domain: z.string(), outputRoot, observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ total: z.number() }),
@@ -396,7 +396,7 @@ export const portScanContract: ToolContract = {
   name: "port_scan",
   title: "TCP port scan",
   description:
-    "TCP connect scan of top ~65 ports (web/db/middleware/admin). Non-web open ports (redis/mongodb/es...) are direct findings. Writes ports_open.txt.",
+    "TCP connect scan of top 67 ports (web/db/middleware/admin). Non-web open ports (redis/mongodb/es...) are direct findings. Writes ports_open.txt.",
   kind: "runtime",
   inputSchema: z.object({ host: z.string(), outputRoot, ports: z.array(z.number()).optional(), observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ open: z.number() }),
@@ -408,7 +408,7 @@ export const pathsContract: ToolContract = {
   name: "probe_paths",
   title: "Sensitive path probing",
   description:
-    "Built-in ~60 high-signal paths (.git/config, .env, swagger, actuator, druid, phpinfo, backup dumps...) with soft-404 calibration (random-path baseline; isomorphic responses are not findings). Writes sensitive_paths.txt.",
+    "Built-in 65 high-signal paths (.git/config, .env, swagger, actuator, druid, phpinfo, backup dumps...) with soft-404 calibration (random-path baseline; isomorphic responses are not findings). Writes sensitive_paths.txt.",
   kind: "runtime",
   inputSchema: z.object({ baseUrl: z.string(), outputRoot, paths: z.array(z.string()).optional(), cookie: z.string().optional(), observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ found: z.number() }),
