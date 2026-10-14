@@ -626,6 +626,16 @@ export const handlers: Readonly<Record<string, Handler>> = {
     const b = await mod.getBindings(p.outputRoot, p.findingId);
     return b ?? { findingId: p.findingId, version: 0, bindings: [] };
   },
+  replay_tamper: async (raw) => {
+    const p = z.object({ recordRoot: z.string(), outputRoot: z.string(), exchangeIds: z.array(z.string()).optional(), rules: z.array(z.object({ field: z.string(), in: z.enum(["body", "query"]), value: z.union([z.string(), z.number(), z.boolean(), z.null()]), label: z.string().optional() })).optional(), cookie: z.string().optional(), extraHeaders: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxExchanges: z.number().optional() }).parse(raw);
+    const { replayTamper } = await import("../domain/replayTamper.js");
+    return replayTamper({ ...p, rules: (p.rules ?? []).map((x) => ({ ...x, label: x.label ?? `${x.field}=${String(x.value)}` })) });
+  },
+  deobfuscate_js: async (raw) => {
+    const p = z.object({ jsDir: z.string(), outputRoot: z.string(), maxFiles: z.number().optional(), maxFileBytes: z.number().optional() }).parse(raw);
+    const { deobfuscateCorpus } = await import("../domain/deobf.js");
+    return deobfuscateCorpus(p);
+  },
   oob_confirm: async (raw) => {
     const p = z.object({ url: z.string(), outputRoot: z.string(), payloads: z.array(z.string()), positions: z.array(z.object({ param: z.string(), in: z.enum(["query", "body", "header", "path"]) })).optional(), method: z.string().optional(), body: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), pollMs: z.number().optional() }).parse(raw);
     const { probeOob } = await import("../domain/oobConfirm.js");
