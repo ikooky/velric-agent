@@ -30,6 +30,7 @@ const SOURCES = [
 ] as const;
 
 const SINKS: ReadonlyArray<readonly [string, RegExp]> = [
+  ["postMessage-no-origin", /postMessage\s*\(\s*[\s\S]{0,120}?\)\s*;/],
   ["innerHTML", /\.innerHTML\s*=/],
   ["outerHTML", /\.outerHTML\s*=/],
   ["document.write", /document\.write(?:ln)?\s*\(/],
@@ -51,6 +52,20 @@ const CHAIN_WINDOW = 600;
 const scanFile = (file: string, text: string): Pick<DomSinkResult, "chains" | "sinks"> => {
   const chains: DomSinkResult["chains"] = [];
   const sinks: DomSinkResult["sinks"] = [];
+  // postMessage listener origin-validation check: an addEventListener('message')
+  // handler that never reads event.origin accepts messages from any sender.
+  {
+    const listenerRe = /addEventListener\s*\(\s*['"]message['"]\s*,\s*([\w$]+|(?:function\s*\([^)]*\)|\([^)]*\)\s*=>))[,)]/g;
+    let m: RegExpExecArray | null;
+    while ((m = listenerRe.exec(text)) !== null) {
+      const handlerName = m[1]!;
+      if (handlerName.startsWith("(") || handlerName.startsWith("function")) continue; // inline — approximate window check
+      const handlerBody = text.slice(m.index, m.index + 2500);
+      if (!/\.origin\s*(?:===|!==|==|!=|includes|startsWith|endsWith|indexOf)/.test(handlerBody)) {
+        chains.push({ file: basename(file), source: "postMessage", sink: "message-listener-no-origin-check", excerpt: handlerBody.slice(0, 120).replace(/\s+/g, " ") });
+      }
+    }
+  }
   for (const [sinkName, sinkRe] of SINKS) {
     let count = 0;
     const g = new RegExp(sinkRe.source, sinkRe.flags.includes("g") ? sinkRe.flags : sinkRe.flags + "g");

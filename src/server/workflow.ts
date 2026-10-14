@@ -94,5 +94,9 @@ export const PHASE_TAGS: Record<string, string> = {
   dom_sinks: "[Phase 4 深化] DOM-XSS 污点链:source→sink 静态分析",
   jwt_inspect: "[Phase 4 深化] JWT 解码+弱密钥爆破+alg=none 检测",
   ws_schema: "[Phase 4 深化] WS 帧字段 schema:私有协议接口文档",
+  probe_oidc: "[Phase 4 深化] OAuth/OIDC/SAML 配置发现与弱配置检查",
+  probe_smuggle: "[Phase 4 深化] 请求走私差分:规范化变体+CL/TE 组合",
+  archive_recover: "[辅助] 被墙页面恢复:Wayback/archive.today 阶梯",
+  ws_origin_check: "[Phase 4 深化] WS 跨域校验(CSWSH 预筛)+认证位置标注",
   workflow_guide: "[必读] 返回完整方法论(Phase 0-5+纪律);开局先调这个",
 };

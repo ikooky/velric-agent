@@ -45,6 +45,10 @@ export const SENSITIVE_PATHS: readonly string[] = [
   "/backup.sql", "/backup.zip", "/dump.sql", "/db.sql", "/database.sql",
   "/WEB-INF/web.xml", "/META-INF/", "/composer.json", "/package.json",
   "/.well-known/security.txt", "/sitemap.xml", "/sitemap_index.xml",
+  "/.well-known/openid-configuration",
+  "/.well-known/oauth-authorization-server",
+  "/saml/metadata",
+  "/.well-known/security.txt",
 ];
 
 /** Body signature robust to embedded random tokens: bucket by length bands +

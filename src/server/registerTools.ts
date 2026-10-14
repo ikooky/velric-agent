@@ -383,6 +383,26 @@ export const handlers: Readonly<Record<string, Handler>> = {
     const { extractWsSchema } = await import("../domain/wsSchema.js");
     return extractWsSchema(p);
   },
+  probe_oidc: async (raw) => {
+    const p = z.object({ baseUrl: z.string(), outputRoot: z.string(), proxy: z.string().optional() }).parse(raw);
+    const { probeOidc } = await import("../domain/oidc.js");
+    return probeOidc(p);
+  },
+  probe_smuggle: async (raw) => {
+    const p = z.object({ baseUrl: z.string(), outputRoot: z.string(), proxy: z.string().optional() }).parse(raw);
+    const { probeSmuggle } = await import("../domain/smuggle.js");
+    return probeSmuggle(p);
+  },
+  archive_recover: async (raw) => {
+    const p = z.object({ url: z.string(), outputRoot: z.string(), proxy: z.string().optional() }).parse(raw);
+    const { recoverUrl } = await import("../domain/archive.js");
+    return recoverUrl(p);
+  },
+  ws_origin_check: async (raw) => {
+    const p = z.object({ url: z.string(), outputRoot: z.string(), headers: z.record(z.string(), z.string()).optional() }).parse(raw);
+    const { probeWsOrigin } = await import("../domain/wsOrigin.js");
+    return probeWsOrigin(p);
+  },
   workflow_guide: async () => {
     const { WORKFLOW_GUIDE } = await import("./workflow.js");
     return WORKFLOW_GUIDE;

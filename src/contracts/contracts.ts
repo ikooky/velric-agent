@@ -549,6 +549,55 @@ export const wsSchemaContract: ToolContract = {
   examples: [{ title: "ws", input: { runtimeFile: "/tmp/recon/runtime_api.json", outputRoot: "/tmp/recon" } }],
 };
 
+
+export const oidcContract: ToolContract = {
+  name: "probe_oidc",
+  title: "OAuth/OIDC/SAML config probe",
+  description:
+    "Discovers /.well-known/openid-configuration, oauth-authorization-server, SAML metadata; static weakness checks (implicit flow, fragment response, missing PKCE). Writes oidc_probe.json.",
+  kind: "runtime",
+  inputSchema: z.object({ baseUrl: z.string(), outputRoot, proxy: z.string().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ found: z.number() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "oidc", input: { baseUrl: "https://target/", outputRoot: "/tmp/recon" } }],
+};
+
+export const smuggleContract: ToolContract = {
+  name: "probe_smuggle",
+  title: "Request-smuggling differential",
+  description:
+    "Paired GETs differing in one canonicalization dimension (dot-segment, double-slash, encoded-slash, case, semicolon) + CL+TE POST. Status divergence across variants = parser disagreement. Read-only. Writes smuggle_probe.json.",
+  kind: "runtime",
+  inputSchema: z.object({ baseUrl: z.string(), outputRoot, proxy: z.string().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ differentials: z.number() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "smuggle", input: { baseUrl: "https://target/", outputRoot: "/tmp/recon" } }],
+};
+
+export const archiveContract: ToolContract = {
+  name: "archive_recover",
+  title: "Blocked-page archive recovery",
+  description:
+    "When a URL is blocked (403/429/WAF interstitial): Wayback availability API then archive.today mirror rotation to recover the content. Writes recovered.html.",
+  kind: "runtime",
+  inputSchema: z.object({ url: z.string(), outputRoot, proxy: z.string().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ recoveredFrom: z.string().nullable() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "recover", input: { url: "https://target/page", outputRoot: "/tmp/recon" } }],
+};
+
+export const wsOriginContract: ToolContract = {
+  name: "ws_origin_check",
+  title: "WS origin validation (CSWSH)",
+  description:
+    "Attempts the WebSocket upgrade with a hostile Origin and with no Origin; accepted cross-origin upgrade = missing origin validation (CSWSH prescreen). Notes auth material location from the URL. Writes ws_origin.json.",
+  kind: "runtime",
+  inputSchema: z.object({ url: z.string(), outputRoot, headers: z.record(z.string(), z.string()).optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ vulnerable: z.boolean() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "ws", input: { url: "wss://target/ws", outputRoot: "/tmp/recon" } }],
+};
+
 export const ALL_CONTRACTS: readonly ToolContract[] = [
   dnsResolveContract,
   httpProbeContract,
@@ -579,6 +628,10 @@ export const ALL_CONTRACTS: readonly ToolContract[] = [
   domSinksContract,
   jwtContract,
   wsSchemaContract,
+  oidcContract,
+  smuggleContract,
+  archiveContract,
+  wsOriginContract,
   huntContract,
   huntRecordContract,
   huntOverviewContract,

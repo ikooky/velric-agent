@@ -73,6 +73,10 @@ Usage:
   velric-agent dom-sinks <jsDir> <outdir>      DOM-XSS taint chain scan
   velric-agent jwt-inspect <outdir>            JWT decode + weak-secret crack
   velric-agent ws-schema <runtime_api.json> <outdir>  WS message field schemas
+  velric-agent oidc-probe <baseUrl> <outdir>   OAuth/OIDC/SAML config probe
+  velric-agent smuggle-probe <baseUrl> <outdir>  request-smuggling differential
+  velric-agent archive-recover <url> <outdir>  blocked-page archive recovery
+  velric-agent ws-origin-check <wsUrl> <outdir>  WS cross-origin check (CSWSH)
   velric-agent help
 
 Common flags: --proxy URL | --proxy-pool FILE, --rps N (global rate limit), --cookie STR, --timeout MS
@@ -507,6 +511,34 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
         }
         const { extractWsSchema } = await import("./domain/wsSchema.js");
         out(await extractWsSchema({ runtimeFile, outputRoot: dir }));
+        return 0;
+      }
+      case "oidc-probe": {
+        const [b, dir] = positional;
+        if (!b || !dir) { console.error("usage: oidc-probe <baseUrl> <outdir>"); return 2; }
+        const { probeOidc } = await import("./domain/oidc.js");
+        out(await probeOidc({ baseUrl: b, outputRoot: dir, proxy: await resolveProxy(flags) }));
+        return 0;
+      }
+      case "smuggle-probe": {
+        const [b, dir] = positional;
+        if (!b || !dir) { console.error("usage: smuggle-probe <baseUrl> <outdir>"); return 2; }
+        const { probeSmuggle } = await import("./domain/smuggle.js");
+        out(await probeSmuggle({ baseUrl: b, outputRoot: dir, proxy: await resolveProxy(flags) }));
+        return 0;
+      }
+      case "archive-recover": {
+        const [u, dir] = positional;
+        if (!u || !dir) { console.error("usage: archive-recover <url> <outdir>"); return 2; }
+        const { recoverUrl } = await import("./domain/archive.js");
+        out(await recoverUrl({ url: u, outputRoot: dir, proxy: await resolveProxy(flags) }));
+        return 0;
+      }
+      case "ws-origin-check": {
+        const [u, dir] = positional;
+        if (!u || !dir) { console.error("usage: ws-origin-check <wsUrl> <outdir>"); return 2; }
+        const { probeWsOrigin } = await import("./domain/wsOrigin.js");
+        out(await probeWsOrigin({ url: u, outputRoot: dir }));
         return 0;
       }
       default:

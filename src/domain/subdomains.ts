@@ -50,7 +50,7 @@ const certSpotterQuery = async (domain: string, timeoutMs?: number, proxy?: stri
       `https://api.certspotter.com/v1/issuances?domain=${domain}&include_subdomains=true&expand=dns_names`,
       { timeoutMs: timeoutMs ?? 20000, proxy },
     );
-    if (res.status !== 200) return [];
+    if (res.status !== 200) return sourcegraphQuery(domain, timeoutMs, proxy);
     const out = new Set<string>();
     // Issuances JSON: [{ dns_names: [...] }, ...] — tolerate text-tolerant parse.
     for (const m of res.body.matchAll(/"dns_names"\s*:\s*\[([^\]]*)\]/g)) {
@@ -59,7 +59,29 @@ const certSpotterQuery = async (domain: string, timeoutMs?: number, proxy?: stri
         if (host.endsWith(domain)) out.add(host);
       }
     }
-    return [...out];
+    const found = [...out];
+    return found.length === 0 ? sourcegraphQuery(domain, timeoutMs, proxy) : found;
+  } catch {
+    return [];
+  }
+};
+
+/** Third CT/leak source: Sourcegraph stream search (free, no key). Best
+ *  effort — intermittent backend, so only used when both CT sources fail. */
+const sourcegraphQuery = async (domain: string, timeoutMs?: number, proxy?: string): Promise<string[]> => {
+  try {
+    const res = await fetchUrl(
+      `https://sourcegraph.com/.api/search/stream?q=context:global+${encodeURIComponent(`"${domain}"`)}+count:200&v=V3&t=literal&display=100`,
+      { timeoutMs: timeoutMs ?? 15000, proxy },
+    );
+    if (res.status !== 200) return [];
+    const out = new Set<string>();
+    // SSE lines: data: [...] with repo/path content events; hostnames appear in matches
+    const hostRe = new RegExp("([a-z0-9-]+\\.)*" + domain.replace(/\./g, "\\."), "gi");
+    for (const m of res.body.matchAll(hostRe)) {
+      out.add(m[0].toLowerCase());
+    }
+    return [...out].filter((h) => h.endsWith(domain));
   } catch {
     return [];
   }
