@@ -1,7 +1,7 @@
 import { fetchUrl } from "../adapters/http.js";
 import { ensureDir, writeArtifact } from "../adapters/artifacts.js";
 import { parseMpaPage } from "../domain/mpa.js";
-import { extractInlineApiUrls } from "../domain/endpoints.js";
+import {  } from "../domain/endpoints.js";
 import { pooled } from "./harvest.js";
 
 const SKIP_EXT =
@@ -67,18 +67,21 @@ export const spiderMpa = async (input: SpiderInput): Promise<SpiderSummary> => {
     const page = parseMpaPage(res.body);
     links.add(url.replace(origin, "") || "/");
     for (const f of page.forms) {
-      const act = new URL(f.action || url, url).href;
+      let act: string;
+      try { act = new URL(f.action || url, url).href; } catch { continue; }
       const key = `${f.method} ${act.replace(origin, "")}`;
       const params = forms.get(key) ?? new Set<string>();
       for (const p of f.params) params.add(p);
       forms.set(key, params);
     }
-    for (const u of extractInlineApiUrls(page.inline.join("\n"))) inline.add(u);
-    for (const s of page.inline) inline.add(s); // keep raw inline paths too
+    // page.inline entries are unquoted captured literals; quoted-string regex
+    // extraction can never match them — raw paths are kept directly instead.
+    for (const s of page.inline) inline.add(s);
     if (d < depth) {
       for (const href of page.links) {
         if (/^(?:mailto:|tel:|javascript:|#)/.test(href)) continue;
-        const next = new URL(href, url).href.split("#")[0]!;
+        let next: string;
+        try { next = new URL(href, url).href.split("#")[0]!; } catch { continue; }
         if (!next.startsWith(origin)) continue;
         if (SKIP_EXT.test(next) || exc.test(next)) continue;
         if (inc && !inc.test(next)) continue;

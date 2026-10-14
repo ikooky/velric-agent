@@ -51,7 +51,10 @@ export const readSqlite = async (input: SqliteReadInput): Promise<SqliteReadResu
 
   result.opened = true;
   const list = db.exec("SELECT name FROM sqlite_master WHERE type='table'");
-  const names: string[] = list[0]?.values.map((v) => String(v[0])) ?? [];
+  // Only safe identifiers may flow into per-table queries; hostile .db
+  // files can plant crafted names in sqlite_master (SQL breakout).
+  const names: string[] = (list[0]?.values.map((v) => String(v[0])) ?? [])
+    .filter((n) => /^[A-Za-z0-9_ ]+$/.test(n));
 
   for (const name of names) {
     if (name.startsWith("sqlite_")) continue;

@@ -35,7 +35,9 @@ export const runBatch = async (input: BatchInput): Promise<BatchResult> => {
   await mkdir(input.outputRoot, { recursive: true });
 
   const results: BatchResult["targets"] = [];
-  for (const seed of seeds) {
+  const conc = Math.max(1, Math.min(input.concurrency ?? 1, 4));
+  let cursor = 0;
+  const runOne = async (seed: string): Promise<void> => {
     const slug = seed.replace(/^https?:\/\//, "").replace(/[^a-zA-Z0-9.-]/g, "_").slice(0, 60);
     const outDir = join(input.outputRoot, slug);
     try {
@@ -69,7 +71,15 @@ export const runBatch = async (input: BatchInput): Promise<BatchResult> => {
     } catch (e) {
       results.push({ seed, outDir, stagesOk: 0, stagesTotal: 0, apiEndpoints: 0, findings: 0, error: String((e as Error).message ?? e).slice(0, 150) });
     }
-  }
+  };
+
+  const worker = async (): Promise<void> => {
+    while (cursor < seeds.length) {
+      const seed = seeds[cursor++]!;
+      await runOne(seed);
+    }
+  };
+  await Promise.all(Array.from({ length: conc }, worker));
 
   const lines = [
     `# 批量侦察汇总 — ${seeds.length} 目标`,

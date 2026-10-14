@@ -9,7 +9,7 @@ export const API_HINT =
 
 /** Static asset extensions that must never be treated as endpoints. */
 export const ASSET_EXT =
-  /\.(?:js|css|png|jpe?g|svg|gif|woff2?|ttf|ico|map|json|mp4|webp)(?:\?|$)/i;
+  /\.(?:js|css|png|jpe?g|svg|gif|woff2?|ttf|ico|map|mp4|webp)(?:\?|$)/i;
 
 export interface EndpointExtraction {
   readonly api: string[];

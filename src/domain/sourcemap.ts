@@ -49,7 +49,7 @@ export const detectSourceMaps = async (input: SourceMapInput): Promise<SourceMap
     try {
       const text = await readFile(f, "utf8");
       const m = text.match(/sourceMappingURL=([^\s*'"]+)/);
-      if (m) mapUrl = m[1]!.replace(/^data:/, "data:");
+      if (m) mapUrl = m[1]!;
     } catch { /* unreadable */ }
     // 2) probe <file>.map next to the JS — locally first, then remote when
     //    baseUrl lets us reconstruct the original bundle URL.

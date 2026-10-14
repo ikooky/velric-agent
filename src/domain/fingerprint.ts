@@ -80,9 +80,12 @@ export const fingerprint = async (input: FingerprintInput): Promise<FingerprintR
   const allowed = allow.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
   const putProbe = await fetchUrl(base, { ...opts, method: "PUT", body: "velric-probe" });
   const putWorks = putProbe.status >= 200 && putProbe.status < 300;
-  const traceProbe = await fetchUrl(base, { ...opts, method: "TRACE" });
+  // TRACE acceptance check only (echo reflection would need a distinguishing
+  // header token; undici fetch drops method-specific echo bodies reliably).
+  const traceProbe = await fetchUrl(base, { ...opts, method: "TRACE", headers: { "x-velric-probe": "1" } });
+  const traceEchoes = traceProbe.body.includes("x-velric-probe") || traceProbe.body.includes("X-Velric-Probe");
   const traceAllows = allow.includes("TRACE") || (traceProbe.headers["allow"] ?? "").includes("TRACE");
-  const traceWorks = traceProbe.status === 200 && traceAllows && !traceProbe.body.includes("velric-probe");
+  const traceWorks = traceProbe.status === 200 && traceAllows && traceEchoes;
 
   // Cookies from the main response
   const sc = r.headers["set-cookie"];

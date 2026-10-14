@@ -99,7 +99,12 @@ export const enrichAssets = async (input: EnrichInput): Promise<EnrichResult> =>
   for (const raw of input.seeds) {
     if (assets.size >= maxAssets) break;
     const isUrl = /^https?:\/\//i.test(raw);
-    const host = isUrl ? new URL(raw).hostname : raw.replace(/\.$/, "");
+    let host: string;
+    if (isUrl) {
+      try { host = new URL(raw).hostname; } catch { continue; }
+    } else {
+      host = raw.replace(/\.$/, "");
+    }
     const url = isUrl ? raw : `https://${host}`;
     const root = rootOf(host);
     upsert({ type: "domain", key: host, rootDomain: root });

@@ -88,7 +88,7 @@ const PARTS: readonly string[] = [
   "",
   "  function recordApiDetail(entry) {",
   "    const p = String(entry.url || '').split('?')[0];",
-  "    if (!/[.](?:js|css|png|jpe?g|gif|webp|avif|svg|ico|woff2?|ttf|eot|mp4|webm|mp3|m4a|wav|flv|ts|m3u8|vtt|map)(?:[$][?])/i.test(p)) window.__API_RECON_LOG__.add((entry.method || 'GET').toUpperCase() + ' ' + p);",
+  "    if (!/[.](?:js|css|png|jpe?g|gif|webp|avif|svg|ico|woff2?|ttf|eot|mp4|webm|mp3|m4a|wav|flv|ts|m3u8|vtt|map)(?:$|[?])/i.test(p)) window.__API_RECON_LOG__.add((entry.method || 'GET').toUpperCase() + ' ' + p);",
   "    if (!CONFIG.recordDetail) return;",
   "    window.__API_RECON_DETAIL__.push(entry);",
   "    if (entry.responseBody) extractApiUrlsFromText(entry.responseBody);",

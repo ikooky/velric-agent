@@ -140,9 +140,8 @@ export const runNucleiLite = async (input: NucleiLiteInput): Promise<NucleiLiteR
       const job = jobs[cursor++]!;
       const r = await fetchUrl(base + job.path, opts);
       scanned++;
-      if (r.status !== 200 && !(job.tpl.match.status ?? []).includes(r.status)) continue;
-
       const statusOk = job.tpl.match.status ? job.tpl.match.status.includes(r.status) : r.status === 200;
+      if (!statusOk) continue;
       const wordsOk = job.tpl.match.word ? job.tpl.match.word.some((w) => r.body.includes(w)) !== (job.tpl.match.negative ?? false) : true;
       const regexOk = job.tpl.match.regex ? job.tpl.match.regex.some((re) => new RegExp(re, "i").test(r.body)) !== (job.tpl.match.negative ?? false) : true;
 

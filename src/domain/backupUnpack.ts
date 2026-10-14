@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { unzipSync, gunzipSync } from "fflate";
 import tarStream from "tar-stream";
@@ -29,13 +29,23 @@ const fetchBinary = async (url: string, opts: { proxy?: string; timeoutMs?: numb
   return r.rawBuffer;
 };
 
+const MAX_DECOMPRESSED = 256 * 1024 * 1024; // 256 MB total decompressed cap
+
 const listZip = (buf: Buffer): { names: string[]; read: (name: string) => Buffer | null } => {
   const files = unzipSync(new Uint8Array(buf));
+  const safeNames: string[] = [];
+  let total = 0;
+  for (const [k, v] of Object.entries(files)) {
+    if (/^(?:__proto__|constructor|prototype)$/.test(k)) continue; // hostile archive key guard
+    total += v.length;
+    if (total > MAX_DECOMPRESSED) throw new Error("decompressed size exceeds cap");
+    safeNames.push(k);
+  }
   return {
-    names: Object.keys(files),
+    names: safeNames,
     read: (name: string): Buffer | null => {
       const f = files[name];
-      return f ? Buffer.from(f) : null;
+      return f ? Buffer.from(f) : new Buffer(0);
     },
   };
 };
@@ -115,6 +125,3 @@ export const unpackBackups = async (input: BackupUnpackInput): Promise<BackupUnp
   result.artifacts.push({ path, bytes: Buffer.byteLength(body) });
   return result;
 };
-
-// silence unused import when untar tree-shaken oddly
-void readFile;

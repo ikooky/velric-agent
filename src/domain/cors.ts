@@ -20,7 +20,7 @@ export interface CorsProbeResult {
     origin: string;
     acao: string | null;
     acac: boolean;
-    verdict: "reflect" | "wildcard" | "null" | "none";
+    verdict: "reflect" | "wildcard" | "null" | "static" | "none";
   }[];
   readonly misconfigured: boolean;
   readonly artifacts: { path: string; bytes: number }[];
@@ -58,11 +58,11 @@ export const probeCors = async (input: CorsProbeInput): Promise<CorsProbeResult>
     });
     const acao = r.headers["access-control-allow-origin"] ?? null;
     const acac = (r.headers["access-control-allow-credentials"] ?? "").toLowerCase() === "true";
-    let verdict: "reflect" | "wildcard" | "null" | "none" = "none";
+    let verdict: "reflect" | "wildcard" | "null" | "static" | "none" = "none";
     if (acao === "*") verdict = "wildcard";
     else if (acao === "null") verdict = "null";
     else if (acao && origin !== "null" && acao.includes(new URL(origin).hostname)) verdict = "reflect";
-    else if (acao) verdict = "reflect";
+    else if (acao) verdict = "static";
     results.push({ origin, acao, acac, verdict });
   }
 

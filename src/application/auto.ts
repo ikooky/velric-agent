@@ -60,7 +60,17 @@ const readJson = async <T>(p: string): Promise<T | null> => {
   try { return JSON.parse(await readFile(p, "utf8")) as T; } catch { return null; }
 };
 
+/** GraphQL introspection disabled detection: explicit error mentioning it. */
+const introspectionBlocked = (body: string): boolean =>
+  /introspection.*(disabled|not enabled|allowed)|GraphQL introspection/i.test(body);
+
+const statMtime = async (p: string): Promise<number> => {
+  const { stat } = await import("node:fs/promises");
+  return (await stat(p)).mtimeMs;
+};
+
 export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => {
+  const runStartMs = Date.now();
   const stages: StageResult[] = [];
   const root = input.outputRoot;
   await mkdir(root, { recursive: true });
@@ -178,7 +188,13 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
     }
     if (lastErr) {
       // Salvage: did the crashed run still write runtime_api.json?
-      if (await exists(join(root, "runtime_api.json"))) {
+      const raPath = join(root, "runtime_api.json");
+      let stale = false;
+      try {
+        const st = await statMtime(raPath);
+        stale = st < runStartMs - 1000; // written before this run began → previous run's data
+      } catch { stale = false; }
+      if (!stale && await exists(raPath)) {
         try {
           const salvaged = await readJson<{ uniqueCalls?: string[] }>(join(root, "runtime_api.json"));
           runtimeCalls = salvaged?.uniqueCalls?.length ?? 0;
@@ -223,14 +239,12 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
   }
 
 
-/** GraphQL introspection disabled detection: explicit error mentioning it. */
-const introspectionBlocked = (body: string): boolean =>
-  /introspection.*(disabled|not enabled|allowed)|GraphQL introspection/i.test(body);
+
   // ---- Stage 5b: sensitive paths (soft-404 calibrated) ----
   if (!done("paths")) {
     try {
       const { probePaths } = await import("../domain/pathProbe.js");
-      const pp = await probePaths({ baseUrl: input.seed, outputRoot: root, proxy: input.proxy, cookie: input.cookie, timeoutMs: input.timeoutMs });
+      const pp = await probePaths({ baseUrl: base, outputRoot: root, proxy: input.proxy, cookie: input.cookie, timeoutMs: input.timeoutMs });
       stages.push({ stage: "paths", status: "ok", detail: `${pp.found.length} found / ${pp.probed} probed` });
       await mark("paths");
     } catch (e) {
@@ -242,7 +256,7 @@ const introspectionBlocked = (body: string): boolean =>
   if (!done("cors")) {
     try {
       const { probeCors } = await import("../domain/cors.js");
-      const co = await probeCors({ baseUrl: input.seed, outputRoot: root, proxy: input.proxy, timeoutMs: input.timeoutMs });
+      const co = await probeCors({ baseUrl: base, outputRoot: root, proxy: input.proxy, timeoutMs: input.timeoutMs });
       stages.push({ stage: "cors", status: "ok", detail: co.misconfigured ? "MISCONFIGURED" : "clean" });
       await mark("cors");
     } catch (e) {
@@ -460,7 +474,7 @@ const introspectionBlocked = (body: string): boolean =>
         fList.push({
           name: "GraphQL endpoint 可达",
           severity: "medium",
-          summary: `POST ${gqlUrl} 响应含 schema 结构(introspection ${denied ? "已禁用" : "疑似开放"})`,
+          summary: `POST ${gqlUrl} 响应含 schema 结构(introspection ${"疑似开放"})`,
           poc: intro.body.slice(0, 500),
         });
       }

@@ -56,7 +56,7 @@ const certSpotterQuery = async (domain: string, timeoutMs?: number, proxy?: stri
     for (const m of res.body.matchAll(/"dns_names"\s*:\s*\[([^\]]*)\]/g)) {
       for (const n of m[1]!.matchAll(/"([^"]+)"/g)) {
         const host = n[1]!.toLowerCase().replace(/^\*\./, "");
-        if (host.endsWith(domain)) out.add(host);
+        if (host === domain || host.endsWith("." + domain)) out.add(host);
       }
     }
     const found = [...out];
@@ -81,7 +81,7 @@ const sourcegraphQuery = async (domain: string, timeoutMs?: number, proxy?: stri
     for (const m of res.body.matchAll(hostRe)) {
       out.add(m[0].toLowerCase());
     }
-    return [...out].filter((h) => h.endsWith(domain));
+    return [...out].filter((h) => h === domain || h.endsWith("." + domain));
   } catch {
     return [];
   }

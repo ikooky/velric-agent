@@ -1,4 +1,4 @@
-import { writeArtifact } from "./enrich.js";
+import { writeArtifact } from "../adapters/artifacts.js";
 
 /** Report input shape. */
 export interface ReportInput {

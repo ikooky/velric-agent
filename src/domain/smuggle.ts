@@ -73,7 +73,6 @@ export const probeSmuggle = async (input: SmuggleInput): Promise<SmuggleResult> 
   // CL+TE both present: raw client request — fetch APIs may strip the
   // conflicting pair before it reaches the wire.
   try {
-    const u = new URL(base);
     const client = new Client(base, { connect: { rejectUnauthorized: false } });
     const t0 = Date.now();
     const resP = client.request({
@@ -101,7 +100,6 @@ export const probeSmuggle = async (input: SmuggleInput): Promise<SmuggleResult> 
       differentials.push({ dimension: "CL+TE", variant: "both headers on POST", baselineStatus: baseline.status, variantStatus: res.status, baselineMs: 0, variantMs: res.ms, note: "both CL and TE accepted — framing ambiguity" });
     }
     await client.close().catch(() => {});
-    void u;
   } catch {
     /* raw client unavailable (e.g. via proxy) — skipped */
   }

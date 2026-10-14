@@ -55,8 +55,9 @@ export const replayLogin = async (input: LoginReplayInput): Promise<LoginReplayR
     }
     const formFound = userSel !== null && passSel !== null;
     if (!formFound) {
+      const landedUrl = page.url(); // read before close — page is dead after close
       await browser.close();
-      const r: LoginReplayResult = { baseUrl: input.baseUrl, formFound: false, submitted: false, cookieHeader: null, landedUrl: page.url(), artifacts: [] };
+      const r: LoginReplayResult = { baseUrl: input.baseUrl, formFound: false, submitted: false, cookieHeader: null, landedUrl, artifacts: [] };
       await writeFile(join(input.outputRoot, "login_replay.json"), JSON.stringify(r, null, 2));
       return r;
     }

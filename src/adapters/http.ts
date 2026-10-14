@@ -59,6 +59,19 @@ export const fetchUrl = async (
   return last!;
 };
 
+// Per-proxy agent pool: reuses keep-alive agents instead of one per call.
+const proxyAgentPool = new Map<string, ProxyAgent | Socks5ProxyAgent>();
+const getProxyDispatcher = (proxyUri: string): ProxyAgent | Socks5ProxyAgent => {
+  let d = proxyAgentPool.get(proxyUri);
+  if (!d) {
+    d = proxyUri.startsWith("socks5")
+      ? new Socks5ProxyAgent(new URL(proxyUri))
+      : new ProxyAgent({ uri: proxyUri, connect: { rejectUnauthorized: false } });
+    proxyAgentPool.set(proxyUri, d);
+  }
+  return d;
+};
+
 const fetchOnce = async (
   url: string,
   options: FetchOptions = {},
@@ -73,12 +86,9 @@ const fetchOnce = async (
   if (options.cookie) headers["Cookie"] = options.cookie;
 
   // A real egress proxy: requests route through it. Never leaked to the target.
-  let dispatcher: ProxyAgent | Socks5ProxyAgent | undefined;
-  if (options.proxy) {
-    dispatcher = options.proxy.startsWith("socks5")
-      ? new Socks5ProxyAgent(new URL(options.proxy))
-      : new ProxyAgent({ uri: options.proxy, connect: { rejectUnauthorized: false } });
-  }
+  // Agents are pooled per proxy URI (keep-alive sockets are reused instead
+  // of leaking one agent — and its socket set — per request).
+  const dispatcher = options.proxy ? getProxyDispatcher(options.proxy) : undefined;
 
   // Per-host throttle when a global rate limit is configured.
   if (globalRps > 0) {
@@ -96,6 +106,14 @@ const fetchOnce = async (
       dispatcher?: Dispatcher;
     });
     const finalRedirect = res.headers.get("location");
+    // Skip oversized bodies early (declared size) instead of buffering them.
+    const declared = Number(res.headers.get("content-length") ?? 0);
+    if (declared > maxBytes * 4) {
+      const headerObj: Record<string, string> = {};
+      res.headers.forEach((v, k) => { headerObj[k.toLowerCase()] = v; });
+      try { await res.body?.cancel(); } catch { /* already gone */ }
+      return { url, status: res.status, ok: res.ok, contentType: res.headers.get("content-type") ?? "", headers: headerObj, body: "", bytes: 0, sha256: createHash("sha256").update("").digest("hex"), finalUrl: finalRedirect ?? null };
+    }
     const buf = Buffer.from(await res.arrayBuffer());
     const slice = buf.subarray(0, maxBytes);
     // raw mode: hand the caller the untouched Buffer (binary git objects etc.)
