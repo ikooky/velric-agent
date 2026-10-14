@@ -114,7 +114,21 @@ const fetchOnce = async (
       try { await res.body?.cancel(); } catch { /* already gone */ }
       return { url, status: res.status, ok: res.ok, contentType: res.headers.get("content-type") ?? "", headers: headerObj, body: "", bytes: 0, sha256: createHash("sha256").update("").digest("hex"), finalUrl: finalRedirect ?? null };
     }
-    const buf = Buffer.from(await res.arrayBuffer());
+    // Stream-cap: works for chunked too (content-length absent) — read the
+    // body incrementally and stop at the cap instead of buffering it all.
+    const cap = maxBytes * 4;
+    const bodyChunks: Buffer[] = [];
+    let bodyLen = 0;
+    let overCap = false;
+    try {
+      for await (const c of res.body as unknown as AsyncIterable<Buffer>) {
+        bodyLen += c.length;
+        if (bodyLen > cap) { overCap = true; break; }
+        bodyChunks.push(c);
+      }
+    } catch { /* mid-stream abort after break is expected */ }
+    if (overCap) { try { await res.body?.cancel(); } catch { /* gone */ } }
+    const buf = Buffer.concat(bodyChunks);
     const slice = buf.subarray(0, maxBytes);
     // raw mode: hand the caller the untouched Buffer (binary git objects etc.)
     if (options.raw) {

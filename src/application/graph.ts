@@ -32,6 +32,12 @@ export interface Finding {
   severity: "low" | "medium" | "high" | "critical";
   summary: string;
   poc: string;
+  /** Disposition lifecycle: pending → fixed (via retest), regression flips back. */
+  disposition?: "pending" | "fixed";
+  /** Evidence blob hashes bound to this finding (save_evidence outputs). */
+  evidenceHashes?: string[];
+  /** Bump on evidence changes — reports must read the current version. */
+  evidenceVersion?: number;
 }
 
 export interface Intent {

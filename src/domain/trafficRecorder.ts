@@ -228,3 +228,61 @@ const omit = (h: import("node:http").IncomingHttpHeaders, keys: string[]): impor
   for (const [k, v] of Object.entries(h)) if (!keys.includes(k)) out[k] = v;
   return out as import("node:http").IncomingHttpHeaders;
 };
+
+// ---------------- query layer over recorded traffic ----------------
+
+/** Search/query the NDJSON traffic log: host filter, status filter, method
+ *  filter, free-text substring over url, paginated — the deterministic
+ *  equivalent of velric's SQLite+FTS traffic search. */
+export const searchTraffic = async (input: {
+  outputRoot: string;
+  host?: string;
+  status?: number;
+  method?: string;
+  text?: string;
+  page?: number;
+  pageSize?: number;
+}): Promise<{ total: number; page: number; exchanges: RecordedExchange[] }> => {
+  const { readFile } = await import("node:fs/promises");
+  let lines: string[] = [];
+  try { lines = (await readFile(join(input.outputRoot, "traffic.ndjson"), "utf8")).split("\n").filter(Boolean); }
+  catch { return { total: 0, page: 1, exchanges: [] }; }
+  let all: RecordedExchange[] = [];
+  for (const l of lines) {
+    try { all.push(JSON.parse(l) as RecordedExchange); } catch { /* torn tail line */ }
+  }
+  if (input.host) all = all.filter((e) => new URL(e.url).hostname === input.host);
+  if (input.status != null) all = all.filter((e) => e.status === input.status);
+  if (input.method) all = all.filter((e) => e.method.toUpperCase() === input.method!.toUpperCase());
+  if (input.text) all = all.filter((e) => e.url.includes(input.text!));
+  const pageSize = input.pageSize ?? 50;
+  const page = input.page ?? 1;
+  return {
+    total: all.length,
+    page,
+    exchanges: all.slice((page - 1) * pageSize, page * pageSize),
+  };
+};
+
+/** Fetch one exchange's stored bodies by id (from traffic.ndjson + blobs). */
+export const getTraffic = async (input: { outputRoot: string; id: string }): Promise<{ exchange: RecordedExchange | null; bodies: { request?: Buffer; response?: Buffer } | null }> => {
+  const { readFile } = await import("node:fs/promises");
+  let lines: string[] = [];
+  try { lines = (await readFile(join(input.outputRoot, "traffic.ndjson"), "utf8")).split("\n").filter(Boolean); }
+  catch { return { exchange: null, bodies: null }; }
+  for (const l of lines) {
+    let e: RecordedExchange;
+    try { e = JSON.parse(l) as RecordedExchange; } catch { continue; }
+    if (e.id !== input.id) continue;
+    const bodies: { request?: Buffer; response?: Buffer } = {};
+    const load = async (hash: string | null): Promise<Buffer | undefined> => {
+      if (!hash) return undefined;
+      try { return await readFile(join(input.outputRoot, "blobs", hash.slice(0, 2), hash + ".bin")); }
+      catch { return undefined; }
+    };
+    bodies.request = await load(e.reqBodyHash);
+    bodies.response = await load(e.respBodyHash);
+    return { exchange: e, bodies };
+  }
+  return { exchange: null, bodies: null };
+};

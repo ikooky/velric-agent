@@ -546,7 +546,7 @@ export const wsSchemaContract: ToolContract = {
   kind: "runtime",
   inputSchema: z.object({ runtimeFile: z.string(), outputRoot, observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ endpoints: z.number() }),
-  annotations: readOnlyAnnotations(),
+  annotations: writingAnnotations(),
   examples: [{ title: "ws", input: { runtimeFile: "/tmp/recon/runtime_api.json", outputRoot: "/tmp/recon" } }],
 };
 
@@ -620,7 +620,7 @@ export const protoDecodeContract: ToolContract = {
   kind: "runtime",
   inputSchema: z.object({ data: z.string(), encoding: z.enum(["hex", "base64"]).optional(), outputRoot, observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ looksLikeProtobuf: z.boolean() }),
-  annotations: readOnlyAnnotations(),
+  annotations: writingAnnotations(),
   examples: [{ title: "proto", input: { data: "CgR0ZXN0", outputRoot: "/tmp/recon" } }],
 };
 
@@ -668,7 +668,7 @@ export const sqliteReadContract: ToolContract = {
   kind: "runtime",
   inputSchema: z.object({ file: z.string(), outputRoot, observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ opened: z.boolean() }),
-  annotations: readOnlyAnnotations(),
+  annotations: writingAnnotations(),
   examples: [{ title: "db", input: { file: "/tmp/recon/leak.db", outputRoot: "/tmp/recon" } }],
 };
 
@@ -681,7 +681,7 @@ export const gatesContract: ToolContract = {
   kind: "runtime",
   inputSchema: z.object({ jsDir: z.string(), outputRoot, observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ renderGate: z.object({ storageKeys: z.array(z.string()) }) }),
-  annotations: readOnlyAnnotations(),
+  annotations: writingAnnotations(),
   examples: [{ title: "gates", input: { jsDir: "/tmp/recon/js", outputRoot: "/tmp/recon" } }],
 };
 
@@ -757,6 +757,67 @@ export const evidenceContract: ToolContract = {
   examples: [{ title: "put", input: { outputRoot: "/tmp/recon", action: "put", file: "/tmp/poc.txt" } }],
 };
 
+
+export const coldGraphContract: ToolContract = {
+  name: "cold_graph",
+  title: "Exploration graph compaction",
+  description:
+    "Fold cold exploration regions (untouched for N rounds) into content-hashed digest nodes with member snapshots; expand on demand. Persists cold_stamps.json.",
+  kind: "runtime",
+  inputSchema: z.object({ outputRoot, action: z.enum(["compact", "expand"]), digestId: z.string().optional(), round: z.number().optional(), coldAfterRounds: z.number().optional(), maxDigestSize: z.number().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ digests: z.array(z.string()) }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "compact", input: { outputRoot: "/tmp/recon", action: "compact" } }],
+};
+
+export const retestContract: ToolContract = {
+  name: "finding_retest",
+  title: "Finding retest",
+  description:
+    "Register findings with PoC + status/body predicates; replay PoC and classify reproduced/fixed/inconclusive; disposition flips on verdicts. Persists retest_store.json.",
+  kind: "runtime",
+  inputSchema: z.object({ outputRoot, action: z.enum(["register", "run", "list"]), id: z.string().optional(), name: z.string().optional(), severity: z.enum(["low", "medium", "high", "critical"]).optional(), poc: z.object({ method: z.string(), url: z.string(), headers: z.record(z.string(), z.string()).optional(), body: z.string().optional() }).optional(), predicates: z.object({ fixedStatuses: z.array(z.number()).optional(), fixedBodyAny: z.array(z.string()).optional(), vulnerableBodyAny: z.array(z.string()).optional() }).optional(), proxy: z.string().optional(), note: z.string().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ ok: z.boolean() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "run", input: { outputRoot: "/tmp/recon", action: "run", id: "f1" } }],
+};
+
+export const trafficQueryContract: ToolContract = {
+  name: "traffic_query",
+  title: "Traffic search/get",
+  description:
+    "Query the recorded traffic log (host/status/method/text filters, paginated) and fetch one exchange with its stored bodies.",
+  kind: "runtime",
+  inputSchema: z.object({ outputRoot, action: z.enum(["search", "get"]), id: z.string().optional(), host: z.string().optional(), status: z.number().optional(), method: z.string().optional(), text: z.string().optional(), page: z.number().optional(), pageSize: z.number().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ total: z.number() }),
+  annotations: readOnlyAnnotations(),
+  examples: [{ title: "search", input: { outputRoot: "/tmp/recon", action: "search", host: "api.example.com" } }],
+};
+
+export const reportExportContract: ToolContract = {
+  name: "export_findings",
+  title: "Findings export (csv/json/md)",
+  description:
+    "Export a findings batch as CSV, per-finding Markdown, or JSON from report json. Writes findings.csv / findings.json / finding_<id>.md.",
+  kind: "runtime",
+  inputSchema: z.object({ reportJsonFile: z.string(), outputRoot, format: z.enum(["csv", "json", "md-all"]), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ files: z.number() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "csv", input: { reportJsonFile: "/tmp/recon/report.json", outputRoot: "/tmp/recon", format: "csv" } }],
+};
+
+export const scopesentryContract: ToolContract = {
+  name: "scopesentry_sync",
+  title: "ScopeSentry thin client",
+  description:
+    "Push recon outputs to a ScopeSentry platform: list projects/assets, create scan tasks from subdomain/URL lists (operator-supplied endpoint+key).",
+  kind: "runtime",
+  inputSchema: z.object({ baseUrl: z.string(), apiKey: z.string(), action: z.enum(["list_projects", "list_assets", "push_subdomains"]), assetType: z.string().optional(), search: z.string().optional(), name: z.string().optional(), node: z.array(z.string()).optional(), template: z.string().optional(), subdomainsFile: z.string().optional(), proxy: z.string().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ ok: z.boolean() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "push", input: { baseUrl: "http://ss.example:8082", apiKey: "ssk_x", action: "push_subdomains", name: "recon", node: ["n1"], template: "t1", subdomainsFile: "/tmp/recon/subdomains.txt" } }],
+};
+
 export const ALL_CONTRACTS: readonly ToolContract[] = [
   dnsResolveContract,
   httpProbeContract,
@@ -804,6 +865,11 @@ export const ALL_CONTRACTS: readonly ToolContract[] = [
   assetGraphContract,
   expGraphContract,
   evidenceContract,
+  coldGraphContract,
+  retestContract,
+  trafficQueryContract,
+  reportExportContract,
+  scopesentryContract,
   huntContract,
   huntRecordContract,
   huntOverviewContract,

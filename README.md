@@ -34,6 +34,11 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `asset-graph` — 资产图(六型资产+host 链+去重)
 - `exploration-graph` — 探索图(goal→intent→fact→finding 血缘)
 - `evidence` — 证据存储(sha256 寻址+跨漏洞去重)
+- `cold-graph` — 探索图冷压缩(digest 折叠/按需展开)
+- `retest` — 漏洞复测(PoC 重放+reproduced/fixed/inconclusive+状态流转)
+- `traffic-query` — 流量检索(host/status/method/文本+单体取回)
+- `export-findings` — findings 导出(csv/json/单条 md)
+- `scopesentry-sync` — ScopeSentry 推送(MCP-only,需操作员提供端点+key)
 **验证**
 - `auth-probe` — 匿名 vs 带 cookie 双探，产出鉴权面清单(含边缘阻断识别)
 - `oidc-probe` — OAuth/OIDC/SAML 配置发现与弱配置检查
@@ -87,7 +92,7 @@ velric-agent help
 
 ## MCP 接入
 
-`velric-agent mcp` 启动 stdio MCP server:50 个工具 + 2 个 resources(`velric://driver-playbook`、`velric://workflow-guide`)+ 1 个 prompt(`hunt-driver`)。
+`velric-agent mcp` 启动 stdio MCP server:55 个工具 + 2 个 resources(`velric://driver-playbook`、`velric://workflow-guide`)+ 1 个 prompt(`hunt-driver`)。
 
 ```json
 {

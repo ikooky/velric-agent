@@ -545,6 +545,75 @@ export const handlers: Readonly<Record<string, Handler>> = {
     }
     return { entries: store.entries() };
   },
+  cold_graph: async (raw) => {
+    const p = z.object({ outputRoot: z.string(), action: z.enum(["compact", "expand"]), digestId: z.string().optional(), round: z.number().optional(), coldAfterRounds: z.number().optional(), maxDigestSize: z.number().optional() }).parse(raw);
+    const { ExplorationGraph } = await import("../domain/graphs.js");
+    const { compactGraph, expandDigest, loadStamps, saveStamps, touchLive, DEFAULT_COLD_PARAMS } = await import("../domain/coldGraph.js");
+    const g = new ExplorationGraph(p.outputRoot);
+    await g.load();
+    const { stamps, round: prevRound } = await loadStamps(p.outputRoot);
+    const round = p.round ?? prevRound + 1;
+    if (p.action === "compact") {
+      touchLive(g, stamps, round - 1); // nodes alive now were touched last round
+      const r = compactGraph(g, stamps, round, { coldAfterRounds: p.coldAfterRounds ?? DEFAULT_COLD_PARAMS.coldAfterRounds, maxDigestSize: p.maxDigestSize ?? DEFAULT_COLD_PARAMS.maxDigestSize });
+      await g.save();
+      await saveStamps(p.outputRoot, stamps, round);
+      return { digests: r.digests, folded: r.folded.length, rescued: r.rescued.length };
+    }
+    if (!p.digestId) throw new Error("digestId required for expand");
+    const r = expandDigest(g, p.digestId, stamps, round);
+    await g.save();
+    await saveStamps(p.outputRoot, stamps, round);
+    return { digests: [], expanded: r.expanded.length };
+  },
+  finding_retest: async (raw) => {
+    const p = z.object({ outputRoot: z.string(), action: z.enum(["register", "run", "list"]), id: z.string().optional(), name: z.string().optional(), severity: z.enum(["low", "medium", "high", "critical"]).optional(), poc: z.object({ method: z.string(), url: z.string(), headers: z.record(z.string(), z.string()).optional(), body: z.string().optional() }).optional(), predicates: z.object({ fixedStatuses: z.array(z.number()).optional(), fixedBodyAny: z.array(z.string()).optional(), vulnerableBodyAny: z.array(z.string()).optional() }).optional(), proxy: z.string().optional(), note: z.string().optional() }).parse(raw);
+    const mod = await import("../domain/retest.js");
+    if (p.action === "register") {
+      if (!p.id || !p.poc) throw new Error("id+poc required");
+      return mod.registerFinding({ root: p.outputRoot, id: p.id, name: p.name ?? p.id, severity: p.severity ?? "medium", poc: p.poc, predicates: p.predicates });
+    }
+    if (p.action === "run") {
+      if (!p.id) throw new Error("id required");
+      return await mod.runRetest({ root: p.outputRoot, findingId: p.id, proxy: p.proxy, note: p.note });
+    }
+    return mod.listRetests(p.outputRoot);
+  },
+  traffic_query: async (raw) => {
+    const p = z.object({ outputRoot: z.string(), action: z.enum(["search", "get"]), id: z.string().optional(), host: z.string().optional(), status: z.number().optional(), method: z.string().optional(), text: z.string().optional(), page: z.number().optional(), pageSize: z.number().optional() }).parse(raw);
+    const mod = await import("../domain/trafficRecorder.js");
+    if (p.action === "search") {
+      return mod.searchTraffic({ outputRoot: p.outputRoot, host: p.host, status: p.status, method: p.method, text: p.text, page: p.page, pageSize: p.pageSize });
+    }
+    if (!p.id) throw new Error("id required");
+    const r = await mod.getTraffic({ outputRoot: p.outputRoot, id: p.id });
+    return { exchange: r.exchange, requestBytes: r.bodies?.request?.length ?? 0, responseBytes: r.bodies?.response?.length ?? 0 };
+  },
+  export_findings: async (raw) => {
+    const p = z.object({ reportJsonFile: z.string(), outputRoot: z.string(), format: z.enum(["csv", "json", "md-all"]) }).parse(raw);
+    const { readFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const { generateReportExports } = await import("../application/report.js");
+    const rep = JSON.parse(await readFile(p.reportJsonFile, "utf8")) as { findings?: unknown[] };
+    const findings = (rep.findings ?? []) as never[];
+    const files = await generateReportExports({ outputRoot: p.outputRoot, format: p.format, findings });
+    void join;
+    return { files: files.length };
+  },
+  scopesentry_sync: async (raw) => {
+    const p = z.object({ baseUrl: z.string(), apiKey: z.string(), action: z.enum(["list_projects", "list_assets", "push_subdomains"]), assetType: z.string().optional(), search: z.string().optional(), name: z.string().optional(), node: z.array(z.string()).optional(), template: z.string().optional(), subdomainsFile: z.string().optional(), proxy: z.string().optional() }).parse(raw);
+    const ss = await import("../domain/scopesentry.js");
+    const cfg = { baseUrl: p.baseUrl, apiKey: p.apiKey, proxy: p.proxy };
+    if (p.action === "list_projects") return { ok: true, result: await ss.listProjects(cfg) };
+    if (p.action === "list_assets") {
+      if (!p.assetType) throw new Error("assetType required");
+      return { ok: true, result: await ss.listAssets(cfg, { asset_type: p.assetType, search: p.search }) };
+    }
+    if (!p.name || !p.node || !p.template || !p.subdomainsFile) throw new Error("name+node+template+subdomainsFile required");
+    const { readFile } = await import("node:fs/promises");
+    const subs = (await readFile(p.subdomainsFile, "utf8")).split("\n").map((l) => l.trim()).filter(Boolean);
+    return { ok: true, result: await ss.pushSubdomains(cfg, { name: p.name, node: p.node, template: p.template, subdomains: subs }) };
+  },
   workflow_guide: async () => {
     const { WORKFLOW_GUIDE } = await import("./workflow.js");
     return WORKFLOW_GUIDE;

@@ -22,8 +22,13 @@ export interface SiteMap {
   readonly site: string;
   readonly runtimeMode: string;
   readonly appType: string;
+  /** Gate-defeat strategy in effect during capture (from hook config facts). */
+  readonly routeGuardStrategy: string[];
   readonly frontendRoutes: string[];
   readonly apis: string[];
+  readonly apisFromStatic: string[];
+  readonly apisFromRuntime: string[];
+  readonly routesVerifiedByClick: string[];
   readonly params: { method: string; path: string; transport: string; fields: string[]; confidence: string }[];
   readonly featuresTriggered: { route: string; kind: string; label: string }[];
   readonly limitations: string;
@@ -45,6 +50,19 @@ export const buildSiteMap = async (input: SiteMapInput): Promise<SiteMap> => {
 
   const routes = await readLines(join(root, "routes.txt"));
   const apis = await readLines(join(root, "api_merged.txt"));
+  const staticApis = await readLines(join(root, "api_static.txt"));
+  const runtimeRaw = await readJson<{ uniqueCalls?: string[] }>(join(root, "runtime_api.json"));
+  const runtimeApis = [...new Set((runtimeRaw?.uniqueCalls ?? []).map((c) => c.split(" ").slice(1).join(" ")))];
+  // merged = static ∪ runtime; attribute each merged api to its source(s).
+  const staticSet = new Set(staticApis);
+  const runtimeSet = new Set(runtimeApis);
+  const apisFromStatic = apis.filter((a) => staticSet.has(a));
+  const apisFromRuntime = apis.filter((a) => runtimeSet.has(a));
+  const coverageRaw = await readJson<{ interactions?: { route: string }[] }>(join(root, "coverage.json"));
+  const routesVerifiedByClick = [...new Set((coverageRaw?.interactions ?? []).map((i) => i.route))].filter(Boolean);
+  // Guard strategy facts recorded by the runtime hook (best effort).
+  const gatesRaw = await readJson<{ suggestedConfig?: unknown }>(join(root, "gates_report.json"));
+  const routeGuardStrategy = gatesRaw ? ["gates-analyzed"] : [];
   // params_merged.json shape: paramMerge writes a TOP-LEVEL ARRAY of
   // endpoints (accept that first); tolerate a legacy {endpoints:[...]} wrapper.
   type ParamEntry = { method: string; path: string; fields: { name: string; in: string; confidence: string }[] };
@@ -64,8 +82,12 @@ export const buildSiteMap = async (input: SiteMapInput): Promise<SiteMap> => {
     site: input.baseUrl,
     runtimeMode: input.runtimeMode ?? "static-only",
     appType: input.appType ?? "unknown",
+    routeGuardStrategy,
     frontendRoutes: routes,
     apis,
+    apisFromStatic,
+    apisFromRuntime,
+    routesVerifiedByClick,
     params,
     featuresTriggered: (coverage?.interactions ?? []).map((i) => ({ route: i.route, kind: i.kind, label: i.label })),
     limitations: input.limitations ?? "static harvest only; runtime/coverage stages not run",

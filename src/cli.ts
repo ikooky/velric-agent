@@ -93,6 +93,10 @@ Usage:
   velric-agent asset-graph <dir> <action>      asset graph store
   velric-agent exploration-graph <dir> <action>  exploration lineage graph
   velric-agent evidence <dir> <action>         evidence blob store
+  velric-agent cold-graph <dir> <action>       exploration graph compaction
+  velric-agent retest <dir> <action>           finding retest lifecycle
+  velric-agent traffic-query <dir> <action>    traffic search/get
+  velric-agent export-findings <f> <dir> <fmt> findings csv/json/md export
   velric-agent help
 
 Common flags: --proxy URL | --proxy-pool FILE, --rps N (global rate limit), --cookie STR, --timeout MS
@@ -681,6 +685,61 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
         if (action === "get") { const b = await store.get(positional[2] ?? ""); out({ found: b !== null, bytes: b?.length ?? 0 }); return 0; }
         if (action === "list") { out(store.entries()); return 0; }
         console.error("unknown action"); return 2;
+      }
+      case "cold-graph": {
+        const [dir, action] = positional;
+        if (!dir || !action) { console.error("usage: cold-graph <outdir> compact|expand <digestId> [--round N]"); return 2; }
+        const { ExplorationGraph } = await import("./domain/graphs.js");
+        const cg = await import("./domain/coldGraph.js");
+        const g = new ExplorationGraph(dir);
+        await g.load();
+        const { stamps, round: prev } = await cg.loadStamps(dir);
+        const round = num(flags.round) ?? prev + 1;
+        if (action === "compact") {
+          cg.touchLive(g, stamps, round - 1);
+          const r = cg.compactGraph(g, stamps, round);
+          await g.save(); await cg.saveStamps(dir, stamps, round);
+          out({ digests: r.digests, folded: r.folded.length, rescued: r.rescued.length });
+        } else {
+          const r = cg.expandDigest(g, positional[2] ?? "", stamps, round);
+          await g.save(); await cg.saveStamps(dir, stamps, round);
+          out(r);
+        }
+        return 0;
+      }
+      case "retest": {
+        const [dir, action] = positional;
+        if (!dir || !action) { console.error("usage: retest <outdir> register <id> <json>|run <id>|list [--proxy P]"); return 2; }
+        const mod = await import("./domain/retest.js");
+        if (action === "list") { out(await mod.listRetests(dir)); return 0; }
+        if (action === "run") {
+          out(await mod.runRetest({ root: dir, findingId: positional[2] ?? "", proxy: await resolveProxy(flags) }));
+          return 0;
+        }
+        if (action === "register") {
+          const spec = JSON.parse(positional[3] ?? "{}");
+          out(await mod.registerFinding({ root: dir, id: positional[2] ?? "", name: spec.name ?? positional[2], severity: spec.severity ?? "medium", poc: spec.poc, predicates: spec.predicates }));
+          return 0;
+        }
+        console.error("unknown action"); return 2;
+      }
+      case "traffic-query": {
+        const [dir, action] = positional;
+        if (!dir || !action) { console.error("usage: traffic-query <outdir> search [--host H --status N --method M --text T --page N]|get <id>"); return 2; }
+        const mod = await import("./domain/trafficRecorder.js");
+        if (action === "get") { out(await mod.getTraffic({ outputRoot: dir, id: positional[2] ?? "" })); return 0; }
+        out(await mod.searchTraffic({ outputRoot: dir, host: typeof flags.host === "string" ? flags.host : undefined, status: num(flags.status), method: typeof flags.method === "string" ? flags.method : undefined, text: typeof flags.text === "string" ? flags.text : undefined, page: num(flags.page), pageSize: num(flags.pageSize) }));
+        return 0;
+      }
+      case "export-findings": {
+        const [file, dir, fmt] = positional;
+        if (!file || !dir || !fmt) { console.error("usage: export-findings <report.json> <outdir> csv|json|md-all"); return 2; }
+        const { readFile } = await import("node:fs/promises");
+        const { generateReportExports } = await import("./application/report.js");
+        const rep = JSON.parse(await readFile(file, "utf8")) as { findings?: unknown[] };
+        const files = await generateReportExports({ outputRoot: dir, format: fmt as "csv" | "json" | "md-all", findings: (rep.findings ?? []) as never[] });
+        out({ files });
+        return 0;
       }
       default:
         console.error(`unknown command: ${command}\n`);

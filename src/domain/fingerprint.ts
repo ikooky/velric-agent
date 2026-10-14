@@ -12,6 +12,8 @@ export interface FingerprintInput {
   readonly cookie?: string;
   readonly proxy?: string;
   readonly timeoutMs?: number;
+  /** Opt in to the state-changing PUT probe (default: skipped). */
+  readonly activeProbe?: boolean;
 }
 
 export interface FingerprintResult {
@@ -78,7 +80,10 @@ export const fingerprint = async (input: FingerprintInput): Promise<FingerprintR
   const opt = await fetchUrl(base, { ...opts, method: "OPTIONS" });
   const allow = opt.headers["allow"] ?? "";
   const allowed = allow.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
-  const putProbe = await fetchUrl(base, { ...opts, method: "PUT", body: "velric-probe" });
+  // PUT is a state-changing request — sent only on explicit opt-in.
+  const putProbe = (input as { activeProbe?: boolean }).activeProbe === true
+    ? await fetchUrl(base, { ...opts, method: "PUT", body: "velric-probe" })
+    : { status: 0, body: "", headers: {} as Record<string, string> };
   const putWorks = putProbe.status >= 200 && putProbe.status < 300;
   // TRACE acceptance check only (echo reflection would need a distinguishing
   // header token; undici fetch drops method-specific echo bodies reliably).

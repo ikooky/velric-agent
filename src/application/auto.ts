@@ -115,12 +115,22 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
 
   // ---- Stage 1: enrich asset graph ----
   let assetCounts: Record<string, number> = {};
-  try {
-    const r = await enrichAssets({ seeds: [input.seed], outputRoot: root, proxy: input.proxy, cookie: input.cookie, timeoutMs: input.timeoutMs });
-    assetCounts = r.counts;
-    stages.push({ stage: "enrich", status: "ok", detail: `${r.assets.length} assets` });
-  } catch (e) {
-    stages.push({ stage: "enrich", status: "fail", detail: String((e as Error).message ?? e).slice(0, 120) });
+  if (!done("enrich")) {
+    try {
+      const r = await enrichAssets({ seeds: [input.seed], outputRoot: root, proxy: input.proxy, cookie: input.cookie, timeoutMs: input.timeoutMs });
+      assetCounts = r.counts;
+      stages.push({ stage: "enrich", status: "ok", detail: `${r.assets.length} assets` });
+      await mark("enrich");
+    } catch (e) {
+      stages.push({ stage: "enrich", status: "fail", detail: String((e as Error).message ?? e).slice(0, 120) });
+    }
+  } else {
+    // checkpointed: reuse counts from the durable artifact the stage wrote
+    try {
+      const sync = JSON.parse(await readFile(join(root, "asset_graph_sync.json"), "utf8")) as { counts?: Record<string, number> };
+      assetCounts = sync.counts ?? {};
+    } catch { /* artifact absent — zero counts */ }
+    stages.push({ stage: "enrich", status: "skip", detail: "checkpoint" });
   }
 
   // ---- Stage 2: classify SPA vs MPA (fetch entry HTML once) ----
@@ -230,14 +240,15 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
     }
   }
   const samplesFile = join(root, "param_samples.json");
-  if (await exists(samplesFile)) {
+  if (await exists(samplesFile) && !done("merge_params")) {
     try {
       const r = await mergeParamSamples({ samplesFile, outputRoot: root });
       stages.push({ stage: "merge_params", status: "ok", detail: `endpoints=${r.endpoints}` });
+      await mark("merge_params");
     } catch (e) {
       stages.push({ stage: "merge_params", status: "fail", detail: String((e as Error).message ?? e).slice(0, 120) });
     }
-  }
+  } else if (done("merge_params")) stages.push({ stage: "merge_params", status: "skip", detail: "checkpoint" });
 
 
 

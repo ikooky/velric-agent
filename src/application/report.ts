@@ -11,11 +11,15 @@ export interface ReportInput {
 
 /** Finding view shape. */
 export interface FindingView {
+  readonly id?: number | string;
   readonly vulnClass?: string;
   readonly name?: string;
   readonly severity?: string;
   readonly summary?: string;
   readonly poc?: string;
+  readonly disposition?: "pending" | "fixed";
+  readonly evidenceHashes?: string[];
+  readonly evidenceVersion?: number;
 }
 
 const sevRank: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, "": 4 };
@@ -99,4 +103,90 @@ export const generateReport = async (input: GenReportInput): Promise<{
     await writeArtifact(input.outputRoot, "report.md", md),
   ];
   return { findings: (r.findings ?? []).length, artifacts };
+};
+
+
+// ---------------- export formats (md per-finding / csv / json) ----------------
+
+const csvCell = (v: string): string => /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+
+/** CSV export of a findings batch (velric report/findings.go parity). */
+export const findingsCsv = (findings: readonly FindingView[]): string => {
+  const head = ["id", "name", "vulnclass", "severity", "disposition", "evidence_version", "summary"];
+  const rows = [...findings]
+    .sort((a, b) => (sevRank[a.severity ?? ""] ?? 9) - (sevRank[b.severity ?? ""] ?? 9))
+    .map((f) => [
+      String(f.id ?? ""),
+      f.name ?? "",
+      f.vulnClass ?? "",
+      f.severity,
+      (f as { disposition?: string }).disposition ?? "pending",
+      String((f as { evidenceVersion?: number }).evidenceVersion ?? 0),
+      (f.summary ?? "").replace(/\r?\n/g, " "),
+    ]);
+  return [head, ...rows].map((r) => r.map((c) => csvCell(String(c ?? ""))).join(",")).join("\n");
+};
+
+/** Standalone Markdown for ONE finding (velric per-finding export parity). */
+export const findingMarkdown = (f: FindingView): string => {
+  const b: string[] = [];
+  b.push(`# ${f.name ?? f.vulnClass ?? "未分类"}`);
+  b.push("");
+  b.push(`- 严重等级：**${f.severity}**`);
+  b.push(`- 类别：${f.vulnClass ?? "-"}`);
+  b.push(`- 处置状态：${(f as { disposition?: string }).disposition ?? "pending"}`);
+  b.push("");
+  b.push("## 摘要");
+  b.push(f.summary ?? "-");
+  if (f.poc) {
+    b.push("");
+    b.push("## PoC");
+    b.push("```");
+    b.push(f.poc);
+    b.push("```");
+  }
+  const hashes = (f as { evidenceHashes?: string[] }).evidenceHashes ?? [];
+  if (hashes.length > 0) {
+    b.push("");
+    b.push("## 证据");
+    for (const h of hashes) b.push(`- sha256:${h}`);
+  }
+  return b.join("\n");
+};
+
+/** JSON export of a findings batch. */
+export const findingsJson = (findings: readonly FindingView[]): string =>
+  JSON.stringify(
+    [...findings].sort((a, b) => (sevRank[a.severity ?? ""] ?? 9) - (sevRank[b.severity ?? ""] ?? 9)),
+    null,
+    2,
+  );
+
+
+/** Write findings exports to disk (csv / json / per-finding md). */
+export const generateReportExports = async (input: {
+  outputRoot: string;
+  format: "csv" | "json" | "md-all";
+  findings: readonly FindingView[];
+}): Promise<string[]> => {
+  const { writeFile, mkdir } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  await mkdir(input.outputRoot, { recursive: true });
+  const out: string[] = [];
+  if (input.format === "csv") {
+    const p = join(input.outputRoot, "findings.csv");
+    await writeFile(p, findingsCsv(input.findings), "utf8");
+    out.push(p);
+  } else if (input.format === "json") {
+    const p = join(input.outputRoot, "findings.json");
+    await writeFile(p, findingsJson(input.findings), "utf8");
+    out.push(p);
+  } else {
+    for (const f of input.findings) {
+      const p = join(input.outputRoot, `finding_${String(f.id ?? f.name ?? "x").replace(/[^\w.-]/g, "_")}.md`);
+      await writeFile(p, findingMarkdown(f), "utf8");
+      out.push(p);
+    }
+  }
+  return out;
 };

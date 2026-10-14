@@ -139,11 +139,26 @@ export const enrichAssets = async (input: EnrichInput): Promise<EnrichResult> =>
       /* seed unresolvable — record domain node only */
     }
   }
+  // Dual-graph write-back: every enriched asset also lands in the shared
+  // asset graph so the store stays the single truth.
+  const { AssetStore } = await import("../domain/graphs.js");
+  const assetStore = new AssetStore(input.outputRoot);
+  await assetStore.load();
+  for (const a of assets.values()) {
+    if (a.type === "root_domain") assetStore.upsert({ type: "root_domain", value: a.key });
+    else if (a.type === "domain" || a.type === "subdomain") assetStore.upsert({ type: "subdomain", value: a.key });
+    else if (a.type === "ip") assetStore.upsert({ type: "ip", value: a.key });
+    else if (a.type === "service" && a.url) assetStore.upsert({ type: "service", value: a.key, meta: { pageTitle: (a as { pageTitle?: string }).pageTitle } });
+  }
+  await assetStore.save();
+  const assetSyncSummary = { upserted: assets.size, counts: assetStore.countsByType() };
+
   const list = [...assets.values()];
   const counts: Record<string, number> = {};
   for (const a of list) counts[a.type] = (counts[a.type] ?? 0) + 1;
   const artifacts = [
     await writeArtifact(input.outputRoot, "assets.json", JSON.stringify(list, null, 2)),
+    await writeArtifact(input.outputRoot, "asset_graph_sync.json", JSON.stringify(assetSyncSummary, null, 2)),
   ];
   return { assets: list, counts, artifacts };
 };
