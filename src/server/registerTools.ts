@@ -626,6 +626,11 @@ export const handlers: Readonly<Record<string, Handler>> = {
     const b = await mod.getBindings(p.outputRoot, p.findingId);
     return b ?? { findingId: p.findingId, version: 0, bindings: [] };
   },
+  oob_confirm: async (raw) => {
+    const p = z.object({ url: z.string(), outputRoot: z.string(), payloads: z.array(z.string()), positions: z.array(z.object({ param: z.string(), in: z.enum(["query", "body", "header", "path"]) })).optional(), method: z.string().optional(), body: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), pollMs: z.number().optional() }).parse(raw);
+    const { probeOob } = await import("../domain/oobConfirm.js");
+    return probeOob(p);
+  },
   role_matrix: async (raw) => {
     const p = z.object({ reconRoot: z.string(), outputRoot: z.string(), roles: z.record(z.string(), z.string()), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxEndpoints: z.number().optional() }).parse(raw);
     const { probeRoleMatrix } = await import("../domain/roleMatrix.js");

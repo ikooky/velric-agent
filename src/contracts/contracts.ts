@@ -833,6 +833,18 @@ export const evidenceBindContract: ToolContract = {
 };
 
 
+export const oobConfirmContract: ToolContract = {
+  name: "oob_confirm",
+  title: "Out-of-band blind-vuln confirmation",
+  description:
+    "Registers an interactsh session (RSA+AES), mints unique callback hosts per payload ({OOB} placeholder), fires them at the target, polls for real egress interactions — DNS/HTTP callbacks turn blind SQLi/SSRF/RCE suspects into CONFIRMED findings. Writes oob_probe.json.",
+  kind: "runtime",
+  inputSchema: z.object({ url: z.string(), outputRoot, payloads: z.array(z.string()), positions: z.array(z.object({ param: z.string(), in: z.enum(["query", "body", "header", "path"]) })).optional(), method: z.string().optional(), body: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), pollMs: z.number().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ fired: z.number(), confirmed: z.array(z.object({ payload: z.string(), param: z.string() })) }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "oob", input: { url: "https://target/search?q=1", outputRoot: "/tmp/recon", payloads: ["1'||X({OOB})--"] } }],
+};
+
 export const roleMatrixContract: ToolContract = {
   name: "role_matrix",
   title: "Role-differential access matrix",
@@ -982,6 +994,7 @@ export const ALL_CONTRACTS: readonly ToolContract[] = [
   reportExportContract,
   evidenceBindContract,
   scanPlatformContract,
+  oobConfirmContract,
   roleMatrixContract,
   jwtAttackContract,
   idorDeepContract,
