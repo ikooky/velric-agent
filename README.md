@@ -59,7 +59,7 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `probe-params` — 参数差分(必填/开关参数识别)
 
 **编排与交付**
-- `auto` — 一键管道 17 阶段(指纹→子域→静态→运行时→验证→报告)，stage 级 checkpoint 断点续跑
+- `auto` — 一键管道 18 阶段(指纹→子域→静态→运行时→验证→报告)，stage 级 checkpoint 断点续跑
 - `auto-batch` — 多目标批量 + 汇总对比 + webhook 通知
 - `run-diff` — 两次 run 的攻击面变更对比(可配 cron 做监控)
 - `gen-report` / `save-evidence` — 报告渲染 + sha256 证据存储

@@ -107,9 +107,15 @@ export const harvestStatic = async (
   }
 
   const have = new Map<string, string>(); // url -> local path
+  const nameCounts = new Map<string, number>(); // basename dedup: same-named JS from different URLs must not overwrite each other
   const download = async (url: string): Promise<void> => {
-    const name = basename(new URL(url).pathname);
-    if (!name.endsWith(".js") || have.has(url)) return;
+    const base = basename(new URL(url).pathname);
+    if (!base.endsWith(".js") || have.has(url)) return;
+    const n = (nameCounts.get(base) ?? 0) + 1;
+    nameCounts.set(base, n);
+    // Disambiguate collisions: second "main.js" lands as main-2.js —
+    // previously one silently overwrote the other (corpus loss).
+    const name = n === 1 ? base : `${base.replace(/\.js$/, "")}-${n}.js`;
     const res = await fetchUrl(url, {
       proxy: input.proxy,
       cookie: input.cookie,

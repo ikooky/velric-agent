@@ -410,7 +410,7 @@ export const pathsContract: ToolContract = {
   name: "probe_paths",
   title: "Sensitive path probing",
   description:
-    "Built-in 65 high-signal paths (.git/config, .env, swagger, actuator, druid, phpinfo, backup dumps...) with soft-404 calibration (random-path baseline; isomorphic responses are not findings). Writes sensitive_paths.txt.",
+    "Built-in 68 high-signal paths (.git/config, .env, swagger, actuator, druid, phpinfo, backup dumps...) with soft-404 calibration (random-path baseline; isomorphic responses are not findings). Writes sensitive_paths.txt.",
   kind: "runtime",
   inputSchema: z.object({ baseUrl: z.string(), outputRoot, paths: z.array(z.string()).optional(), cookie: z.string().optional(), observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ found: z.array(z.unknown()) }),

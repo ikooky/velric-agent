@@ -86,12 +86,17 @@ export const throttledMap = async <T>(
  *  on resume, so a crashed run continues instead of restarting. */
 
 export interface Checkpoint {
+  /** Seed the checkpoint was written for — a different seed invalidates it
+   *  (stale stage artifacts from a previous target must not be resumed). */
+  seed?: string;
   readonly stages: Record<string, { status: string; at: string }>;
 }
 
-export const readCheckpoint = async (outputRoot: string): Promise<Checkpoint> => {
+export const readCheckpoint = async (outputRoot: string, seed?: string): Promise<Checkpoint> => {
   try {
-    return JSON.parse(await readFile(join(outputRoot, "checkpoint.json"), "utf8")) as Checkpoint;
+    const cp = JSON.parse(await readFile(join(outputRoot, "checkpoint.json"), "utf8")) as Checkpoint;
+    if (seed !== undefined && cp.seed !== undefined && cp.seed !== seed) return { stages: {} };
+    return cp;
   } catch {
     return { stages: {} };
   }
@@ -100,8 +105,10 @@ export const readCheckpoint = async (outputRoot: string): Promise<Checkpoint> =>
 export const writeStageDone = async (
   outputRoot: string,
   stage: string,
+  seed?: string,
 ): Promise<void> => {
-  const cp = await readCheckpoint(outputRoot);
+  const cp = await readCheckpoint(outputRoot, seed);
+  if (seed !== undefined) (cp as { seed?: string }).seed = seed;
   cp.stages[stage] = { status: "ok", at: new Date().toISOString() };
   await mkdir(outputRoot, { recursive: true });
   await writeFile(join(outputRoot, "checkpoint.json"), JSON.stringify(cp, null, 2));

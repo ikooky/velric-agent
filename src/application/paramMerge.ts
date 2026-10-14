@@ -75,5 +75,3 @@ export const mergeParamSamples = async (
   };
 };
 
-export const defaultSamplesPath = (outputRoot: string): string =>
-  join(outputRoot, "param_samples.json");

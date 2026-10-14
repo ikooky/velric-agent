@@ -52,19 +52,3 @@ export const saveEvidence = async (input: EvidenceInput): Promise<EvidenceResult
   return { blobs, manifestPath };
 };
 
-/** Verify a blob against its recorded sha256 (velric verifyFile). */
-export const verifyEvidence = async (
-  outputRoot: string,
-  hash: string,
-): Promise<{ ok: boolean; bytes: number }> => {
-  if (!/^[0-9a-f]{64}$/.test(hash)) return { ok: false, bytes: 0 };
-  const bin = join(outputRoot, "blobs", hash.slice(0, 2), `${hash}.bin`);
-  let content: string;
-  try {
-    content = await readFile(bin, "utf8");
-    const st = await stat(bin);
-    return { ok: sha256(content) === hash, bytes: st.size };
-  } catch {
-    return { ok: false, bytes: 0 };
-  }
-};

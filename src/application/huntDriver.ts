@@ -196,7 +196,9 @@ export const huntRecord = async (input: HuntRecordInput): Promise<{ graph: Graph
         continue;
       }
       const known = [...statuses].filter((sv): sv is number => typeof sv === "number");
-      if (known.length > 0 && !known.some((sv) => txt.includes(String(sv)))) return false;
+      // Token-boundary status match: a bare "200" substring also matches
+      // dates/versions ("v200.3") — require the code to appear as a word.
+      if (known.length > 0 && !known.some((sv) => new RegExp(`\\b${sv}\\b`).test(txt))) return false;
     }
     return true;
   };
@@ -219,8 +221,13 @@ export const huntRecord = async (input: HuntRecordInput): Promise<{ graph: Graph
   for (const m of input.goalsMet ?? []) {
     const goal = g.goals.find((x) => x.id === m.id);
     if (goal && !goal.met) {
+      // Symmetric anti-hallucination gate: a met-reason citing URLs must
+      // cite LEDGERED URLs, same as facts/findings (a bare "done, checked
+      // manually" reason with fabricated URLs is dropped).
+      const rtxt = m.reason ?? "";
+      if (!urlOk(rtxt)) { drop(`goal#${m.id} met-reason url not in ledger`); continue; }
       goal.met = true;
-      goal.metReason = m.reason?.slice(0, 300);
+      goal.metReason = rtxt.slice(0, 300);
       accepted++; // count only real open→met transitions
     }
     // unknown id or already met: not accepted — no inflation

@@ -63,14 +63,25 @@ export const probeCors = async (input: CorsProbeInput): Promise<CorsProbeResult>
 
   const results: CorsProbeResult["results"] = [];
   for (const origin of origins) {
-    const r = await fetchUrl(base, {
-      ...input,
-      headers: { Origin: origin },
-      method: "OPTIONS",
-      timeoutMs: input.timeoutMs ?? 10000,
-    });
-    const acao = r.headers["access-control-allow-origin"] ?? null;
-    const acac = (r.headers["access-control-allow-credentials"] ?? "").toLowerCase() === "true";
+    // Preflight AND actual-request probes: some servers reflect ACAO+ACAC
+    // only on simple GET responses — an OPTIONS-only probe reports them as
+    // safe (false-safe). Merge: the worse verdict of the two wins.
+    const probe = async (method: "OPTIONS" | "GET"): Promise<{ acao: string | null; acac: boolean }> => {
+      const r = await fetchUrl(base, {
+        ...input,
+        headers: { Origin: origin },
+        method,
+        timeoutMs: input.timeoutMs ?? 10000,
+      });
+      return {
+        acao: r.headers["access-control-allow-origin"] ?? null,
+        acac: (r.headers["access-control-allow-credentials"] ?? "").toLowerCase() === "true",
+      };
+    };
+    const pre = await probe("OPTIONS");
+    const act = await probe("GET");
+    const acao = pre.acao ?? act.acao;
+    const acac = pre.acac || act.acac;
     let verdict: "reflect" | "wildcard" | "null" | "static" | "none" = "none";
     if (acao === "*") verdict = "wildcard";
     else if (acao === "null") verdict = "null";

@@ -80,9 +80,9 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
   // Checkpoint resume: stages already marked ok in checkpoint.json are skipped
   // (their artifacts are on disk). Wipe checkpoint.json for a fresh run.
   const { readCheckpoint, writeStageDone } = await import("../domain/rateLimit.js");
-  const cp = input.resume === false ? { stages: {} } : await readCheckpoint(root);
+  const cp = input.resume === false ? { stages: {} } : await readCheckpoint(root, input.seed);
   const done = (stage: string): boolean => cp.stages[stage]?.status === "ok";
-  const mark = async (stage: string): Promise<void> => { await writeStageDone(root, stage); };
+  const mark = async (stage: string): Promise<void> => { await writeStageDone(root, stage, input.seed); };
 
   // ---- Stage 0: fingerprint (WAF/CDN, methods, cookies) ----
   if (!done("fingerprint")) {
