@@ -47,7 +47,12 @@ export const probeAuth = async (input: AuthProbeInput): Promise<AuthProbeResult>
     // registrable-domain scope (approximation: last two labels of the
     // hostname). auth.<same-site>.com stays in scope for www.<same-site>.com;
     // third-party SDK hosts are dropped.
-    const regDomain = (h: string): string => h.split(".").slice(-2).join(".");
+    const MULTI_SUFFIX = new Set(["co.uk", "org.uk", "ac.uk", "gov.uk", "com.au", "net.au", "org.au", "co.nz", "com.br", "com.cn", "com.tw", "com.hk", "co.jp", "co.kr", "co.in", "co.za", "com.sg", "com.my"]);
+    const regDomain = (h: string): string => {
+      const parts = h.split(".").filter(Boolean);
+      if (parts.length >= 3 && MULTI_SUFFIX.has(parts.slice(-2).join("."))) return parts.slice(-3).join(".");
+      return parts.slice(-2).join(".");
+    };
     const origins = new Map<string, number>();
     for (const u of urls) {
       try { const o = regDomain(new URL(u).hostname); origins.set(o, (origins.get(o) ?? 0) + 1); } catch { /* skip */ }

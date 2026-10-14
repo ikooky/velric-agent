@@ -99,7 +99,7 @@ const crtShQuery = async (domain: string, timeoutMs?: number, proxy?: string): P
     for (const m of res.body.matchAll(/"name_value"\s*:\s*"([^"]+)"/g)) {
       for (const n of m[1]!.split("\\n")) out.add(n.trim().toLowerCase());
     }
-    const found = [...out].filter((h) => h.endsWith(domain));
+    const found = [...out].filter((h) => h === domain || h.endsWith("." + domain));
     if (found.length === 0) return certSpotterQuery(domain, timeoutMs, proxy);
     return found;
   } catch {

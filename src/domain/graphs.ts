@@ -80,14 +80,19 @@ export class AssetStore {
       const last2 = parts.slice(-2).join(".");
       const last3 = parts.slice(-3).join(".");
       const root = parts.length >= 3 && MULTI_SUFFIX.has(last2) ? last3 : last2;
-      const rootNode = this.upsert({ type: "root_domain", value: root, taskTag });
-      let parentKey = rootNode.key;
-      if (parts.length > 2) {
-        const sub = this.upsert({ type: "subdomain", value: host, parent: parentKey, taskTag });
-        parentKey = sub.key;
+      // A host that IS itself a public suffix (bare co.uk) must not become a
+      // root_domain node — only register real registrable domains.
+      let parentKey: string | undefined;
+      if (root !== host || parts.length > 2) {
+        const rootNode = this.upsert({ type: "root_domain", value: root, taskTag });
+        parentKey = rootNode.key;
+        if (parts.length > 2) {
+          const sub = this.upsert({ type: "subdomain", value: host, parent: parentKey, taskTag });
+          parentKey = sub.key;
+        }
       }
       // service anchored under host chain
-      if (!service.parent) service.parent = parentKey;
+      if (!service.parent && parentKey) service.parent = parentKey;
     }
     return { service, endpoint };
   }

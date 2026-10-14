@@ -55,7 +55,7 @@ export const buildSiteMap = async (input: SiteMapInput): Promise<SiteMap> => {
   const params: SiteMap["params"] = paramEntries.map((e) => ({
     method: e.method,
     path: e.path,
-    transport: e.fields.some((f) => f.in === "body") ? "json" : "query",
+    transport: e.fields.some((f) => f.in === "body") ? "body" : "query",
     fields: e.fields.map((f) => f.name),
     confidence: e.fields[0]?.confidence ?? "low",
   }));

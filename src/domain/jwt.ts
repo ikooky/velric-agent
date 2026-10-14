@@ -74,9 +74,13 @@ export const inspectJwt = async (input: JwtInspectInput): Promise<JwtInspectResu
         const [hh, pp, ss] = t.split(".");
         if (!hh || !pp || !ss) return null;
         const hd = JSON.parse(b64u(hh).toString("utf8")) as { alg?: string };
-        if (!hd.alg?.toUpperCase().startsWith("HS")) return null;
+        const alg = hd.alg?.toUpperCase() ?? "";
+        if (!alg.startsWith("HS")) return null;
+        // Match the hash to the declared algorithm — a fixed sha256 can
+        // never verify HS384/HS512 tokens (silently missed weak secrets).
+        const hash = alg === "HS384" ? "sha384" : alg === "HS512" ? "sha512" : "sha256";
         for (const w of wordlist) {
-          if (createHmac("sha256", w).update(`${hh}.${pp}`).digest("base64url") === ss) return w;
+          if (createHmac(hash, w).update(`${hh}.${pp}`).digest("base64url") === ss) return w;
         }
         return null;
       })();

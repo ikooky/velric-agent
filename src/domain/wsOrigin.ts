@@ -45,7 +45,10 @@ const tryUpgrade = (
       `Sec-WebSocket-Key: ${key}`,
       "Sec-WebSocket-Version: 13",
       ...(origin !== null ? [`Origin: ${origin}`] : []),
-      ...Object.entries(extraHeaders).map(([k, v]) => `${k}: ${v}`),
+      // CRLF injection guard: header lines are hand-composed onto the wire.
+      ...Object.entries(extraHeaders)
+        .filter(([k, v]) => !/[\r\n]/.test(k) && !/[\r\n]/.test(v) && !/^\s/.test(k))
+        .map(([k, v]) => `${k}: ${v}`),
       "",
       "",
     ];

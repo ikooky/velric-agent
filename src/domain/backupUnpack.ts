@@ -32,7 +32,16 @@ const fetchBinary = async (url: string, opts: { proxy?: string; timeoutMs?: numb
 const MAX_DECOMPRESSED = 256 * 1024 * 1024; // 256 MB total decompressed cap
 
 const listZip = (buf: Buffer): { names: string[]; read: (name: string) => Buffer | null } => {
-  const files = unzipSync(new Uint8Array(buf));
+  // Pre-decompression cap: fflate's filter runs BEFORE each entry inflates.
+  // The counter accumulates DECLARED sizes and skips entries once the total
+  // passes the cap — decompressed bytes stay bounded even for hostile zips.
+  let declaredTotal = 0;
+  const files = unzipSync(new Uint8Array(buf), {
+    filter: (file) => {
+      declaredTotal += file.originalSize;
+      return declaredTotal <= MAX_DECOMPRESSED;
+    },
+  });
   const safeNames: string[] = [];
   let total = 0;
   for (const [k, v] of Object.entries(files)) {
@@ -45,7 +54,7 @@ const listZip = (buf: Buffer): { names: string[]; read: (name: string) => Buffer
     names: safeNames,
     read: (name: string): Buffer | null => {
       const f = files[name];
-      return f ? Buffer.from(f) : new Buffer(0);
+      return f ? Buffer.from(f) : null;
     },
   };
 };

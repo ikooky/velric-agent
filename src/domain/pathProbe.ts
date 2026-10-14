@@ -80,7 +80,11 @@ export const probePaths = async (input: PathProbeInput): Promise<PathProbeResult
   const soft404StatusBytes = soft404Signature
     ? (() => {
         const first = soft404Signature[0]!.split(":");
-        return { status: Number(first[0]), bytes: 0 };
+        // Signature carries a size BAND (s/m/l/xl), not exact bytes — report
+        // the band midpoint so the artifact stops claiming a fake 0.
+        const band = first[2] ?? "m";
+        const bandBytes = band === "s" ? 256 : band === "m" ? 1024 : band === "l" ? 8192 : 32768;
+        return { status: Number(first[0]), bytes: bandBytes };
       })()
     : null;
 

@@ -1,7 +1,6 @@
 import { fetchUrl } from "../adapters/http.js";
 import { ensureDir, writeArtifact } from "../adapters/artifacts.js";
 import { parseMpaPage } from "../domain/mpa.js";
-import {  } from "../domain/endpoints.js";
 import { pooled } from "./harvest.js";
 
 const SKIP_EXT =

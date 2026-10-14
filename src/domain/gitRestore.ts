@@ -137,10 +137,18 @@ export const restoreGit = async (input: GitRestoreInput): Promise<GitRestoreResu
       if (refFile.status === 200) headSha = (refFile.body.match(/[0-9a-f]{40}/) ?? [null])[0] ?? null;
     }
   }
-  // packed-refs fallback
+  // packed-refs fallback: match the branch named in HEAD — the FIRST sha in
+  // packed-refs is usually a peeled tag, not the branch head.
   if (!headSha) {
+    const m = head.body.match(/ref:\s*refs\/heads\/(\S+)/);
     const packed = await fetchUrl(`${base}/.git/packed-refs`, opts);
-    if (packed.status === 200) headSha = (packed.body.match(/[0-9a-f]{40}/) ?? [null])[0] ?? null;
+    if (packed.status === 200) {
+      if (m) {
+        const lineRe = new RegExp(`^([0-9a-f]{40}) refs/heads/${m[1]!.replace(/[^\w-]/g, "\\$&")}$`, "m");
+        headSha = (packed.body.match(lineRe) ?? [null])[1] ?? null;
+      }
+      if (!headSha) headSha = (packed.body.match(/[0-9a-f]{40}/) ?? [null])[0] ?? null;
+    }
   }
 
   if (headSha) {

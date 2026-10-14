@@ -49,6 +49,7 @@ export class TrafficRecorder {
   private upstreamProxy?: string;
   private maxExchanges: number;
   private upstreamAgent: import("undici").ProxyAgent | null = null;
+  private readonly tunnels = new Set<{ c: import("node:stream").Duplex; s: import("node:net").Socket }>();
 
   constructor(input: TrafficRecorderInput) {
     this.outDir = input.outputRoot;
@@ -70,7 +71,14 @@ export class TrafficRecorder {
   };
 
   readonly stop = async (): Promise<void> => {
-    if (this.server) await new Promise<void>((resolve) => this.server!.close(() => resolve()));
+    if (this.server) {
+      // close() waits on open sockets — destroy live tunnels first, then
+      // sweep keep-alive connections (Node >= 18.2).
+      for (const t of this.tunnels) { try { t.c.destroy(); } catch { /* gone */ } try { t.s.destroy(); } catch { /* gone */ } }
+      this.tunnels.clear();
+      this.server.closeAllConnections?.();
+      await new Promise<void>((resolve) => this.server!.close(() => resolve()));
+    }
     this.server = null;
     if (this.upstreamAgent) { await this.upstreamAgent.destroy().catch(() => {}); this.upstreamAgent = null; }
   };
@@ -104,10 +112,18 @@ export class TrafficRecorder {
 
   private readonly handleHttp = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const id = `x${++this.counter}`;
+    const MAX_BODY = 32 * 1024 * 1024; // one-body cap: maxExchanges bounds count, not size
     const chunks: Buffer[] = [];
-    req.on("data", (c: Buffer) => chunks.push(c));
+    let reqBytes = 0;
+    let tooBig = false;
+    req.on("data", (c: Buffer) => {
+      reqBytes += c.length;
+      if (reqBytes <= MAX_BODY) chunks.push(c);
+      else tooBig = true;
+    });
     const bodyPromise = new Promise<Buffer>((resolve) => req.on("end", () => resolve(Buffer.concat(chunks))));
     const body = await bodyPromise;
+    if (tooBig) { res.writeHead(413); res.end("body too large"); return; }
 
     if (this.exchanges.length >= this.maxExchanges) { res.writeHead(503); res.end("recorder cap"); return; }
     const reqHash = body.length > 0 ? await this.spill(body) : null;
@@ -126,7 +142,17 @@ export class TrafficRecorder {
         body: body.length > 0 ? body : undefined,
         dispatcher,
       });
-      const respBody = Buffer.from(await r.body.arrayBuffer());
+      // Cap the buffered upstream body: stream-read with a running counter,
+      // keep the prefix up to the cap.
+      const respChunks: Buffer[] = [];
+      let respLen = 0;
+      for await (const c of r.body as unknown as AsyncIterable<Buffer>) {
+        respLen += c.length;
+        if (respLen > MAX_BODY) break;
+        respChunks.push(c);
+      }
+      const respBody = Buffer.concat(respChunks);
+      void respLen;
       const respHash = respBody.length > 0 ? await this.spill(respBody) : null;
       const respHeaders: Record<string, string> = {};
       for (const [k, v] of Object.entries(r.headers)) respHeaders[k] = Array.isArray(v) ? v.join(", ") : String(v);
@@ -161,6 +187,7 @@ export class TrafficRecorder {
     const finish = (status: number | null): void => {
       if (settled) return; // exactly one record per tunnel — close fires on both ends
       settled = true;
+      this.tunnels.delete(tunnel);
       void this.record({
         ts: new Date().toISOString(), id, method: "CONNECT", url: raw,
         status, reqHeaders: flattenHeaders(req.headers), reqBodyHash: null, reqBodyBytes: upBytes,
@@ -170,6 +197,13 @@ export class TrafficRecorder {
     clientSock.on("data", (d: Buffer) => { upBytes += d.length; });
 
     const srvSock = netConnect({ host, port });
+    const tunnel = { c: clientSock, s: srvSock };
+    this.tunnels.add(tunnel);
+    // Idle timeout: a silent tunnel must not hold a socket pair open forever.
+    const idle = setTimeout(() => { finish(null); try { clientSock.destroy(); srvSock.destroy(); } catch { /* gone */ } }, 300000);
+    const bump = (): void => { idle.refresh(); };
+    clientSock.on("data", bump);
+    srvSock.on("data", bump);
     srvSock.on("data", (d: Buffer) => { downBytes += d.length; });
     srvSock.on("connect", () => {
       clientSock.write("HTTP/1.1 200 Connection Established\r\n\r\n");

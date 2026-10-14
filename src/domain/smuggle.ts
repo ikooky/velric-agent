@@ -85,14 +85,18 @@ export const probeSmuggle = async (input: SmuggleInput): Promise<SmuggleResult> 
       },
       body: "0\r\n\r\n",
     });
+    let raceTimer: NodeJS.Timeout | undefined;
     const res = await Promise.race([
       resP.then(async (r) => {
         const { statusCode } = r;
         await r.body.dump?.().catch(() => {});
         return { status: statusCode, ms: Date.now() - t0 };
       }),
-      new Promise<{ status: number; ms: number }>((resolve) => setTimeout(() => resolve({ status: -1, ms: Date.now() - t0 }), input.timeoutMs ?? 8000)),
+      new Promise<{ status: number; ms: number }>((resolve) => {
+        raceTimer = setTimeout(() => resolve({ status: -1, ms: Date.now() - t0 }), input.timeoutMs ?? 8000);
+      }),
     ]);
+    if (raceTimer) clearTimeout(raceTimer); // else the timer pins the loop for its full span
     probed++;
     // 400 from either parser = the pair was rejected (good). A clean
     // 200-family on CL+TE both = framing ambiguity.
