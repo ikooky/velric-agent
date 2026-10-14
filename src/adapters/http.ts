@@ -88,7 +88,13 @@ const fetchOnce = async (
   // A real egress proxy: requests route through it. Never leaked to the target.
   // Agents are pooled per proxy URI (keep-alive sockets are reused instead
   // of leaking one agent — and its socket set — per request).
-  const dispatcher = options.proxy ? getProxyDispatcher(options.proxy) : undefined;
+  // Contract: fetchUrl NEVER throws — a malformed proxy URI must surface as
+  // status=0 (reachability failure), not a TypeError to the caller.
+  let dispatcher: Dispatcher | undefined;
+  if (options.proxy) {
+    try { dispatcher = getProxyDispatcher(options.proxy); }
+    catch { return { url, status: 0, ok: false, contentType: "", headers: {}, body: "", bytes: 0, sha256: createHash("sha256").update("").digest("hex"), finalUrl: null, error: "invalid proxy uri" }; }
+  }
 
   // Per-host throttle when a global rate limit is configured.
   if (globalRps > 0) {
