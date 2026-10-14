@@ -100,7 +100,7 @@ export const probePaths = async (input: PathProbeInput): Promise<PathProbeResult
       // 401/403 are interesting (path exists, protected) — record with flag
       sigCounts.set(respSig, (sigCounts.get(respSig) ?? 0) + 1);
       // Wildcard-route suspect: page <title> echoes the probed segment
-      // (e.g. github.com/actuator renders the "actuator" user profile) —
+      // (e.g. a /{owner} route renders the segment as a profile page) —
       // a /{owner}-style catch-all rendering this name, not the sensitive
       // endpoint we probed for. Flag for review instead of dropping.
       let flag = "";

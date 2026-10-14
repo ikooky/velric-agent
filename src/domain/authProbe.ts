@@ -23,6 +23,9 @@ export interface AuthProbeResult {
   readonly anonymous: { url: string; status: number }[];
   readonly authRequired: { url: string; anonStatus: number; authStatus: number | null }[];
   readonly ambiguous: { url: string; anonStatus: number; note: string }[];
+  /** Edge/IP-level block: every probe returned the same 403/429 — not
+   *  endpoint-level auth; retry with proxy or cookie before concluding. */
+  readonly edgeBlocked: boolean;
   readonly artifacts: { path: string; bytes: number }[];
 }
 
@@ -36,7 +39,22 @@ export const probeAuth = async (input: AuthProbeInput): Promise<AuthProbeResult>
     .filter((l) => l && !l.startsWith("//") && !l.startsWith("#"))
     // entries may carry "METHOD url" prefixes from runtime api lists
     .map((l) => l.replace(/^(?:GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)\s+/i, ""));
-  const urls = [...new Set(raw)].slice(0, input.maxEndpoints ?? 200);
+  let urls = [...new Set(raw)].slice(0, input.maxEndpoints ?? 200);
+  // Same-origin scoping: the auth surface we map is the TARGET's. Third-party
+  // SDK endpoints (advertising/telemetry beacons) resolved from the list are
+  // cross-origin noise — drop them unless explicitly the only content.
+  if (urls.length > 3) {
+    // registrable-domain scope (approximation: last two labels of the
+    // hostname). auth.<same-site>.com stays in scope for www.<same-site>.com;
+    // third-party SDK hosts are dropped.
+    const regDomain = (h: string): string => h.split(".").slice(-2).join(".");
+    const origins = new Map<string, number>();
+    for (const u of urls) {
+      try { const o = regDomain(new URL(u).hostname); origins.set(o, (origins.get(o) ?? 0) + 1); } catch { /* skip */ }
+    }
+    const mainOrigin = [...origins.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+    if (mainOrigin) urls = urls.filter((u) => { try { return regDomain(new URL(u).hostname) === mainOrigin; } catch { return false; } });
+  }
 
   const opts = { proxy: input.proxy, timeoutMs: input.timeoutMs ?? 8000 };
   const anonymous: AuthProbeResult["anonymous"] = [];
@@ -76,8 +94,17 @@ export const probeAuth = async (input: AuthProbeInput): Promise<AuthProbeResult>
   };
   await Promise.all(Array.from({ length: input.concurrency ?? 8 }, worker));
 
+  const total = anonymous.length + authRequired.length + ambiguous.length;
+  const statusTally = new Map<number, number>();
+  for (const a of anonymous) statusTally.set(a.status, (statusTally.get(a.status) ?? 0) + 1);
+  for (const a of authRequired) statusTally.set(a.anonStatus, (statusTally.get(a.anonStatus) ?? 0) + 1);
+  for (const a of ambiguous) statusTally.set(a.anonStatus, (statusTally.get(a.anonStatus) ?? 0) + 1);
+  const [dominantStatus, dominantCount] = [...statusTally.entries()].sort((a, b) => b[1] - a[1])[0] ?? [0, 0];
+  const edgeBlocked = total >= 4 && dominantCount / total >= 0.8 && (dominantStatus === 403 || dominantStatus === 429);
+
   const body = JSON.stringify({
-    probed: anonymous.length + authRequired.length + ambiguous.length,
+    probed: total,
+    edgeBlocked,
     anonymous: anonymous.sort((a, b) => a.url.localeCompare(b.url)),
     authRequired: authRequired.sort((a, b) => a.url.localeCompare(b.url)),
     ambiguous: ambiguous.sort((a, b) => a.url.localeCompare(b.url)),
@@ -85,8 +112,8 @@ export const probeAuth = async (input: AuthProbeInput): Promise<AuthProbeResult>
   const path = join(input.outputRoot, "auth_surface.json");
   await writeFile(path, body);
   return {
-    probed: anonymous.length + authRequired.length + ambiguous.length,
-    anonymous, authRequired, ambiguous,
+    probed: total,
+    anonymous, authRequired, ambiguous, edgeBlocked,
     artifacts: [{ path, bytes: Buffer.byteLength(body) }],
   };
 };

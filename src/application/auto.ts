@@ -89,8 +89,8 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
   if (!done("subdomains") && isDomainSeed) {
     try {
       // Strip scheme, path AND leading www. — subdomain enumeration must
-      // target the registrable apex (www.shopify.com → shopify.com), else
-      // every subdomain probe looks for www.shopify.com.<word>.
+      // target the registrable apex (www.host.tld → host.tld), else every
+      // subdomain probe looks for www.host.tld.<word>.
       let domain = input.seed.replace(/^https?:\/\//, "").split("/")[0]!;
       domain = domain.replace(/^(?:www|m|mobile)\./, "");
       const { discoverSubdomains } = await import("../domain/subdomains.js");
@@ -124,15 +124,15 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
     const scripts = (html.match(/<script[^>]+src=/gi) ?? []).length;
     const spaMark = /__NUXT__|__NEXT_DATA__|data-v-app|ng-app/i.test(html);
     // MPA strong signal: server-rendered internal links. Real SPAs ship an
-    // app shell with almost none; content MPA pages (gov.uk: ~100) have many.
+    // app shell with almost none; content MPA pages (~100) have many.
     const internalLinks = (html.match(/<a[^>]+href=["']?\/[^"']+["']?/gi) ?? []).length;
     const forms = (html.match(/<form/i) ?? []).length;
     // SPA detection needs converging signals, not a single marker:
     //   1. framework marker (NUXT/NEXT/vue/ng) AND sparse shell (<40 links), OR
     //   2. bundle dominance: 10+ external scripts and near-zero server links
-    //      (zhihu SSR shell: 21 scripts / 0 links), OR
+    //      (SSR-rendered SPA shells: 20+ scripts, 0-2 server links), OR
     //   3. micro-frontend marker with few links.
-    // Content MPAs (gov.uk: ng-app widget + 103 links) must stay MPA.
+    // Content MPAs (framework-widget + 100+ links) must stay MPA.
     if ((spaMark && internalLinks < 40) || (scripts >= 10 && internalLinks <= 2)) mode = "spa";
     else mode = "mpa";
     stages.push({ stage: "classify", status: "ok", detail: `mode=${mode} scripts=${scripts} forms=${forms}` });
@@ -161,12 +161,34 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
   const chromium = input.chromiumPath ?? "/usr/bin/chromium";
   let runtimeCalls = 0;
   if (!input.skipRuntime) {
-    try {
-      const r = await captureRuntime({ baseUrl: base, outputRoot: root, chromiumPath: chromium, proxy: input.proxy, routes: ["/"], waitMs: 4000, perRouteMs: 2000 });
-      runtimeCalls = r.uniqueCalls.length;
-      stages.push({ stage: "capture_runtime", status: "ok", detail: `calls=${r.uniqueCalls.length} details=${r.details}` });
-    } catch (e) {
-      stages.push({ stage: "capture_runtime", status: "fail", detail: String((e as Error).message ?? e).slice(0, 120) });
+    // Heavy SPAs can crash the renderer under memory pressure (gitlab: Target
+    // crashed). One retry with a shorter wait often lands it; a partial
+    // runtime_api.json from the crashed run still contributes endpoints.
+    let lastErr = "";
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const r = await captureRuntime({ baseUrl: base, outputRoot: root, chromiumPath: chromium, proxy: input.proxy, routes: ["/"], waitMs: attempt === 0 ? 4000 : 2000, perRouteMs: 2000 });
+        runtimeCalls = r.uniqueCalls.length;
+        stages.push({ stage: "capture_runtime", status: "ok", detail: `calls=${r.uniqueCalls.length} details=${r.details}` + (attempt > 0 ? " (retry)" : "") });
+        lastErr = "";
+        break;
+      } catch (e) {
+        lastErr = String((e as Error).message ?? e).slice(0, 120);
+      }
+    }
+    if (lastErr) {
+      // Salvage: did the crashed run still write runtime_api.json?
+      if (await exists(join(root, "runtime_api.json"))) {
+        try {
+          const salvaged = await readJson<{ uniqueCalls?: string[] }>(join(root, "runtime_api.json"));
+          runtimeCalls = salvaged?.uniqueCalls?.length ?? 0;
+          stages.push({ stage: "capture_runtime", status: "ok", detail: `salvaged calls=${runtimeCalls} (renderer crashed mid-run)` });
+        } catch {
+          stages.push({ stage: "capture_runtime", status: "fail", detail: lastErr });
+        }
+      } else {
+        stages.push({ stage: "capture_runtime", status: "fail", detail: lastErr });
+      }
     }
   } else {
     stages.push({ stage: "capture_runtime", status: "skip", detail: "skipRuntime=true" });
@@ -371,8 +393,16 @@ const introspectionBlocked = (body: string): boolean =>
       });
     }
     // Anonymous-reachable endpoints (auth surface)
-    const authJson = await readJson<{ anonymous: { url: string }[]; authRequired: { url: string }[] }>(join(root, "auth_surface.json"));
-    if (authJson && authJson.anonymous.length > 0) {
+    const authJson = await readJson<{ anonymous: { url: string }[]; authRequired: { url: string }[]; edgeBlocked?: boolean }>(join(root, "auth_surface.json"));
+    if (authJson?.edgeBlocked) {
+      fList.push({
+        name: "边缘级阻断(全站同码 403/429)",
+        severity: "low",
+        summary: "auth-probe 全部端点统一 403/429 = IP/UA 级边缘拦截,非端点鉴权;需代理/cookie 复测",
+        poc: `dominant-status 检测:${authJson.authRequired?.length ?? 0} 条统一拦截`,
+      });
+    }
+    if (authJson && !authJson.edgeBlocked && authJson.anonymous.length > 0) {
       fList.push({
         name: `匿名可达 API ${authJson.anonymous.length} 个`,
         severity: authJson.anonymous.length > 30 ? "medium" : "low",

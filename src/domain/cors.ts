@@ -28,7 +28,7 @@ export interface CorsProbeResult {
 
 export const DEFAULT_CORS_ORIGINS: readonly string[] = [
   "https://evil-velric.example.com",
-  "https://www.bilibili.com.evil-velric.example.com",
+  "https://target-origin.evil-velric.example.com",
   "null",
   "http://localhost:8080",
 ];

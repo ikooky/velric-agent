@@ -197,7 +197,7 @@ export const captureRuntime = async (
     };
     const shellLinks = shell.links.filter((h): h is string => !!h && h.length > 1);
     // Route fan-out cap: runtime's job is API-surface enumeration, not full-site
-    // mirroring. Heavy SPAs expose hundreds of live-DOM links (Discourse: ~106);
+    // mirroring. Heavy SPAs expose hundreds of live-DOM links (~100+);
     // visiting them all starves the route loop on modest hardware. Explicit
     // input.routes take priority; discovered shell links are capped.
     const maxRoutes = input.maxRoutes ?? 30;
@@ -300,7 +300,7 @@ export const captureRuntime = async (
     );
     // api_merged is the canonical endpoint list for downstream stages
     // (auth_probe / batch summary / run_diff). Write it even when no static
-    // corpus exists — runtime-only endpoints (httpbin /spec.json) must not
+    // corpus exists — runtime-only endpoints (spec/API descriptor docs) must not
     // be silently dropped.
     {
       let staticList = "";
