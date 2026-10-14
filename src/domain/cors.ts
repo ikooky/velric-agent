@@ -28,15 +28,25 @@ export interface CorsProbeResult {
 
 export const DEFAULT_CORS_ORIGINS: readonly string[] = [
   "https://evil-velric.example.com",
-  "https://target-origin.evil-velric.example.com",
   "null",
   "http://localhost:8080",
 ];
 
+/** Suffix-reflection variant built from the target host:
+ *  https://<target-host>.evil-velric.example.com — catches sloppy
+ *  suffix-matching ACAO allowlists. */
+const suffixReflectionOrigin = (baseUrl: string): string => {
+  try {
+    return `https://${new URL(baseUrl).hostname}.evil-velric.example.com`;
+  } catch {
+    return "https://suffix.evil-velric.example.com";
+  }
+};
+
 export const probeCors = async (input: CorsProbeInput): Promise<CorsProbeResult> => {
   const base = input.baseUrl.startsWith("http") ? input.baseUrl : `https://${input.baseUrl}`;
   await mkdir(input.outputRoot, { recursive: true });
-  const origins = input.origins ?? DEFAULT_CORS_ORIGINS;
+  const origins = input.origins ?? [...DEFAULT_CORS_ORIGINS.slice(0, 1), suffixReflectionOrigin(base), ...DEFAULT_CORS_ORIGINS.slice(1)];
 
   const results: CorsProbeResult["results"] = [];
   for (const origin of origins) {
