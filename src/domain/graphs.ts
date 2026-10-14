@@ -46,6 +46,9 @@ export class AssetStore {
     await writeFile(this.file, JSON.stringify(this.graph, null, 2));
   }
 
+  /** Read-only snapshot for retrieval layers (scan platform list/count). */
+  all(): AssetNode[] { return Object.values(this.graph.assets); }
+
   upsert(input: { type: AssetType; value: string; parent?: string; taskTag?: string; meta?: Record<string, unknown> }): AssetNode {
     const key = assetKey(input.type, input.value);
     const existing = this.graph.assets[key];

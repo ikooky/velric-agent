@@ -128,3 +128,61 @@ describe("trafficRecorder MITM", () => {
     tlsServer.close();
   });
 });
+
+describe("scanPlatform", () => {
+  it("runs a project->task->pipeline and stores assets with task provenance", async () => {
+    const { createProject, createTask, runTask, listAssets, countAssets } = await import("../src/domain/scanPlatform.js");
+    const { createServer } = await import("node:http");
+    const dir = await mkdtemp(join(tmpdir(), "velric-sp-"));
+
+    const srv = createServer((req, res) => {
+      if (req.url === "/admin/") { res.writeHead(200, { "content-type": "text/html" }); res.end("<html><head><title>Admin Console</title></head><body>dashboard</body></html>"); return; }
+      res.writeHead(404); res.end("nope");
+    });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    const port = (srv.address() as { port: number }).port;
+    const target = `http://127.0.0.1:${port}`;
+
+    const p = await createProject(dir, { name: "t", targets: [target] });
+    const t = await createTask(dir, { projectId: p.id, name: "webmap", modules: ["fingerprint", "dir_scan"] });
+    const r = await runTask(dir, { taskId: t.id, timeoutMs: 10000 });
+    expect(r.status).toBe("done");
+    expect(r.stageLog.length).toBe(2);
+    const eps = await listAssets(dir, { type: "endpoint" });
+    expect(eps.total).toBeGreaterThanOrEqual(1);
+    expect(eps.items.some((a) => a.value.startsWith("/admin/"))).toBe(true);
+    const cnt = await countAssets(dir, { taskTag: `task:${t.id}` });
+    expect(cnt.total).toBeGreaterThanOrEqual(1);
+    // provenance: every task-tagged asset carries the tag
+    for (const a of eps.items) expect(a.taskTag).toBe(`task:${t.id}`);
+    // unknown module rejected
+    await expect(createTask(dir, { projectId: p.id, name: "bad", modules: ["nope"] })).rejects.toThrow(/unknown modules/);
+    srv.close();
+  });
+
+  it("chains phase2 from phase1 subdomain assets via sourceTask", async () => {
+    const { createProject, createTask, runTask } = await import("../src/domain/scanPlatform.js");
+    const { AssetStore } = await import("../src/domain/graphs.js");
+    const dir = await mkdtemp(join(tmpdir(), "velric-sp-"));
+
+    const p = await createProject(dir, { name: "chain", targets: ["http://example.org"] });
+    const t1 = await createTask(dir, { projectId: p.id, name: "p1", modules: ["fingerprint"], targets: ["http://example.org"] });
+    // task without sourceTask and without targets falls back to project targets — ok.
+    const r1 = await runTask(dir, { taskId: t1.id, timeoutMs: 4000 });
+    // inject a subdomain tagged with task:t1 (simulating subdomain_scan output)
+    const store = new AssetStore(dir);
+    await store.load();
+    store.upsert({ type: "subdomain", value: "sub.example.org", taskTag: `task:${t1.id}` });
+    await store.save();
+    const t2 = await createTask(dir, { projectId: p.id, name: "p2", modules: ["fingerprint"], sourceTask: t1.id });
+    // runTask resolves targets from phase1's subdomain assets; network will
+    // fail against a fake host but the resolution itself must engage (stage
+    // detail shows the resolved target, not _resolve:fail).
+    const r2 = await runTask(dir, { taskId: t2.id, timeoutMs: 4000 });
+    expect(r2.stageLog[0]!.detail).toContain("sub.example.org");
+    // sourceTask must be done: fresh task chained to a pending task is rejected at create
+    const t3 = await createTask(dir, { projectId: p.id, name: "p3", modules: ["fingerprint"], targets: ["http://example.org"] });
+    const t4 = await createTask(dir, { projectId: p.id, name: "p4", modules: ["fingerprint"], sourceTask: t3.id });
+    await expect(runTask(dir, { taskId: t4.id, timeoutMs: 4000 })).rejects.toThrow(/must be done/);
+  });
+});

@@ -806,19 +806,6 @@ export const reportExportContract: ToolContract = {
   examples: [{ title: "csv", input: { reportJsonFile: "/tmp/recon/report.json", outputRoot: "/tmp/recon", format: "csv" } }],
 };
 
-export const scopesentryContract: ToolContract = {
-  name: "scopesentry_sync",
-  title: "ScopeSentry thin client",
-  description:
-    "Push recon outputs to a ScopeSentry platform: list projects/assets, create scan tasks from subdomain/URL lists (operator-supplied endpoint+key).",
-  kind: "runtime",
-  inputSchema: z.object({ baseUrl: z.string(), apiKey: z.string(), action: z.enum(["list_projects", "list_assets", "push_subdomains"]), assetType: z.string().optional(), search: z.string().optional(), name: z.string().optional(), node: z.array(z.string()).optional(), template: z.string().optional(), subdomainsFile: z.string().optional(), proxy: z.string().optional(), observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({ ok: z.boolean() }),
-  annotations: writingAnnotations(),
-  examples: [{ title: "push", input: { baseUrl: "http://ss.example:8082", apiKey: "ssk_x", action: "push_subdomains", name: "recon", node: ["n1"], template: "t1", subdomainsFile: "/tmp/recon/subdomains.txt" } }],
-};
-
-
 export const evidenceBindContract: ToolContract = {
   name: "evidence_bind",
   title: "Finding↔evidence binding lifecycle",
@@ -829,6 +816,19 @@ export const evidenceBindContract: ToolContract = {
   outputSchema: z.object({ version: z.number() }),
   annotations: writingAnnotations(),
   examples: [{ title: "bind", input: { outputRoot: "/tmp/recon", action: "bind", findingId: "f1", expectedVersion: 0, refs: [{ hash: "a".repeat(64), role: "proof" }] } }],
+};
+
+
+export const scanPlatformContract: ToolContract = {
+  name: "scan_platform",
+  title: "Native scan platform (in-process, zero external service)",
+  description:
+    "ScopeSentry functional equivalent built in-process: projects -> tasks (ordered module pipeline: subdomain_scan/port_scan/fingerprint/dir_scan/web_crawler/nuclei_lite/web_probes) -> shared AssetStore with task provenance + local list/count retrieval. Two-phase chaining via sourceTask (targets resolved from a done task's subdomain assets). No external platform, no credentials.",
+  kind: "runtime",
+  inputSchema: z.object({ outputRoot, action: z.enum(["create_project", "create_task", "run_task", "get_task", "list_tasks", "list_projects", "list_assets", "count_assets"]), name: z.string().optional(), targets: z.array(z.string()).optional(), projectId: z.string().optional(), taskId: z.string().optional(), modules: z.array(z.string()).optional(), sourceTask: z.string().optional(), query: z.object({ type: z.string().optional(), taskTag: z.string().optional(), valuePrefix: z.string().optional(), valueRegex: z.string().optional() }).optional(), page: z.number().optional(), pageSize: z.number().optional(), proxy: z.string().optional(), cookie: z.string().optional(), timeoutMs: z.number().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ ok: z.boolean() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "two-phase chain", input: { outputRoot: "/tmp/recon", action: "create_task", projectId: "p1", name: "phase2", modules: ["port_scan", "fingerprint"], sourceTask: "t1" } }],
 };
 
 export const ALL_CONTRACTS: readonly ToolContract[] = [
@@ -882,8 +882,8 @@ export const ALL_CONTRACTS: readonly ToolContract[] = [
   retestContract,
   trafficQueryContract,
   reportExportContract,
-  scopesentryContract,
   evidenceBindContract,
+  scanPlatformContract,
   huntContract,
   huntRecordContract,
   huntOverviewContract,

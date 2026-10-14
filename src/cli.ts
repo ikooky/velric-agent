@@ -98,6 +98,7 @@ Usage:
   velric-agent traffic-query <dir> <action>    traffic search/get
   velric-agent export-findings <f> <dir> <fmt> findings csv/json/md export
   velric-agent evidence-bind <dir> <action>     evidence binding lifecycle
+  velric-agent scan-platform <dir> <action>     native scan platform (projects/tasks/pipeline/assets)
   velric-agent help
 
 Common flags: --proxy URL | --proxy-pool FILE, --rps N (global rate limit), --cookie STR, --timeout MS
@@ -761,6 +762,47 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
         if (action === "update" || action === "unbind") {
           const fn = action === "update" ? mod.updateBinding : mod.unbindEvidence;
           out(await fn({ root: dir, findingId: positional[2] ?? "", bindingId: positional[3] ?? "", expectedVersion: Number(positional[4] ?? 0) } as never));
+          return 0;
+        }
+        console.error("unknown action"); return 2;
+      }
+      case "scan-platform": {
+        const [dir, action] = positional;
+        if (!dir || !action) { console.error("usage: scan-platform <outdir> create-project|create-task|run-task|get-task|list-tasks|list-projects|list-assets|count-assets ..."); return 2; }
+        const mod = await import("./domain/scanPlatform.js");
+        if (action === "create-project") {
+          const [name, ...targets] = positional.slice(2);
+          if (!name || targets.length === 0) { console.error("usage: scan-platform <dir> create-project <name> <target...>"); return 2; }
+          out(await mod.createProject(dir, { name, targets }));
+          return 0;
+        }
+        if (action === "create-task") {
+          const [projectId, name, modulesCsv, targetsCsv] = positional.slice(2);
+          if (!projectId || !name || !modulesCsv) { console.error("usage: scan-platform <dir> create-task <projectId> <name> <mod1,mod2> [target1,target2 | @sourceTaskId]"); return 2; }
+          const modules = modulesCsv.split(",");
+          const sourceTask = targetsCsv?.startsWith("@") ? targetsCsv.slice(1) : undefined;
+          const targets = sourceTask ? undefined : targetsCsv?.split(",").filter(Boolean);
+          out(await mod.createTask(dir, { projectId, name, modules, targets, sourceTask }));
+          return 0;
+        }
+        if (action === "run-task") {
+          const [taskId] = positional.slice(2);
+          if (!taskId) { console.error("usage: scan-platform <dir> run-task <taskId> [--proxy p] [--cookie c]"); return 2; }
+          out(await mod.runTask(dir, { taskId, proxy: typeof flags.proxy === "string" ? flags.proxy : undefined, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined }));
+          return 0;
+        }
+        if (action === "get-task") { out(await mod.getTask(dir, positional[2] ?? "")); return 0; }
+        if (action === "list-tasks") { out(await mod.listTasks(dir, positional[2])); return 0; }
+        if (action === "list-projects") { out(await mod.listProjects(dir)); return 0; }
+        if (action === "list-assets" || action === "count-assets") {
+          const query: { type?: string; taskTag?: string; valuePrefix?: string; valueRegex?: string } = {};
+          const [type, taskTag, valuePrefix, valueRegex] = positional.slice(2);
+          if (type && type !== "-") query.type = type;
+          if (taskTag && taskTag !== "-") query.taskTag = taskTag;
+          if (valuePrefix && valuePrefix !== "-") query.valuePrefix = valuePrefix;
+          if (valueRegex && valueRegex !== "-") query.valueRegex = valueRegex;
+          if (action === "list-assets") { out(await mod.listAssets(dir, query, num(flags.page) ?? 1, num(flags.pageSize) ?? 50)); return 0; }
+          out(await mod.countAssets(dir, query));
           return 0;
         }
         console.error("unknown action"); return 2;

@@ -35,11 +35,11 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `exploration-graph` — 探索图(goal→intent→fact→finding 血缘)
 - `evidence` — 证据存储(sha256 寻址+跨漏洞去重)
 - `evidence-bind` — 证据绑定生命周期(角色/版本冲突拒绝/重排/md-zip 导出)
+- `scan-platform` — 原生扫描平台(进程内:项目/任务/模块流水线/资产检索,sourceTask 两阶段链,零外部服务零凭据)
 - `cold-graph` — 探索图冷压缩(digest 折叠/按需展开)
 - `retest` — 漏洞复测(PoC 重放+reproduced/fixed/inconclusive+状态流转)
 - `traffic-query` — 流量检索(host/status/method/文本+单体取回)
 - `export-findings` — findings 导出(csv/json/单条 md)
-- `scopesentry-sync` — ScopeSentry 推送(MCP-only,需操作员提供端点+key)
 **验证**
 - `auth-probe` — 匿名 vs 带 cookie 双探，产出鉴权面清单(含边缘阻断识别)
 - `oidc-probe` — OAuth/OIDC/SAML 配置发现与弱配置检查

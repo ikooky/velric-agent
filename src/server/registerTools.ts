@@ -600,46 +600,59 @@ export const handlers: Readonly<Record<string, Handler>> = {
     void join;
     return { files: files.length };
   },
-  scopesentry_sync: async (raw) => {
-    const p = z.object({ baseUrl: z.string(), apiKey: z.string(), action: z.enum(["list_projects", "list_assets", "push_subdomains"]), assetType: z.string().optional(), search: z.string().optional(), name: z.string().optional(), node: z.array(z.string()).optional(), template: z.string().optional(), subdomainsFile: z.string().optional(), proxy: z.string().optional() }).parse(raw);
-    const ss = await import("../domain/scopesentry.js");
-    const cfg = { baseUrl: p.baseUrl, apiKey: p.apiKey, proxy: p.proxy };
-    if (p.action === "list_projects") return { ok: true, result: await ss.listProjects(cfg) };
-    if (p.action === "list_assets") {
-      if (!p.assetType) throw new Error("assetType required");
-      return { ok: true, result: await ss.listAssets(cfg, { asset_type: p.assetType, search: p.search }) };
-    }
-    if (!p.name || !p.node || !p.template || !p.subdomainsFile) throw new Error("name+node+template+subdomainsFile required");
-    const { readFile } = await import("node:fs/promises");
-    const subs = (await readFile(p.subdomainsFile, "utf8")).split("\n").map((l) => l.trim()).filter(Boolean);
-    return { ok: true, result: await ss.pushSubdomains(cfg, { name: p.name, node: p.node, template: p.template, subdomains: subs }) };
-  },
   evidence_bind: async (raw) => {
     const p = z.object({ outputRoot: z.string(), action: z.enum(["bind", "update", "unbind", "reorder", "get", "export"]), findingId: z.string().optional(), expectedVersion: z.number().optional(), refs: z.array(z.object({ hash: z.string(), role: z.enum(["baseline", "proof", "verification", "supporting"]), note: z.string().optional() })).optional(), bindingId: z.string().optional(), role: z.enum(["baseline", "proof", "verification", "supporting"]).optional(), note: z.string().optional(), order: z.array(z.string()).optional(), zipPath: z.string().optional() }).parse(raw);
     const mod = await import("../domain/evidenceBinding.js");
     if (p.action === "bind") {
       if (!p.findingId || !p.refs) throw new Error("findingId+refs required");
-      return mod.bindEvidence({ root: p.outputRoot, findingId: p.findingId, expectedVersion: p.expectedVersion ?? 0, refs: p.refs });
+      return await mod.bindEvidence({ root: p.outputRoot, findingId: p.findingId, expectedVersion: p.expectedVersion ?? 0, refs: p.refs });
     }
     if (p.action === "update") {
       if (!p.findingId || !p.bindingId) throw new Error("findingId+bindingId required");
-      return mod.updateBinding({ root: p.outputRoot, findingId: p.findingId, bindingId: p.bindingId, expectedVersion: p.expectedVersion ?? 0, role: p.role, note: p.note });
+      return await mod.updateBinding({ root: p.outputRoot, findingId: p.findingId, bindingId: p.bindingId, expectedVersion: p.expectedVersion ?? 0, role: p.role, note: p.note });
     }
     if (p.action === "unbind") {
       if (!p.findingId || !p.bindingId) throw new Error("findingId+bindingId required");
-      return mod.unbindEvidence({ root: p.outputRoot, findingId: p.findingId, bindingId: p.bindingId, expectedVersion: p.expectedVersion ?? 0 });
+      return await mod.unbindEvidence({ root: p.outputRoot, findingId: p.findingId, bindingId: p.bindingId, expectedVersion: p.expectedVersion ?? 0 });
     }
     if (p.action === "reorder") {
       if (!p.findingId || !p.order) throw new Error("findingId+order required");
-      return mod.reorderBindings({ root: p.outputRoot, findingId: p.findingId, expectedVersion: p.expectedVersion ?? 0, order: p.order });
+      return await mod.reorderBindings({ root: p.outputRoot, findingId: p.findingId, expectedVersion: p.expectedVersion ?? 0, order: p.order });
     }
     if (p.action === "export") {
       if (!p.findingId || !p.zipPath) throw new Error("findingId+zipPath required");
-      return mod.exportBindings({ root: p.outputRoot, findingId: p.findingId, zipPath: p.zipPath });
+      return await mod.exportBindings({ root: p.outputRoot, findingId: p.findingId, zipPath: p.zipPath });
     }
     if (!p.findingId) throw new Error("findingId required");
     const b = await mod.getBindings(p.outputRoot, p.findingId);
     return b ?? { findingId: p.findingId, version: 0, bindings: [] };
+  },
+  scan_platform: async (raw) => {
+    const p = z.object({ outputRoot: z.string(), action: z.enum(["create_project", "create_task", "run_task", "get_task", "list_tasks", "list_projects", "list_assets", "count_assets"]), name: z.string().optional(), targets: z.array(z.string()).optional(), projectId: z.string().optional(), taskId: z.string().optional(), modules: z.array(z.string()).optional(), sourceTask: z.string().optional(), query: z.object({ type: z.string().optional(), taskTag: z.string().optional(), valuePrefix: z.string().optional(), valueRegex: z.string().optional() }).optional(), page: z.number().optional(), pageSize: z.number().optional(), proxy: z.string().optional(), cookie: z.string().optional(), timeoutMs: z.number().optional() }).parse(raw);
+    const mod = await import("../domain/scanPlatform.js");
+    if (p.action === "create_project") {
+      if (!p.name || !p.targets) throw new Error("name+targets required");
+      return await mod.createProject(p.outputRoot, { name: p.name, targets: p.targets });
+    }
+    if (p.action === "create_task") {
+      if (!p.projectId || !p.name || !p.modules) throw new Error("projectId+name+modules required");
+      return await mod.createTask(p.outputRoot, { projectId: p.projectId, name: p.name, modules: p.modules, targets: p.targets, sourceTask: p.sourceTask });
+    }
+    if (p.action === "run_task") {
+      if (!p.taskId) throw new Error("taskId required");
+      return await mod.runTask(p.outputRoot, { taskId: p.taskId, proxy: p.proxy, cookie: p.cookie, timeoutMs: p.timeoutMs });
+    }
+    if (p.action === "get_task") {
+      if (!p.taskId) throw new Error("taskId required");
+      const t = await mod.getTask(p.outputRoot, p.taskId);
+      if (!t) throw new Error("task not found");
+      return t;
+    }
+    if (p.action === "list_tasks") return await mod.listTasks(p.outputRoot, p.projectId);
+    if (p.action === "list_projects") return await mod.listProjects(p.outputRoot);
+    if (p.action === "list_assets") return await mod.listAssets(p.outputRoot, p.query ?? {}, p.page ?? 1, p.pageSize ?? 50);
+    if (!p.query) throw new Error("query required");
+    return await mod.countAssets(p.outputRoot, p.query);
   },
   workflow_guide: async () => {
     const { WORKFLOW_GUIDE } = await import("./workflow.js");
