@@ -138,7 +138,13 @@ const runModule = async (mod: ModuleName, target: string, ctx: ModuleCtx): Promi
     if (isDomain) return { detail: "skip: dir_scan needs a URL", assets };
     const { probePaths } = await import("./pathProbe.js");
     const r = await probePaths({ baseUrl: target, outputRoot: ctx.root, proxy, cookie, timeoutMs });
-    for (const hit of r.found) assets.push({ type: "endpoint", value: hit.path, meta: { status: hit.status, bytes: hit.bytes, signature: hit.signature } });
+    const origin = new URL(target).origin;
+    for (const hit of r.found) {
+      // Full URL, not a bare path: '/.git/config' key-collides across every
+      // target in the store; anchor to the scanned origin with a parent link.
+      const cleanPath = hit.path.split("  [")[0]!.trim(); // strip inline flags
+      assets.push({ type: "endpoint", value: `${origin}${cleanPath.startsWith("/") ? cleanPath : `/${cleanPath}`}`, parent: origin, meta: { status: hit.status, bytes: hit.bytes, signature: hit.signature } });
+    }
     return { detail: `${r.found.length} sensitive paths`, assets };
   }
 
@@ -251,39 +257,49 @@ export const runTask = async (root: string, input: { taskId: string; proxy?: str
   task.stageLog = [];
   await persist(root, st);
 
-  const store = new AssetStore(root);
-  await store.load();
-  const ctx: ModuleCtx = { root, proxy: input.proxy, cookie: input.cookie, timeoutMs: input.timeoutMs };
-  const tag = `task:${task.id}`;
-  let failed = 0;
+  // Crash recovery: a mid-run throw (persist failure, OOM-adjacent module
+  // crash) previously stranded the task at "running" FOREVER — every re-run
+  // hit "task already running". Flip to failed on the way out.
+  try {
+    const store = new AssetStore(root);
+    await store.load();
+    const ctx: ModuleCtx = { root, proxy: input.proxy, cookie: input.cookie, timeoutMs: input.timeoutMs };
+    const tag = `task:${task.id}`;
+    let failed = 0;
 
-  for (const mod of task.modules) {
-    let ok = 0, fail = 0, skip = 0;
-    const details: string[] = [];
-    for (const target of targets) {
-      try {
-        const r = await runModule(mod as ModuleName, target, ctx);
-        if (r.detail.startsWith("skip:")) { skip += 1; details.push(`${target}: skip`); continue; }
-        for (const a of r.assets) {
-          store.upsert({ type: a.type as never, value: a.value, parent: a.parent, taskTag: tag, meta: a.meta });
+    for (const mod of task.modules) {
+      let ok = 0, fail = 0, skip = 0;
+      const details: string[] = [];
+      for (const target of targets) {
+        try {
+          const r = await runModule(mod as ModuleName, target, ctx);
+          if (r.detail.startsWith("skip:")) { skip += 1; details.push(`${target}: skip`); continue; }
+          for (const a of r.assets) {
+            store.upsert({ type: a.type as never, value: a.value, parent: a.parent, taskTag: tag, meta: a.meta });
+          }
+          ok += 1;
+          details.push(`${target}: ${r.detail}`);
+        } catch (e) {
+          fail += 1;
+          details.push(`${target}: ${String((e as Error).message ?? e).slice(0, 100)}`);
         }
-        ok += 1;
-        details.push(`${target}: ${r.detail}`);
-      } catch (e) {
-        fail += 1;
-        details.push(`${target}: ${String((e as Error).message ?? e).slice(0, 100)}`);
       }
+      if (fail > 0 && ok === 0 && skip === 0) failed += 1;
+      task.stageLog.push({ module: mod, status: fail === 0 ? "ok" : ok + skip > 0 ? "skip" : "fail", detail: `ok=${ok} fail=${fail} skip=${skip} | ${details.slice(0, 3).join(" ; ").slice(0, 200)}` });
+      await store.save();
+      await persist(root, st);
     }
-    if (fail > 0 && ok === 0 && skip === 0) failed += 1;
-    task.stageLog.push({ module: mod, status: fail === 0 ? "ok" : ok + skip > 0 ? "skip" : "fail", detail: `ok=${ok} fail=${fail} skip=${skip} | ${details.slice(0, 3).join(" ; ").slice(0, 200)}` });
-    await store.save();
-    await persist(root, st);
-  }
 
-  task.status = failed === task.modules.length ? "failed" : "done";
-  task.finishedAt = new Date().toISOString();
-  await persist(root, st);
-  return task;
+    task.status = failed === task.modules.length ? "failed" : "done";
+  } catch (err) {
+    task.status = "failed";
+    task.stageLog.push({ module: "_runner", status: "fail", detail: String((err as Error).message ?? err).slice(0, 200) });
+    throw err;
+  } finally {
+    task.finishedAt = new Date().toISOString();
+    await persist(root, st).catch(() => {});
+    return task;
+  }
   });
 
 // ---------------- local retrieval (ScopeSentry list/count parity) ----------------

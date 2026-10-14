@@ -112,7 +112,12 @@ export const enrichAssets = async (input: EnrichInput): Promise<EnrichResult> =>
     const url = isUrl ? raw : `https://${host}`;
     const root = rootOf(host);
     upsert({ type: "domain", key: host, rootDomain: root });
-    upsert({ type: "root_domain", key: root, rootDomain: root });
+    // A bare public suffix (host IS "co.uk") is not a registrable domain —
+    // graphs.ts already refuses these; keep the two implementations aligned.
+    if (root !== host || host.split(".").length <= 2) {
+      const PUBLIC_SUFFIX = new Set(["co.uk", "org.uk", "ac.uk", "gov.uk", "com.au", "net.au", "org.au", "co.nz", "com.br", "com.cn", "com.tw", "com.hk", "co.jp", "co.kr", "co.in", "co.za", "com.sg", "com.my"]);
+      if (!PUBLIC_SUFFIX.has(host)) upsert({ type: "root_domain", key: root, rootDomain: root });
+    }
     try {
       const rec = await resolveHost(host, errors);
       for (const a of rec.a) {

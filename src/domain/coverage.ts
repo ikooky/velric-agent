@@ -117,7 +117,7 @@ export const runCoverage = async (input: CoverageInput): Promise<CoverageResult>
       await t.click({ timeout: 4000 }).catch(() => {});
       await page.waitForTimeout(700);
       const apis = await since(before);
-      if (apis.length > 0) interactions.push({ route: page.url().replace(input.baseUrl, ""), kind: "tab", label, apis: [...new Set(apis)] });
+      if (apis.length > 0) interactions.push({ route: page.url().startsWith(input.baseUrl) ? page.url().slice(input.baseUrl.length) : page.url(), kind: "tab", label, apis: [...new Set(apis)] });
       tabClicks++;
     }
 
@@ -132,7 +132,7 @@ export const runCoverage = async (input: CoverageInput): Promise<CoverageResult>
       await b.click({ timeout: 4000 }).catch(() => {});
       await page.waitForTimeout(700);
       const apis = await since(before);
-      if (apis.length > 0) interactions.push({ route: page.url().replace(input.baseUrl, ""), kind: "table-action", label, apis: [...new Set(apis)] });
+      if (apis.length > 0) interactions.push({ route: page.url().startsWith(input.baseUrl) ? page.url().slice(input.baseUrl.length) : page.url(), kind: "table-action", label, apis: [...new Set(apis)] });
       rowClicks++;
     }
 
@@ -149,16 +149,31 @@ export const runCoverage = async (input: CoverageInput): Promise<CoverageResult>
       await b.click({ timeout: 4000 }).catch(() => {});
       await page.waitForTimeout(700);
       const apis = await since(before);
-      if (apis.length > 0) interactions.push({ route: page.url().replace(input.baseUrl, ""), kind: "toolbar", label, apis: [...new Set(apis)] });
+      if (apis.length > 0) interactions.push({ route: page.url().startsWith(input.baseUrl) ? page.url().slice(input.baseUrl.length) : page.url(), kind: "toolbar", label, apis: [...new Set(apis)] });
       toolClicks++;
     }
 
     const apiLog = await readLog();
-    void paramSamples;
     const body = JSON.stringify({ baseUrl: input.baseUrl, routesVisited, interactions, apiLog, paramSamples }, null, 2);
     const path = join(input.outputRoot, "coverage.json");
     await writeFile(path, body);
-    return { baseUrl: input.baseUrl, routesVisited, interactions, apiLog, paramSamples, artifacts: [{ path, bytes: Buffer.byteLength(body) }] };
+    // Bridge into param_samples.json (same shape runtime.ts writes) so the
+    // coverage-mode parameter matrix actually feeds merge_params — it was
+    // previously computed, voided, and dead-ended.
+    const artifacts = [{ path, bytes: Buffer.byteLength(body) }];
+    if (paramSamples.length > 0) {
+      const merged = paramSamples.map((p) => ({
+        method: p.method,
+        url: p.path.startsWith("http") ? p.path : new URL(p.path, input.baseUrl).href,
+        action: p.action,
+        body: p.body || null,
+        query: p.query || null,
+      }));
+      const pPath = join(input.outputRoot, "param_samples.json");
+      await writeFile(pPath, JSON.stringify(merged, null, 2));
+      artifacts.push({ path: pPath, bytes: Buffer.byteLength(JSON.stringify(merged)) });
+    }
+    return { baseUrl: input.baseUrl, routesVisited, interactions, apiLog, paramSamples, artifacts };
   } finally {
     await browser.close();
   }

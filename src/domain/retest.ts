@@ -86,9 +86,13 @@ export const registerFinding = async (input: {
 
 const classify = (pred: RetestPredicate, status: number | null, body: string, err?: string): RetestRecord["verdict"] => {
   if (status == null) return "inconclusive"; // unreachable / network error
+  // Vulnerability markers win over fixed-status: a status code that appears
+  // in BOTH fixed and vulnerable responses (e.g. 200) must not mask a
+  // reproduced verdict — "says fixed when still vulnerable" is the worst
+  // direction for consumers tracking remediation.
+  if (pred.vulnerableBodyAny?.some((s) => body.includes(s))) return "reproduced";
   if (pred.fixedStatuses?.includes(status)) return "fixed";
   if (pred.fixedBodyAny?.some((s) => body.includes(s))) return "fixed";
-  if (pred.vulnerableBodyAny?.some((s) => body.includes(s))) return "reproduced";
   // No predicate matched: with zero predicates we cannot distinguish a real
   // PoC landing from a login redirect / catch-all 2xx — the conservative
   // verdict is inconclusive, NOT reproduced (a false "vulnerable" is worse

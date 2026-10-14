@@ -150,7 +150,7 @@ describe("scanPlatform", () => {
     expect(r.stageLog.length).toBe(2);
     const eps = await listAssets(dir, { type: "endpoint" });
     expect(eps.total).toBeGreaterThanOrEqual(1);
-    expect(eps.items.some((a) => a.value.startsWith("/admin/"))).toBe(true);
+    expect(eps.items.some((a) => a.value.includes("/admin/"))).toBe(true); // full URL since dir_scan anchors to origin
     const cnt = await countAssets(dir, { taskTag: `task:${t.id}` });
     expect(cnt.total).toBeGreaterThanOrEqual(1);
     // provenance: every task-tagged asset carries the tag

@@ -91,7 +91,10 @@ export class AssetStore {
       if (root !== host || parts.length > 2) {
         const rootNode = this.upsert({ type: "root_domain", value: root, taskTag });
         parentKey = rootNode.key;
-        if (parts.length > 2) {
+        // Only a strict sub-host (host !== root) becomes a subdomain node — the
+        // registrable domain itself (example.co.uk, host === root) must not
+        // be duplicated into the subdomain tier.
+        if (parts.length > 2 && host !== root) {
           const sub = this.upsert({ type: "subdomain", value: host, parent: parentKey, taskTag });
           parentKey = sub.key;
         }
@@ -201,6 +204,11 @@ export class ExplorationGraph {
     const c = (k: NodeKind): number => [...this.nodes.values()].filter((n) => n.kind === k).length;
     return { goals: c("goal"), intents: c("intent"), facts: c("fact"), findings: c("finding"), hints: c("hint"), anchors: this.anchors.length };
   }
+
+  /** Read-only view of the edge list for traversal helpers. */
+  edgesSnapshot(): ExpEdge[] {
+    return this.edges;
+  }
 }
 
 const isDownstream = (g: ExplorationGraph, ancestor: string, node: string, depth = 0): boolean => {
@@ -209,11 +217,8 @@ const isDownstream = (g: ExplorationGraph, ancestor: string, node: string, depth
   return g.edgesSnapshot().some((e) => e.from === ancestor && isDownstream(g, e.to, node, depth + 1));
 };
 
-// expose edges for traversal helpers
-declare module "./graphs.js" {
-  interface ExplorationGraph { edgesSnapshot(): ExpEdge[]; }
-}
- ExplorationGraph.prototype.edgesSnapshot = function (this: ExplorationGraph): ExpEdge[] { return this["edges"]; } as never;
+// (edgesSnapshot is now a real public method on the class — the previous
+//  prototype monkey-patch reached into private state via this["edges"].)
 
 // ---------------- evidence store ----------------
 

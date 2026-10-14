@@ -157,7 +157,11 @@ export const runNucleiLite = async (input: NucleiLiteInput): Promise<NucleiLiteR
         const calibStatusOk = job.tpl.match.status ? job.tpl.match.status.includes(calib.status) : calib.status === 200;
         const calibWordsOk = job.tpl.match.word ? job.tpl.match.word.some((w) => calib.body.includes(w)) : false;
         const calibRegexOk = job.tpl.match.regex ? job.tpl.match.regex.some((re) => new RegExp(re, "i").test(calib.body)) : false;
-        const calibSame = calibStatusOk && calib.body.trim() === r.body.trim() && (calibWordsOk || calibRegexOk);
+        // Normalize away per-request tokens (hex ids, base64 nonces) before
+        // comparing — a catch-all SPA shell whose body differs ONLY by an
+        // embedded nonce previously bypassed the calibration drop.
+        const norm = (t: string): string => t.replace(/\b[0-9a-f]{16,}\b/g, "N").replace(/\b[A-Za-z0-9+/=]{24,}\b/g, "B");
+        const calibSame = calibStatusOk && norm(calib.body.trim()) === norm(r.body.trim()) && (calibWordsOk || calibRegexOk);
         if (calibSame) continue;
         const evidence = job.tpl.match.word?.find((w) => r.body.includes(w)) ?? job.tpl.match.regex?.find((re) => new RegExp(re, "i").test(r.body)) ?? `status ${r.status}`;
         matched.push({ id: job.tpl.id, severity: job.tpl.severity, name: job.tpl.name, url: r.url, evidence });

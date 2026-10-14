@@ -148,6 +148,7 @@ export const compactGraph = (
     for (const id of chunk) {
       folded.push(id);
       nodes.delete(id);
+      stamps.delete(id); // stale stamps kept qualifying deleted ids in cold scans
     }
     void rest; // oversized groups fold partially; remainder folds next round
   }

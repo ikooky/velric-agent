@@ -63,7 +63,7 @@ export const bindEvidence = async (input: BindInput): Promise<{ version: number;
   const st = await load(input.root);
   const f = st.findings[input.findingId] ?? { findingId: input.findingId, version: 0, bindings: [] };
   if (f.version !== input.expectedVersion) {
-    throw new Error(`version conflict: expected ${input.expectedVersion}, current ${f.version} — re-read and retry`);
+    throw Object.assign(new Error(`version conflict: expected ${input.expectedVersion}, current ${f.version} — re-read and retry`), { code: "version_conflict" });
   }
   for (const r of input.refs) {
     if (f.bindings.some((b) => b.hash === r.hash)) continue; // re-adding a hash is a no-op
@@ -82,7 +82,7 @@ export const updateBinding = async (input: {
   const st = await load(input.root);
   const f = st.findings[input.findingId];
   if (!f) throw new Error("finding not bound");
-  if (f.version !== input.expectedVersion) throw new Error(`version conflict: current ${f.version}`);
+  if (f.version !== input.expectedVersion) throw Object.assign(new Error(`version conflict: current ${f.version}`), { code: "version_conflict" });
   const b = f.bindings.find((x) => x.id === input.bindingId);
   if (!b) throw new Error("binding not found");
   if (input.role) (b as { role: BindRole }).role = input.role;
@@ -98,7 +98,7 @@ export const unbindEvidence = async (input: {
   const st = await load(input.root);
   const f = st.findings[input.findingId];
   if (!f) throw new Error("finding not bound");
-  if (f.version !== input.expectedVersion) throw new Error(`version conflict: current ${f.version}`);
+  if (f.version !== input.expectedVersion) throw Object.assign(new Error(`version conflict: current ${f.version}`), { code: "version_conflict" });
   const before = f.bindings.length;
   f.bindings = f.bindings.filter((x) => x.id !== input.bindingId);
   if (f.bindings.length === before) throw new Error("binding not found");
@@ -114,7 +114,7 @@ export const reorderBindings = async (input: {
   const st = await load(input.root);
   const f = st.findings[input.findingId];
   if (!f) throw new Error("finding not bound");
-  if (f.version !== input.expectedVersion) throw new Error(`version conflict: current ${f.version}`);
+  if (f.version !== input.expectedVersion) throw Object.assign(new Error(`version conflict: current ${f.version}`), { code: "version_conflict" });
   const have = new Set(f.bindings.map((b) => b.id));
   if (input.order.length !== have.size || input.order.some((id) => !have.has(id))) {
     throw new Error("order must be a complete permutation of binding ids");

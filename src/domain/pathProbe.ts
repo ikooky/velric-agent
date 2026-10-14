@@ -70,13 +70,21 @@ export const probePaths = async (input: PathProbeInput): Promise<PathProbeResult
   // Signature tally for catch-all route clustering (post-hoc).
   const sigCounts = new Map<string, number>();
 
-  // Soft-404 calibration: 3 random paths → consensus signature.
+  // Soft-404 calibration: 3 random paths → consensus signature + real byte
+  // sizes (exact, not band midpoints — used for the size-proximity guard).
   const baselineSigs = new Set<string>();
+  let baselineBytes = 0;
+  let baselineN = 0;
   for (const rnd of ["/zzqq-velric-404-a", "/zzqq-velric-404-b", "/zzqq-velric-404-c"]) {
     const r = await fetchUrl(base + rnd, opts);
-    if (r.status > 0) baselineSigs.add(bodySignature(r.status, r.bytes, r.contentType, r.body));
+    if (r.status > 0) {
+      baselineSigs.add(bodySignature(r.status, r.bytes, r.contentType, r.body));
+      baselineBytes += r.bytes;
+      baselineN += 1;
+    }
   }
   const soft404Signature = baselineSigs.size > 0 ? [...baselineSigs] : null;
+  const soft404Bytes = baselineN > 0 ? Math.round(baselineBytes / baselineN) : null;
   const soft404StatusBytes = soft404Signature
     ? (() => {
         const first = soft404Signature[0]!.split(":");
@@ -101,8 +109,14 @@ export const probePaths = async (input: PathProbeInput): Promise<PathProbeResult
       probed.n++;
       if (r.status === 0) continue;
       const respSig = bodySignature(r.status, r.bytes, r.contentType, r.body);
-      // Rule: 200-family that matches the soft-404 shape = not a finding.
-      if (r.status >= 200 && r.status < 300 && soft404Signature?.includes(respSig)) continue;
+      // Rule: 200-family that matches the soft-404 shape = not a finding —
+      // BUT only when the body LENGTH is also close (within 2.5x): the band
+      // signature intentionally coarsens sizes, so a 300B error JSON and a
+      // 12KB real endpoint page can share a signature. Size proximity keeps
+      // distinct real pages that merely share a band out of the drop.
+      if (r.status >= 200 && r.status < 300 && soft404Signature?.includes(respSig)
+        && soft404Bytes !== null && soft404Bytes > 0 && r.bytes > 0
+        && (r.bytes / soft404Bytes < 2.5 && soft404Bytes / r.bytes < 2.5)) continue;
       if (r.status === 404 || r.status === 410) continue;
       // 401/403 are interesting (path exists, protected) — record with flag
       sigCounts.set(respSig, (sigCounts.get(respSig) ?? 0) + 1);
@@ -140,8 +154,8 @@ export const probePaths = async (input: PathProbeInput): Promise<PathProbeResult
       found.push({ ...rep, path: `${rep.path}  [catch-all ×${members.length}: same page for ${members.length} probe paths]` });
     }
   }
-  found.forEach((f) => delete f.signature);
-
+  // Keep f.signature in the RETURNED structure (scanPlatform assets read
+  // meta.signature); the .txt artifact below never included it anyway.
   found.sort((a, b) => a.path.localeCompare(b.path));
 
   const path = join(input.outputRoot, "sensitive_paths.txt");

@@ -1,8 +1,16 @@
 import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { unzipSync, gunzipSync } from "fflate";
+import { unzipSync } from "fflate";
+import zlib from "node:zlib";
 import tarStream from "tar-stream";
 import { scanSecrets } from "./secrets.js";
+
+/** Cap-bounded gunzip: the ISIZE trailer is attacker-controlled and
+ *  multi-member gzip makes it lie outright. zlib's maxOutputLength aborts
+ *  inflation the moment the output would exceed the cap — no full-size
+ *  buffer is ever allocated. */
+const gunzipCapped = (buf: Buffer): Buffer =>
+  zlib.gunzipSync(buf, { maxOutputLength: MAX_DECOMPRESSED });
 
 /** Backup/dump unpack + secret scan: paths-stage discoveries (.zip/.tar.gz/
  *  .sql/.json dumps) are downloaded, unpacked in memory, and every text
@@ -72,8 +80,7 @@ const listTarGz = async (buf: Buffer): Promise<{ names: string[]; read: (name: s
     // tarball. Stream-decompress with a byte counter instead of trusting it.
     throw new Error("gzip declared size implausible — refusing");
   }
-  const plain = gunzipSync(new Uint8Array(buf));
-  if (plain.length > MAX_DECOMPRESSED) throw new Error("decompressed size exceeds cap");
+  const plain = gunzipCapped(buf);
   const extract = tarStream.extract();
   const entries = new Map<string, Buffer>();
   let held = 0;
