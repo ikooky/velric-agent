@@ -626,6 +626,41 @@ export const handlers: Readonly<Record<string, Handler>> = {
     const b = await mod.getBindings(p.outputRoot, p.findingId);
     return b ?? { findingId: p.findingId, version: 0, bindings: [] };
   },
+  role_matrix: async (raw) => {
+    const p = z.object({ reconRoot: z.string(), outputRoot: z.string(), roles: z.record(z.string(), z.string()), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxEndpoints: z.number().optional() }).parse(raw);
+    const { probeRoleMatrix } = await import("../domain/roleMatrix.js");
+    return probeRoleMatrix(p);
+  },
+  jwt_attack: async (raw) => {
+    const p = z.object({ token: z.string(), endpoint: z.string(), outputRoot: z.string(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), secretCandidates: z.array(z.string()).optional() }).parse(raw);
+    const { probeJwtAttack } = await import("../domain/jwtAttack.js");
+    return probeJwtAttack(p);
+  },
+  idor_deep: async (raw) => {
+    const p = z.object({ endpoints: z.array(z.object({ method: z.string(), path: z.string(), fields: z.array(z.object({ name: z.string(), in: z.string() })) })), outputRoot: z.string(), baseUrl: z.string().optional(), cookie: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxTargets: z.number().optional(), objectIds: z.array(z.string()).optional() }).parse(raw);
+    const { probeIdorDeep } = await import("../domain/idorDeep.js");
+    return probeIdorDeep(p);
+  },
+  header_bypass: async (raw) => {
+    const p = z.object({ urls: z.array(z.string()), outputRoot: z.string(), cookie: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxUrls: z.number().optional() }).parse(raw);
+    const { probeHeaderBypass } = await import("../domain/headerBypass.js");
+    return probeHeaderBypass(p);
+  },
+  verb_matrix: async (raw) => {
+    const p = z.object({ urls: z.array(z.string()), outputRoot: z.string(), cookie: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxUrls: z.number().optional() }).parse(raw);
+    const { probeVerbMatrix } = await import("../domain/verbMatrix.js");
+    return probeVerbMatrix(p);
+  },
+  admin_surface: async (raw) => {
+    const p = z.object({ baseUrl: z.string(), outputRoot: z.string(), cookie: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional() }).parse(raw);
+    const { probeAdminSurface } = await import("../domain/adminSurface.js");
+    return probeAdminSurface(p);
+  },
+  graphql_authz: async (raw) => {
+    const p = z.object({ endpoint: z.string(), schemaFile: z.string(), outputRoot: z.string(), token: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxFields: z.number().optional() }).parse(raw);
+    const { probeGraphqlAuthz } = await import("../domain/graphqlAuthz.js");
+    return probeGraphqlAuthz(p);
+  },
   scan_platform: async (raw) => {
     const p = z.object({ outputRoot: z.string(), action: z.enum(["create_project", "create_task", "run_task", "get_task", "list_tasks", "list_projects", "list_assets", "count_assets"]), name: z.string().optional(), targets: z.array(z.string()).optional(), projectId: z.string().optional(), taskId: z.string().optional(), modules: z.array(z.string()).optional(), sourceTask: z.string().optional(), query: z.object({ type: z.string().optional(), taskTag: z.string().optional(), valuePrefix: z.string().optional(), valueRegex: z.string().optional() }).optional(), page: z.number().optional(), pageSize: z.number().optional(), proxy: z.string().optional(), cookie: z.string().optional(), timeoutMs: z.number().optional() }).parse(raw);
     const mod = await import("../domain/scanPlatform.js");

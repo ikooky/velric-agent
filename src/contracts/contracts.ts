@@ -833,6 +833,90 @@ export const evidenceBindContract: ToolContract = {
 };
 
 
+export const roleMatrixContract: ToolContract = {
+  name: "role_matrix",
+  title: "Role-differential access matrix",
+  description:
+    "Probes permission endpoints (gates.json + permissions_tree.json) with N role credentials, builds the real backend access matrix, diffs against the declared frontend model — mismatches are the privilege-escalation surface. Writes role_matrix.json.",
+  kind: "runtime",
+  inputSchema: z.object({ reconRoot: z.string(), outputRoot, roles: z.record(z.string(), z.string()), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxEndpoints: z.number().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ probed: z.number() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "two roles", input: { reconRoot: "/tmp/recon", outputRoot: "/tmp/recon", roles: { admin: "Cookie: a=1", viewer: "Cookie: a=2" } } }],
+};
+
+export const jwtAttackContract: ToolContract = {
+  name: "jwt_attack",
+  title: "JWT attack surface",
+  description:
+    "Differential JWT attacks: alg=none acceptance, kid path traversal (LFI oracle), jku/x5u SSRF, RS->HS confusion note, weak-secret dictionary, plus claims extraction (roles/scopes/permissions) for the role matrix. Verdicts require a server-response change, never a bare 200. Writes jwt_attack.json.",
+  kind: "runtime",
+  inputSchema: z.object({ token: z.string(), endpoint: z.string(), outputRoot, headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), secretCandidates: z.array(z.string()).optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ claims: z.object({ roles: z.array(z.string()), scopes: z.array(z.string()), permissions: z.array(z.string()) }) }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "jwt", input: { token: "eyJ...", endpoint: "https://target/api/me", outputRoot: "/tmp/recon" } }],
+};
+
+export const idorDeepContract: ToolContract = {
+  name: "idor_deep",
+  title: "IDOR deep probe",
+  description:
+    "Beyond numeric +1: path-segment IDs, UUID swaps, POST body ID params, cross-object variants, content differentials (same status different body = data leak). Writes idor_deep.json.",
+  kind: "runtime",
+  inputSchema: z.object({ endpoints: z.array(z.object({ method: z.string(), path: z.string(), fields: z.array(z.object({ name: z.string(), in: z.string() })) })), outputRoot, baseUrl: z.string().optional(), cookie: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxTargets: z.number().optional(), objectIds: z.array(z.string()).optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ probed: z.number() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "deep", input: { endpoints: [{ method: "GET", path: "/api/users/123", fields: [] }], outputRoot: "/tmp/recon" } }],
+};
+
+export const headerBypassContract: ToolContract = {
+  name: "header_bypass",
+  title: "Auth-header bypass family",
+  description:
+    "Route-override (X-Original-URL/X-Rewrite-URL), internal-IP spoof (X-Custom-IP-Authorization, XFF loopback), X-Forwarded-Host pollution, method-override tunnels against 401/403 endpoints. Writes header_bypass.json.",
+  kind: "runtime",
+  inputSchema: z.object({ urls: z.array(z.string()), outputRoot, cookie: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxUrls: z.number().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ probed: z.number() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "bypass", input: { urls: ["https://target/admin"], outputRoot: "/tmp/recon" } }],
+};
+
+export const verbMatrixContract: ToolContract = {
+  name: "verb_matrix",
+  title: "HTTP verb/ACL matrix",
+  description:
+    "GET/POST/PUT/DELETE/PATCH/OPTIONS cross against protected endpoints — GET denied but mutating verb 2xx = verb-level ACL gap. Writes verb_matrix.json.",
+  kind: "runtime",
+  inputSchema: z.object({ urls: z.array(z.string()), outputRoot, cookie: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxUrls: z.number().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ probed: z.number() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "verbs", input: { urls: ["https://target/api/orders"], outputRoot: "/tmp/recon" } }],
+};
+
+export const adminSurfaceContract: ToolContract = {
+  name: "admin_surface",
+  title: "Framework admin-surface discovery",
+  description:
+    "Well-known unauthenticated management endpoints: Spring actuator (env/heapdump/mappings/configprops), swagger/openapi, druid, nacos, eureka, grafana/kibana/jenkins/tomcat/weblogic consoles, ES _cat, k8s pods. Writes admin_surface.json.",
+  kind: "runtime",
+  inputSchema: z.object({ baseUrl: z.string(), outputRoot, cookie: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ probed: z.number(), found: z.array(z.object({ url: z.string(), kind: z.string(), status: z.number() })) }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "admin", input: { baseUrl: "https://target", outputRoot: "/tmp/recon" } }],
+};
+
+export const graphqlAuthzContract: ToolContract = {
+  name: "graphql_authz",
+  title: "GraphQL field-level authz",
+  description:
+    "After graphql_deep: attempt every query/mutation anonymously and with a low-priv token; data without auth errors = field-level authorization gap. Writes graphql_authz.json.",
+  kind: "runtime",
+  inputSchema: z.object({ endpoint: z.string(), schemaFile: z.string(), outputRoot, token: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxFields: z.number().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ probed: z.number(), unauthed: z.array(z.string()) }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "gql", input: { endpoint: "https://target/graphql", schemaFile: "/tmp/recon/graphql_deep.json", outputRoot: "/tmp/recon" } }],
+};
+
 export const scanPlatformContract: ToolContract = {
   name: "scan_platform",
   title: "Native scan platform (in-process, zero external service)",
@@ -898,6 +982,13 @@ export const ALL_CONTRACTS: readonly ToolContract[] = [
   reportExportContract,
   evidenceBindContract,
   scanPlatformContract,
+  roleMatrixContract,
+  jwtAttackContract,
+  idorDeepContract,
+  headerBypassContract,
+  verbMatrixContract,
+  adminSurfaceContract,
+  graphqlAuthzContract,
   huntContract,
   huntRecordContract,
   huntOverviewContract,
