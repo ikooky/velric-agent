@@ -90,8 +90,17 @@ export const fingerprint = async (input: FingerprintInput): Promise<FingerprintR
     ? (Array.isArray(sc) ? sc : [sc]).map(parseSetCookie)
     : [];
 
+  // Tech-stack headers (Server / X-Powered-By / CDN hints) — part of the
+  // fingerprint deliverable.
+  const techHeaders: Record<string, string> = {};
+  for (const k of ["server", "x-powered-by", "via", "x-aspnet-version", "x-generator", "x-drupal-cache", "x-vercel-id", "x-amz-cf-id", "x-served-by", "cf-ray"]) {
+    const v = r.headers[k];
+    if (typeof v === "string" && v.length > 0) techHeaders[k] = v;
+  }
+
+  const result = { baseUrl: base, waf: [...new Set(waf)], methods: { allowed, putWorks, traceWorks }, cookies, techHeaders };
   const path = join(input.outputRoot, "fingerprint.json");
-  const body = JSON.stringify({ baseUrl: base, waf, methods: { allowed, putWorks, traceWorks }, cookies }, null, 2);
+  const body = JSON.stringify(result, null, 2);
   await writeFile(path, body);
-  return { baseUrl: base, waf: [...new Set(waf)], methods: { allowed, putWorks, traceWorks }, cookies, artifacts: [{ path, bytes: Buffer.byteLength(body) }] };
+  return { ...result, artifacts: [{ path, bytes: Buffer.byteLength(body) }] };
 };

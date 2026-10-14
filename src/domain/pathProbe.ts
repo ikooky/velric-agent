@@ -20,8 +20,10 @@ export interface PathProbeInput {
 export interface PathProbeResult {
   readonly baseUrl: string;
   readonly probed: number;
-  readonly found: { path: string; status: number; bytes: number; contentType: string }[];
+  readonly found: { path: string; status: number; bytes: number; contentType: string; signature?: string }[];
   readonly soft404: { status: number; bytes: number } | null;
+  /** Catch-all route clusters (same body signature across many probe paths). */
+  readonly catchAllClusters?: { signature: string; count: number; representative: string }[];
   readonly artifacts: { path: string; bytes: number }[];
 }
 
@@ -62,6 +64,8 @@ export const probePaths = async (input: PathProbeInput): Promise<PathProbeResult
   const base = input.baseUrl.startsWith("http") ? input.baseUrl : `https://${input.baseUrl}`;
   await mkdir(input.outputRoot, { recursive: true });
   const opts = { cookie: input.cookie, proxy: input.proxy, timeoutMs: input.timeoutMs ?? 10000 };
+  // Signature tally for catch-all route clustering (post-hoc).
+  const sigCounts = new Map<string, number>();
 
   // Soft-404 calibration: 3 random paths → consensus signature.
   const baselineSigs = new Set<string>();
@@ -89,15 +93,48 @@ export const probePaths = async (input: PathProbeInput): Promise<PathProbeResult
       const r = await fetchUrl(base + p, opts);
       probed.n++;
       if (r.status === 0) continue;
-      const sig = bodySignature(r.status, r.bytes, r.contentType, r.body);
+      const respSig = bodySignature(r.status, r.bytes, r.contentType, r.body);
       // Rule: 200-family that matches the soft-404 shape = not a finding.
-      if (r.status >= 200 && r.status < 300 && soft404Signature?.includes(sig)) continue;
+      if (r.status >= 200 && r.status < 300 && soft404Signature?.includes(respSig)) continue;
       if (r.status === 404 || r.status === 410) continue;
       // 401/403 are interesting (path exists, protected) — record with flag
-      found.push({ path: p, status: r.status, bytes: r.bytes, contentType: r.contentType.slice(0, 60) });
+      sigCounts.set(respSig, (sigCounts.get(respSig) ?? 0) + 1);
+      // Wildcard-route suspect: page <title> echoes the probed segment
+      // (e.g. github.com/actuator renders the "actuator" user profile) —
+      // a /{owner}-style catch-all rendering this name, not the sensitive
+      // endpoint we probed for. Flag for review instead of dropping.
+      let flag = "";
+      const seg = p.replace(/\/$/, "").split("/").pop() ?? p;
+      const title = r.body.match(/<title[^>]*>([^<]{0,120})<\/title>/i)?.[1] ?? "";
+      if (title.toLowerCase().includes(seg.toLowerCase())) {
+        flag = `  [wildcard-suspect: title echoes "${seg}" — likely /{param} route]`;
+      }
+      found.push({ path: p + flag, status: r.status, bytes: r.bytes, contentType: r.contentType.slice(0, 60), signature: respSig });
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, paths.length) }, worker));
+
+  // Wildcard/catch-all clustering: a body signature shared by >= 6 distinct
+  // probe paths is a catch-all route rendering the same page (e.g. /{owner}).
+  // Keep ONE representative finding + a cluster note instead of N false hits.
+  const CATCHALL_THRESHOLD = 6;
+  const catchAllSigs = new Set([...sigCounts.entries()].filter(([, n]) => n >= CATCHALL_THRESHOLD).map(([sig]) => sig));
+  const clusters: { signature: string; count: number; representative: string }[] = [];
+  if (catchAllSigs.size > 0) {
+    for (const sig of catchAllSigs) {
+      const members = found.filter((f) => f.signature === sig);
+      const rep = members[0]!;
+      clusters.push({ signature: sig, count: members.length, representative: rep.path });
+      // drop all members, re-add one flagged representative
+      for (const m of members) {
+        const idx = found.indexOf(m);
+        if (idx >= 0) found.splice(idx, 1);
+      }
+      found.push({ ...rep, path: `${rep.path}  [catch-all ×${members.length}: same page for ${members.length} probe paths]` });
+    }
+  }
+  found.forEach((f) => delete f.signature);
+
   found.sort((a, b) => a.path.localeCompare(b.path));
 
   const path = join(input.outputRoot, "sensitive_paths.txt");
@@ -108,6 +145,7 @@ export const probePaths = async (input: PathProbeInput): Promise<PathProbeResult
     probed: probed.n,
     found,
     soft404: soft404StatusBytes,
+    catchAllClusters: clusters,
     artifacts: [{ path, bytes: Buffer.byteLength(body) }],
   };
 };

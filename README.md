@@ -39,9 +39,9 @@ Agent 自主渗透测试工具包 —— 让 Agent 独立完成 Web 应用的攻
 
 - **子域枚举** `subdomains` — crt.sh 证书透明 + CNAME 链追踪 + ~142 高频前缀 DNS 爆破(api/dev/admin/uat/gray/jenkins/k8s/grafana...)
 - **端口扫描** `port-scan` — TCP connect top 67 端口;公网 redis/mongodb/es 等直接升 high finding
-- **敏感路径** `paths` — 65 条高信号字典(.git/.env/swagger/actuator/druid/backup...) + **soft-404 校准**(随机路径基线,同构响应不算发现)
+- **敏感路径** `paths` — 65 条高信号字典(.git/.env/swagger/actuator/druid/backup...) + **soft-404 校准**(随机路径基线,同构响应不算发现) + **通配路由识别**(`/{owner}` 类路由撞用户名时 title 回显探测段,自动标注 wildcard-suspect) + **catch-all 聚簇**(同签名多路径聚为一条,429 限流站实测 17→1)
 - **CORS 探测** `cors` — Origin 变体(evil/反射/null),ACAO 反射 + ACAC true 判配置缺陷
-- **WAF/CDN 识别** `fingerprint` — header 指纹库(cloudflare/aliyun/qcloud/safedog/baota...) + HTTP 方法枚举(OPTIONS/Allow/PUT/TRACE) + Cookie 安全审计(Secure/HttpOnly/SameSite)
+- **WAF/CDN 识别** `fingerprint` — header 指纹库(cloudflare/aliyun/qcloud/safedog/baota...) + HTTP 方法枚举(OPTIONS/Allow/PUT/TRACE) + Cookie 安全审计(Secure/HttpOnly/SameSite); 附带 Server/X-Powered-By/Via 等技术栈 header
 - **Source map 泄漏** `sourcemaps` — harvested JS 逐个探 .map(本地+远程),生产泄漏 = 源码可恢复
 - **Wayback 历史** `wayback` — web.archive.org CDX,死接口/老管理面回收
 - **批量模式** `auto-batch` — N 目标管道 + 汇总对比报告 + webhook 通知(--notify URL)

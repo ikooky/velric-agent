@@ -46,7 +46,7 @@ export interface RuntimeCaptureResult {
 /** Runtime-capture noise filter: drop static-asset and telemetry hosts from
  * the API surface (SVG icon JSON, GA/sentry beacons pollute uniqueCalls). */
 const NOISE_HOST_RE =
-  /(?:^|\.)(?:google-analytics\.com|googletagmanager\.com|doubleclick\.net|sentry\.io|.*\.sentry\.io|beacon\.qq\.com|hm\.baidu\.com|plural\.sc\.qq\.com|beacon\.shimo\.io|stats\.g\.doubleclick\.net)$/;
+  /(?:^|\.)(?:google-analytics\.com|googletagmanager\.com|doubleclick\.net|sentry\.io|.*\.sentry\.io|beacon\.qq\.com|hm\.baidu\.com|plural\.sc\.qq\.com|beacon\.shimo\.io|stats\.g\.doubleclick\.net|browser\.events\.data\.microsoft\.com|.*\.clarity\.ms|.*\.onelinks\.pro|marketing_track\..*|.*-track\..*)$/i;
 
 const STATIC_RESOURCE_RE =
   /\.(?:js|css|png|jpe?g|gif|webp|avif|svg|ico|woff2?|ttf|eot|mp4|webm|mp3|m4a|wav|flv|ts|m3u8|vtt|json\.sig|map|har)(?:[?#@]|$)/i;
@@ -59,6 +59,9 @@ const isNoiseUrl = (rawUrl: string, pageOrigin?: string): boolean => {
     const u = new URL(rawUrl, "http://placeholder.local");
     if (NOISE_HOST_RE.test(u.hostname)) return true;
     if (STATIC_RESOURCE_RE.test(u.pathname)) return true;
+    // Static asset paths on CDN hosts (/_next/static/, /assets/, /dist/) —
+    // resource delivery, not API surface, regardless of extension.
+    if (/(?:^|\/)_(?:next|astro|remix|nuxt)\/|\/static\/js\/|\/(?:dist|build)\/assets\//.test(u.pathname)) return true;
     // Cross-origin svg/icon delivery paths are static packages, not APIs.
     if (pageOrigin && u.origin !== pageOrigin && ICON_PACKAGE_PATH_RE.test(u.pathname)) return true;
     return false;
