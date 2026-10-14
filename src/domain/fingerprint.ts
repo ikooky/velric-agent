@@ -53,13 +53,16 @@ const WAF_SIGNATURES: ReadonlyArray<readonly [string, string, RegExp]> = [
 ];
 
 const parseSetCookie = (sc: string): { name: string; secure: boolean; httpOnly: boolean; sameSite: string | null } => {
-  const [pair] = sc.split(";");
-  const name = (pair ?? "").split("=")[0]?.trim() ?? "?";
-  const lower = sc.toLowerCase();
+  const parts = sc.split(";");
+  const name = (parts[0] ?? "").split("=")[0]?.trim() ?? "?";
+  // Attribute flags must match in the ATTRIBUTE segment (after the first
+  // semicolon) — a cookie named "secureSession" or Path=/secure is NOT a
+  // Secure cookie. Match whole attribute names, not substrings.
+  const attrs = parts.slice(1).map((p) => p.trim().toLowerCase());
   return {
     name,
-    secure: lower.includes("secure"),
-    httpOnly: lower.includes("httponly"),
+    secure: attrs.some((a) => a === "secure"),
+    httpOnly: attrs.some((a) => a === "httponly"),
     sameSite: (sc.match(/samesite\s*=\s*(\w+)/i)?.[1] ?? null),
   };
 };

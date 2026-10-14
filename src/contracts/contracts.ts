@@ -368,6 +368,7 @@ export const probeParamsContract: ToolContract = {
   kind: "runtime",
   inputSchema: z.object({
     mergedFile: z.string().describe("path to params_merged.json"),
+    baseUrl: z.string().optional().describe("origin for relative-path endpoints (paramMerge strips hosts); without it relative endpoints are skipped and counted"),
     outputRoot,
     observationLedgerRoot: z.string().optional().describe("auto-record touched URLs into the hunt observation ledger"),
     cookie: z.string().optional(),
@@ -388,7 +389,7 @@ export const subdomainsContract: ToolContract = {
     "crt.sh certificate transparency + CNAME chain walking + high-frequency wordlist DNS brute (142 prefixes: api/dev/admin/uat/gray/jenkins/k8s/grafana...). Writes subdomains.txt.",
   kind: "runtime",
   inputSchema: z.object({ domain: z.string(), outputRoot, observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({ total: z.number() }),
+  outputSchema: z.object({ total: z.array(z.string()), crtSh: z.array(z.string()), bruteFound: z.array(z.object({ host: z.string(), ips: z.array(z.string()) })), wildcardDns: z.boolean() }),
   annotations: writingAnnotations(),
   examples: [{ title: "enum", input: { domain: "example.com", outputRoot: "/tmp/recon" } }],
 };
@@ -400,7 +401,7 @@ export const portScanContract: ToolContract = {
     "TCP connect scan of top 67 ports (web/db/middleware/admin). Non-web open ports (redis/mongodb/es...) are direct findings. Writes ports_open.txt.",
   kind: "runtime",
   inputSchema: z.object({ host: z.string(), outputRoot, ports: z.array(z.number()).optional(), observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({ open: z.number() }),
+  outputSchema: z.object({ open: z.array(z.object({ port: z.number(), service: z.string() })), scanned: z.number() }),
   annotations: writingAnnotations(),
   examples: [{ title: "scan", input: { host: "1.2.3.4", outputRoot: "/tmp/recon" } }],
 };
@@ -521,7 +522,7 @@ export const domSinksContract: ToolContract = {
     "Static taint analysis over harvested JS: location.hash/search/referrer/name → innerHTML/eval/document.write/insertAdjacentHTML/jQuery chains. Outputs candidate sinks + trigger context. Writes dom_sinks.json.",
   kind: "runtime",
   inputSchema: z.object({ jsDir: z.string(), outputRoot, observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({ chains: z.number() }),
+  outputSchema: z.object({ chains: z.array(z.object({ file: z.string(), source: z.string(), sink: z.string(), excerpt: z.string() })) }),
   annotations: writingAnnotations(),
   examples: [{ title: "dom", input: { jsDir: "/tmp/recon/js", outputRoot: "/tmp/recon" } }],
 };
@@ -704,7 +705,7 @@ export const siteMapContract: ToolContract = {
     "api-recon Phase 5 deliverable: aggregates routes.txt/api_merged.txt/params_merged.json/coverage.json into one structured site_map.json (apis/params/features/limitations).",
   kind: "runtime",
   inputSchema: z.object({ baseUrl: z.string(), outputRoot, runtimeMode: z.enum(["depth", "coverage", "both", "static-only"]).optional(), appType: z.string().optional(), limitations: z.string().optional(), observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({ apis: z.number() }),
+  outputSchema: z.object({ apis: z.array(z.string()) }),
   annotations: writingAnnotations(),
   examples: [{ title: "map", input: { baseUrl: "https://target/", outputRoot: "/blobs/recon" } }],
 };
@@ -715,7 +716,7 @@ export const trafficRecContract: ToolContract = {
   description:
     "velric platform: forward proxy recording every exchange (full req/resp for HTTP, tunnel metadata for HTTPS) to traffic.ndjson + sha256 blob store. Long-running; returns bound port.",
   kind: "runtime",
-  inputSchema: z.object({ outputRoot, port: z.number().optional(), upstreamProxy: z.string().optional(), maxExchanges: z.number().optional(), mitm: z.boolean().optional(), observationLedgerRoot: LEDGER }),
+  inputSchema: z.object({ outputRoot, port: z.number().optional(), upstreamProxy: z.string().optional(), maxExchanges: z.number().optional(), mitm: z.boolean().optional(), stop: z.boolean().optional(), observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ port: z.number() }),
   annotations: writingAnnotations(),
   examples: [{ title: "rec", input: { outputRoot: "/tmp/recon" } }],
@@ -752,7 +753,7 @@ export const evidenceContract: ToolContract = {
     "velric evidence: sha256-addressed blob store for finding evidence (request/response/command output), deduped across findings, indexed in evidence_index.json.",
   kind: "runtime",
   inputSchema: z.object({ outputRoot, action: z.enum(["put", "get", "list"]), file: z.string().optional(), hash: z.string().optional(), tag: z.string().optional(), observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({ hash: z.string().nullable() }),
+  outputSchema: z.object({}).passthrough(), // put:{hash,bytes} get:{hash,bytes,found} list:{entries:[]}
   annotations: writingAnnotations(),
   examples: [{ title: "put", input: { outputRoot: "/tmp/recon", action: "put", file: "/tmp/poc.txt" } }],
 };
@@ -813,7 +814,7 @@ export const evidenceBindContract: ToolContract = {
     "Ordered evidence bindings per finding with roles (baseline/proof/verification/supporting), optimistic-version conflict rejection, update/unbind/reorder, and md-zip export. Persists evidence_bindings.json.",
   kind: "runtime",
   inputSchema: z.object({ outputRoot, action: z.enum(["bind", "update", "unbind", "reorder", "get", "export"]), findingId: z.string().optional(), expectedVersion: z.number().optional(), refs: z.array(z.object({ hash: z.string(), role: z.enum(["baseline", "proof", "verification", "supporting"]), note: z.string().optional() })).optional(), bindingId: z.string().optional(), role: z.enum(["baseline", "proof", "verification", "supporting"]).optional(), note: z.string().optional(), order: z.array(z.string()).optional(), zipPath: z.string().optional(), observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({ version: z.number() }),
+  outputSchema: z.object({}).passthrough(), // bind/get:{findingId,version,bindings[]} others:{version}
   annotations: writingAnnotations(),
   examples: [{ title: "bind", input: { outputRoot: "/tmp/recon", action: "bind", findingId: "f1", expectedVersion: 0, refs: [{ hash: "a".repeat(64), role: "proof" }] } }],
 };
@@ -826,7 +827,7 @@ export const scanPlatformContract: ToolContract = {
     "ScopeSentry functional equivalent built in-process: projects -> tasks (ordered module pipeline: subdomain_scan/port_scan/fingerprint/dir_scan/web_crawler/nuclei_lite/web_probes) -> shared AssetStore with task provenance + local list/count retrieval. Two-phase chaining via sourceTask (targets resolved from a done task's subdomain assets). No external platform, no credentials.",
   kind: "runtime",
   inputSchema: z.object({ outputRoot, action: z.enum(["create_project", "create_task", "run_task", "get_task", "list_tasks", "list_projects", "list_assets", "count_assets"]), name: z.string().optional(), targets: z.array(z.string()).optional(), projectId: z.string().optional(), taskId: z.string().optional(), modules: z.array(z.string()).optional(), sourceTask: z.string().optional(), query: z.object({ type: z.string().optional(), taskTag: z.string().optional(), valuePrefix: z.string().optional(), valueRegex: z.string().optional() }).optional(), page: z.number().optional(), pageSize: z.number().optional(), proxy: z.string().optional(), cookie: z.string().optional(), timeoutMs: z.number().optional(), observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({ ok: z.boolean() }),
+  outputSchema: z.object({}).passthrough(), // per-action shapes: Project/Task records, arrays, {total,page,items}
   annotations: writingAnnotations(),
   examples: [{ title: "two-phase chain", input: { outputRoot: "/tmp/recon", action: "create_task", projectId: "p1", name: "phase2", modules: ["port_scan", "fingerprint"], sourceTask: "t1" } }],
 };

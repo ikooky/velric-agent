@@ -58,15 +58,10 @@ export const runBatch = async (input: BatchInput): Promise<BatchResult> => {
           break;
         } catch { /* try next */ }
       }
-      let findings = 0;
-      try {
-        const rep = JSON.parse(await readFile(join(outDir, "report.json"), "utf8")) as { findings?: unknown[] };
-        findings = rep.findings?.length ?? 0;
-      } catch {
-        // report.json is not the artifact name — count from the stage detail.
-        const fd = r.stages.find((st) => st.stage === "auto_findings")?.detail ?? "";
-        findings = Number(fd.match(/(\d+)\s*findings?/i)?.[1] ?? 0);
-      }
+      // report.md is the artifact (no report.json is ever written) — count
+      // findings from the auto_findings stage detail.
+      const fd = r.stages.find((st) => st.stage === "auto_findings")?.detail ?? "";
+      const findings = Number(fd.match(/(\d+)\s*findings?/i)?.[1] ?? 0);
       return { seed, outDir, stagesOk, stagesTotal: r.stages.length, apiEndpoints: apiCount, findings };
     } catch (e) {
       return { seed, outDir, stagesOk: 0, stagesTotal: 0, apiEndpoints: 0, findings: 0, error: String((e as Error).message ?? e).slice(0, 150) };

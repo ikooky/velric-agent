@@ -56,7 +56,10 @@ export const detectSourceMaps = async (input: SourceMapInput): Promise<SourceMap
     let sourceCount = 0;
     const candidates = [mapUrl, `${name}.map`].filter((x): x is string => !!x && !x.startsWith("data:"));
     for (const cand of candidates.slice(0, 2)) {
-      const localName = cand.replace(/^https?:\/\/[^/]+\//, "").replace(/^\//, "");
+      let localName = cand.replace(/^https?:\/\/[^/]+\//, "").replace(/^\//, "");
+      // The comment lives in untrusted harvested JS — the derived local file
+      // name must stay inside jsDir (no ../, no absolute, no drive letters).
+      if (localName.includes("..") || /^[a-zA-Z]:/.test(localName) || localName.includes("\0") || localName === "") continue;
       let text: string | null = null;
       let resolvedUrl = cand;
       try {

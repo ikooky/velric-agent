@@ -57,6 +57,7 @@ export class TrafficRecorder {
   private upstreamProxy?: string;
   private maxExchanges: number;
   private upstreamAgent: import("undici").ProxyAgent | null = null;
+  private relaxAgent: Agent | null = null;
   private readonly tunnels = new Set<{ c: import("node:stream").Duplex; s: import("node:net").Socket }>();
 
   constructor(input: TrafficRecorderInput) {
@@ -99,6 +100,7 @@ export class TrafficRecorder {
     this.server = null;
     if (this.plainServer) { this.plainServer.closeAllConnections?.(); await new Promise<void>((r) => this.plainServer!.close(() => r())); this.plainServer = null; }
     if (this.upstreamAgent) { await this.upstreamAgent.destroy().catch(() => {}); this.upstreamAgent = null; }
+    if (this.relaxAgent) { await this.relaxAgent.destroy().catch(() => {}); this.relaxAgent = null; }
   };
 
   readonly getExchanges = (): readonly RecordedExchange[] => this.exchanges;
@@ -139,8 +141,13 @@ export class TrafficRecorder {
       if (reqBytes <= MAX_BODY) chunks.push(c);
       else tooBig = true;
     });
-    const bodyPromise = new Promise<Buffer>((resolve) => req.on("end", () => resolve(Buffer.concat(chunks))));
-    const body = await bodyPromise;
+    const bodyPromise = new Promise<Buffer>((resolve, reject) => {
+      req.on("end", () => resolve(Buffer.concat(chunks)));
+      req.on("aborted", () => resolve(Buffer.concat(chunks))); // client aborted: record what we have
+      req.on("error", (e) => reject(e));
+    });
+    let body: Buffer;
+    try { body = await bodyPromise; } catch (e) { res.writeHead(400); res.end(String((e as Error).message)); return; }
     if (tooBig) { res.writeHead(413); res.end("body too large"); return; }
 
     if (this.exchanges.length >= this.maxExchanges) { res.writeHead(503); res.end("recorder cap"); return; }
@@ -151,20 +158,22 @@ export class TrafficRecorder {
       // destroyed in stop()) — not one per request.
       if (this.upstreamProxy && !this.upstreamAgent) {
         const { ProxyAgent } = await import("undici");
-        this.upstreamAgent = new ProxyAgent({ uri: this.upstreamProxy });
+        // Same recon TLS posture through the upstream proxy as direct: a
+        // ProxyAgent built on a relaxed connect option (previously the
+        // proxied path validated certs the direct path did not — inverted
+        // posture between the two branches).
+        this.upstreamAgent = new ProxyAgent({ uri: this.upstreamProxy, requestTls: { rejectUnauthorized: false } });
       }
-      const dispatcher: Dispatcher | undefined = this.upstreamAgent ?? undefined;
-      // Recon posture: upstreams are operator-authorized and frequently
-      // self-signed/internal — mirror fetchUrl's TLS posture via a relaxed
-      // Agent (the https option on request() is ignored when a dispatcher
-      // is set).
-      const relaxAgent = new Agent({ connect: { rejectUnauthorized: false } });
+      // One shared relaxed Agent for direct fetches — created once, pooled,
+      // destroyed in stop(). Recon posture: operator-authorized targets,
+      // frequently self-signed/internal, mirror fetchUrl's TLS posture.
+      if (!this.relaxAgent) this.relaxAgent = new Agent({ connect: { rejectUnauthorized: false } });
       const r = await undiciRequest(String(req.url), {
         method: String(req.method ?? "GET"),
         headers: { ...omit(req.headers, ["host", "proxy-connection"]) as Record<string, string> },
         body: body.length > 0 ? body : undefined,
-        dispatcher: dispatcher ?? relaxAgent,
-      }).finally(() => { void relaxAgent.destroy().catch(() => {}); });
+        dispatcher: this.upstreamAgent ?? this.relaxAgent,
+      });
       // Cap the buffered upstream body: stream-read with a running counter,
       // keep the prefix up to the cap.
       const respChunks: Buffer[] = [];
@@ -184,6 +193,11 @@ export class TrafficRecorder {
         status: Number(r.statusCode ?? 0), reqHeaders: flattenHeaders(req.headers), reqBodyHash: reqHash, reqBodyBytes: body.length,
         respHeaders, respBodyHash: respHash, respBodyBytes: respBody.length, via: "http-capture",
       });
+      // If the upstream body was truncated at MAX_BODY, the passthrough
+      // content-length must describe what we actually send, not what the
+      // origin claimed — otherwise the client waits for missing bytes.
+      const cl2 = Number(respHeaders["content-length"] ?? NaN);
+      if (respBody.length < cl2) { respHeaders["content-length"] = String(respBody.length); }
       res.writeHead(r.statusCode, respHeaders);
       res.end(respBody);
     } catch (e) {
@@ -206,6 +220,14 @@ export class TrafficRecorder {
       const method = firstLine.split(" ")[0] ?? "GET";
       const rawTarget = firstLine.split(" ")[1] ?? "/";
       const target = /^https?:\/\//.test(rawTarget) ? rawTarget : `https://${host}${rawTarget}`;
+      // Non-idempotent methods are NEVER replayed to the hop (the hop would
+      // re-issue the request upstream — a state-changing double POST). They
+      // are recorded log-only via recordLogOnly below.
+      const IDEMPOTENT = new Set(["GET", "HEAD", "OPTIONS"]);
+      if (!IDEMPOTENT.has(method.toUpperCase())) {
+        void this.recordLogOnly(host, reqBytes);
+        return;
+      }
       const headerEnd = reqBytes.indexOf("\r\n\r\n");
       const headerBlock = reqBytes.subarray(0, headerEnd).toString("latin1");
       // Replace the origin-form target with the absolute one, drop hop-irrelevant headers.
@@ -225,6 +247,30 @@ export class TrafficRecorder {
     } catch { /* mirror is best-effort recording */ }
   };
 
+  /** Log-only recording for non-idempotent decrypted requests: the exchange
+   *  lands in traffic.ndjson (+ req body blob) without any upstream replay. */
+  private readonly recordLogOnly = async (host: string, reqBytes: Buffer): Promise<void> => {
+    try {
+      const headerEnd = reqBytes.indexOf("\r\n\r\n");
+      const headerBlock = reqBytes.subarray(0, headerEnd < 0 ? reqBytes.length : headerEnd).toString("latin1");
+      const lines = headerBlock.split("\r\n");
+      const [method, rawTarget] = (lines[0] ?? "GET / HTTP/1.1").split(" ");
+      const headers: Record<string, string> = {};
+      for (const l of lines.slice(1)) {
+        const idx = l.indexOf(":");
+        if (idx > 0) headers[l.slice(0, idx).trim().toLowerCase()] = l.slice(idx + 1).trim();
+      }
+      const body = headerEnd >= 0 ? reqBytes.subarray(headerEnd + 4) : Buffer.alloc(0);
+      const target = /^https?:\/\//.test(rawTarget ?? "") ? rawTarget! : `https://${host}${rawTarget ?? "/"}`;
+      const reqHash = body.length > 0 ? await this.spill(body) : null;
+      await this.record({
+        ts: new Date().toISOString(), id: `x${++this.counter}`, method: method ?? "POST", url: target,
+        status: null, reqHeaders: headers, reqBodyHash: reqHash, reqBodyBytes: body.length,
+        respHeaders: null, respBodyHash: null, respBodyBytes: 0, via: "http-capture",
+      });
+    } catch { /* log-only best effort */ }
+  };
+
   private readonly handleConnect = (req: IncomingMessage, clientSock: Duplex, head: Buffer): void => {
     const id = `x${++this.counter}`;
     // IPv6-safe host:port split — bracket form [::1]:443, bare ::1:443, host:443
@@ -239,6 +285,7 @@ export class TrafficRecorder {
     const finish = (status: number | null): void => {
       if (settled) return; // exactly one record per tunnel — close fires on both ends
       settled = true;
+      clearTimeout(idle);
       this.tunnels.delete(tunnel);
       void this.record({
         ts: new Date().toISOString(), id, method: "CONNECT", url: raw,
@@ -263,6 +310,15 @@ export class TrafficRecorder {
       // HTTP flows through the internal hop, gets recorded fully, and is
       // re-encrypted toward the real server.
       if (this.mitmCA && this.plainServer) {
+        // The raw upstream socket is NOT used in MITM mode (the TLS pair
+        // below carries the traffic) — destroy it instead of leaking a live
+        // TCP connection to the origin. Remove its close/error listeners
+        // first: their finish(200)+destroy(clientSock) would kill the
+        // client right after the CONNECT 200 is written.
+        srvSock.removeAllListeners("close");
+        srvSock.removeAllListeners("error");
+        srvSock.destroy();
+        this.tunnels.delete(tunnel);
         // Server side: present the forged leaf to the CLIENT on this socket.
         const leaf = this.mitmCA.sign(host);
         const hopAddr = this.plainServer!.address();
@@ -273,23 +329,41 @@ export class TrafficRecorder {
         // servername must be a DNS name — IP targets omit it (Node rejects IP SNI).
         const isIp = /^\d+\.\d+\.\d+\.\d+$/.test(host) || host.includes(":");
         const originTls = tlsConnect({ host, port, rejectUnauthorized: false, ...(isIp ? {} : { servername: host }) });
+        const tlsPair = { c: clientTls, s: originTls as unknown as import("node:net").Socket };
+        this.tunnels.add(tlsPair);
         // Recording hop: decrypted client requests are replayed (absolute-
         // form) into the internal HTTP server, which records the exchange
         // and fetches the real response via its own upstream path; its
         // response is NOT looped back (originTls already serves the client).
-        void hopPort;
+        if (hopPort <= 0) { finish(null); try { clientTls.destroy(); originTls.destroy(); } catch { /* gone */ } return; }
         let mirrorBuf = Buffer.alloc(0);
+        const MIRROR_BUF_CAP = 8 * 1024 * 1024; // chunked/bodied request stream cap
         clientTls.on("data", (d: Buffer) => {
           upBytes += d.length;
+          bump();
           originTls.write(d);
           // Best-effort mirror: accumulate plaintext, split on complete
           // HTTP/1.1 requests, forward each to the recording hop once.
           mirrorBuf = Buffer.concat([mirrorBuf, d]);
           for (;;) {
+            if (mirrorBuf.length > MIRROR_BUF_CAP) { mirrorBuf = Buffer.alloc(0); break; } // oversized stream: drop mirroring, keep proxying
             const headerEnd = mirrorBuf.indexOf("\r\n\r\n");
             if (headerEnd < 0) break;
             const headTxt = mirrorBuf.subarray(0, headerEnd).toString("latin1");
             const cl = Number((headTxt.match(/content-length:\s*(\d+)/i) ?? [])[1] ?? 0);
+            const chunked = /transfer-encoding:\s*chunked/i.test(headTxt);
+            if (chunked) {
+              // Chunked framing: mirror only headers when no body, else wait for the
+              // terminating 0\r\n\r\n frame; unbounded chunked bodies fall back to
+              // header-only mirroring (hop records the exchange with empty body).
+              const term = mirrorBuf.indexOf("0\r\n\r\n");
+              const anyTerm = term >= 0 ? term : mirrorBuf.indexOf("\r\n0\r\n\r\n");
+              if (anyTerm < 0) break;
+              const reqBytes = mirrorBuf.subarray(0, anyTerm + 7);
+              mirrorBuf = mirrorBuf.subarray(anyTerm + 7);
+              this.mirrorToHop(`${host}:${port}`, hopPort, reqBytes);
+              continue;
+            }
             const total = headerEnd + 4 + cl;
             if (mirrorBuf.length < total) break;
             const reqBytes = mirrorBuf.subarray(0, total);
@@ -297,13 +371,17 @@ export class TrafficRecorder {
             this.mirrorToHop(`${host}:${port}`, hopPort, reqBytes);
           }
         });
-        originTls.on("data", (d: Buffer) => { downBytes += d.length; clientTls.write(d); });
+        originTls.on("data", (d: Buffer) => { downBytes += d.length; bump(); clientTls.write(d); });
         clientTls.on("end", () => originTls.end());
         originTls.on("end", () => clientTls.end());
-        clientTls.on("error", () => { finish(null); try { originTls.destroy(); } catch { /* gone */ } });
-        originTls.on("error", () => { finish(null); try { clientTls.destroy(); } catch { /* gone */ } });
-        clientTls.on("close", () => { finish(200); try { originTls.destroy(); } catch { /* gone */ } });
-        originTls.on("close", () => { finish(200); try { clientTls.destroy(); } catch { /* gone */ } });
+        // TLS errors/aborts finish(null); clean close on BOTH ends is a full
+        // session — record 200 only when neither side errored (tracked via
+        // errored flag; close also fires after error, so guard on it).
+        let tlsErrored = false;
+        clientTls.on("error", () => { tlsErrored = true; finish(null); try { originTls.destroy(); } catch { /* gone */ } });
+        originTls.on("error", () => { tlsErrored = true; finish(null); try { clientTls.destroy(); } catch { /* gone */ } });
+        clientTls.on("close", () => { finish(tlsErrored ? null : 200); try { originTls.destroy(); } catch { /* gone */ } });
+        originTls.on("close", () => { finish(tlsErrored ? null : 200); try { clientTls.destroy(); } catch { /* gone */ } });
         // Record via the decrypted stream: mirror plaintext into the
         // internal HTTP hop (absolute-form preserved so handleHttp can
         // forward it upstream).

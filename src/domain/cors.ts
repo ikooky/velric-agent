@@ -43,6 +43,19 @@ const suffixReflectionOrigin = (baseUrl: string): string => {
   }
 };
 
+/** ACAO reflection must match the probe origin's HOST (parsed, not substring
+ *  contains): "https://evil-velric.example.com" must not classify as a
+ *  reflection of "https://velric.example.com". */
+const sameHost = (acao: string, origin: string): boolean => {
+  try {
+    const a = new URL(acao);
+    const o = new URL(origin);
+    return a.protocol === o.protocol && a.hostname === o.hostname && (a.port === o.port || (a.port === "" && o.port === ""));
+  } catch {
+    return acao === origin;
+  }
+};
+
 export const probeCors = async (input: CorsProbeInput): Promise<CorsProbeResult> => {
   const base = input.baseUrl.startsWith("http") ? input.baseUrl : `https://${input.baseUrl}`;
   await mkdir(input.outputRoot, { recursive: true });
@@ -61,7 +74,7 @@ export const probeCors = async (input: CorsProbeInput): Promise<CorsProbeResult>
     let verdict: "reflect" | "wildcard" | "null" | "static" | "none" = "none";
     if (acao === "*") verdict = "wildcard";
     else if (acao === "null") verdict = "null";
-    else if (acao && origin !== "null" && acao.includes(new URL(origin).hostname)) verdict = "reflect";
+    else if (acao && origin !== "null" && sameHost(acao, origin)) verdict = "reflect";
     else if (acao) verdict = "static";
     results.push({ origin, acao, acac, verdict });
   }

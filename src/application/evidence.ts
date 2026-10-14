@@ -40,8 +40,15 @@ export const saveEvidence = async (input: EvidenceInput): Promise<EvidenceResult
     }
     blobs.push({ hash, bytes: Buffer.byteLength(it.content), path: bin, source: it.source, label: it.label });
   }
+  // Merge into an existing manifest instead of clobbering: a second save
+  // in the same outputRoot previously wiped the first call's blob entries.
   const manifestPath = join(input.outputRoot, "manifest.json");
-  await writeFile(manifestPath, JSON.stringify({ generatedAt: new Date().toISOString(), blobs }, null, 2), "utf8");
+  let existing: { blobs?: { hash: string }[] } = {};
+  try { existing = JSON.parse(await readFile(manifestPath, "utf8")) as { blobs?: { hash: string }[] }; } catch { /* fresh */ }
+  const priorHashes = new Set((existing.blobs ?? []).map((b) => b.hash));
+  const merged = [...(existing.blobs ?? []).filter((b) => !blobs.some((n) => n.hash === b.hash)), ...blobs];
+  void priorHashes;
+  await writeFile(manifestPath, JSON.stringify({ generatedAt: new Date().toISOString(), blobs: merged }, null, 2), "utf8");
   return { blobs, manifestPath };
 };
 

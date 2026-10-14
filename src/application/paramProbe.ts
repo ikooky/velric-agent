@@ -10,6 +10,8 @@ import { join } from "node:path";
 export interface ParamProbeInput {
   readonly mergedFile: string;
   readonly outputRoot: string;
+  /** Origin for relative-path endpoints (paramMerge strips hosts). */
+  readonly baseUrl?: string;
   readonly cookie?: string;
   readonly proxy?: string;
   readonly timeoutMs?: number;
@@ -29,6 +31,8 @@ export interface ParamProbeResult {
     }[];
   }[];
   readonly artifacts: { path: string; bytes: number }[];
+  /** Endpoints skipped: relative path with no baseUrl provided. */
+  readonly skippedRelativeEndpoints: number;
 }
 
 interface MergedEndpoint {
@@ -56,6 +60,7 @@ export const probeParams = async (input: ParamProbeInput): Promise<ParamProbeRes
 
   const opts = { cookie: input.cookie, proxy: input.proxy, timeoutMs: input.timeoutMs ?? 8000 };
   const endpointResults: ParamProbeResult["endpointResults"] = [];
+  let skippedCount = 0;
 
   for (const ep of targets) {
     // Baseline: sample values from the recorded traffic are not stored per-field
@@ -69,9 +74,13 @@ export const probeParams = async (input: ParamProbeInput): Promise<ParamProbeRes
         // strip array brackets for a valid placeholder value
         u.searchParams.set(f.name.replace(/\[\]$/, ""), "1");
       }
-      return u.toString().replace("http://placeholder.local", ep.path.startsWith("http") ? new URL(ep.path).origin : "");
+      const abs = ep.path.startsWith("http") ? new URL(ep.path).origin : (input.baseUrl ?? "");
+      if (!abs) { skippedCount++; return ""; } // relative path, no baseUrl — recorded, not silent
+      return u.toString().replace("http://placeholder.local", abs);
     };
-    const base = await fetchUrl(buildUrl(), { ...opts });
+    const built = buildUrl();
+    if (built === "") continue;
+    const base = await fetchUrl(built, { ...opts });
     if (base.status === 0) continue; // endpoint unreachable — not probeable
     const baseline = { status: base.status, bytes: base.bytes, sha256: base.sha256 };
     const params: ParamProbeResult["endpointResults"][0]["params"] = [];
@@ -99,5 +108,6 @@ export const probeParams = async (input: ParamProbeInput): Promise<ParamProbeRes
     probed: endpointResults.length,
     endpointResults,
     artifacts: [{ path: outPath, bytes: Buffer.byteLength(JSON.stringify(endpointResults)) }],
+    skippedRelativeEndpoints: skippedCount,
   };
 };

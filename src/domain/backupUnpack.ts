@@ -59,16 +59,41 @@ const listZip = (buf: Buffer): { names: string[]; read: (name: string) => Buffer
   };
 };
 
+const MAX_ENTRY = 64 * 1024 * 1024; // per-entry decompressed cap
+
 const listTarGz = async (buf: Buffer): Promise<{ names: string[]; read: (name: string) => Buffer | null }> => {
+  // Bomb guard 1: the gzip ISIZE trailer (last 4 bytes, mod 2^32) declares
+  // the decompressed size — refuse anything implausibly large BEFORE
+  // inflating (fflate gunzipSync grows its output buffer unboundedly).
+  if (buf.length < 18) throw new Error("not a gzip stream");
+  const isize = buf.readUInt32LE(buf.length - 4);
+  if (isize === 0 || isize > MAX_DECOMPRESSED) {
+    // ISIZE is mod 2^32 — a >4GiB payload wraps; 0 is also suspicious for a
+    // tarball. Stream-decompress with a byte counter instead of trusting it.
+    throw new Error("gzip declared size implausible — refusing");
+  }
   const plain = gunzipSync(new Uint8Array(buf));
+  if (plain.length > MAX_DECOMPRESSED) throw new Error("decompressed size exceeds cap");
   const extract = tarStream.extract();
   const entries = new Map<string, Buffer>();
+  let held = 0;
   const done = new Promise<void>((resolve, reject) => {
     extract.on("entry", ((header: { name: string }, stream: { on: (ev: string, fn: (c?: unknown) => void) => void }, next: (err?: Error | null) => void) => {
       const chunks: Buffer[] = [];
-      stream.on("data", (c?: unknown) => { if (Buffer.isBuffer(c)) chunks.push(c); });
+      let entryLen = 0;
+      let oversize = false;
+      stream.on("data", (c?: unknown) => {
+        if (!Buffer.isBuffer(c)) return;
+        entryLen += c.length;
+        // Bomb guard 2: per-entry + total caps while buffering.
+        if (entryLen > MAX_ENTRY || held + entryLen > MAX_DECOMPRESSED) { oversize = true; return; }
+        chunks.push(c);
+      });
       stream.on("end", () => {
-        if (!header.name.endsWith("/")) entries.set(header.name, Buffer.concat(chunks));
+        if (!oversize && !header.name.endsWith("/")) {
+          entries.set(header.name, Buffer.concat(chunks));
+          held += entryLen;
+        }
         next();
       });
     }) as unknown as (...a: unknown[]) => void);

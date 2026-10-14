@@ -5,50 +5,61 @@ import { join } from "node:path";
  *  Shared process-wide so every recon module slows down together when the
  *  target pushes back. */
 
-interface Bucket {
-  lastAt: number;
-  queue: (() => void)[];
-}
-
 const buckets = new Map<string, Bucket>();
 
-export interface RateLimitOptions {
-  /** Max acquisitions per second per bucket (0/undefined = unlimited). */
-  readonly rps?: number;
-  /** Fixed delay between acquisitions in ms (alternative to rps). */
-  readonly intervalMs?: number;
+interface Bucket {
+  readonly interval: number;
+  lastAt: number;
+  queue: Array<() => void>;
+  draining: boolean;
 }
 
-export const acquire = (bucketKey: string, opts: RateLimitOptions): Promise<void> => {
-  const rps = opts.rps ?? 0;
-  const interval = opts.intervalMs ?? (rps > 0 ? 1000 / rps : 0);
-  if (interval <= 0) return Promise.resolve();
-  let b = buckets.get(bucketKey);
-  if (!b) {
-    b = { lastAt: 0, queue: [] };
-    buckets.set(bucketKey, b);
-  }
+/** Per-key min-interval gate. Single scheduled timer per bucket guarantees the
+ *  configured interval is enforced even under concurrent acquire() bursts
+ *  (previously each acquire scheduled its own drain, letting two waiters
+ *  release back-to-back in one tick). */
+export interface RateLimitOptions { rps?: number }
+
+export const acquire = (key: string, limit: number | { rps?: number }): { promise: Promise<void>; cancel: () => void } => {
+  const intervalMs = typeof limit === "number" ? limit : 1000 / Math.max(limit.rps ?? 0, 0.001);
+  let b = buckets.get(key);
+  if (!b) { b = { interval: intervalMs, lastAt: 0, queue: [], draining: false }; buckets.set(key, b); }
   const bucket = b;
-  return new Promise((resolve) => {
-    bucket.queue.push(resolve);
-    const drain = (): void => {
-      if (bucket.queue.length === 0) return;
+  let cancelled = false;
+  const promise = new Promise<void>((resolve) => {
+    const tryRun = (): void => {
+      if (cancelled) { resolve(); return; }
       const now = Date.now();
-      const wait = Math.max(0, bucket.lastAt + interval - now);
-      if (wait > 0) {
-        setTimeout(drain, wait);
+      if (now - bucket.lastAt >= bucket.interval) {
+        bucket.lastAt = now;
+        resolve();
         return;
       }
-      bucket.lastAt = now;
-      const next = bucket.queue.shift();
-      if (next) next();
-      if (bucket.queue.length > 0) setImmediate(drain);
+      bucket.queue.push(resolve);
+      if (!bucket.draining) {
+        bucket.draining = true;
+        const drain = (): void => {
+          bucket.draining = false;
+          const next = bucket.queue.shift();
+          if (next) {
+            bucket.lastAt = Date.now();
+            next();
+            if (bucket.queue.length > 0) {
+              bucket.draining = true;
+              setTimeout(drain, bucket.interval);
+            }
+          }
+          if (bucket.queue.length === 0 && Date.now() - bucket.lastAt > 60000) buckets.delete(key); // idle prune
+        };
+        const wait = bucket.interval - (Date.now() - bucket.lastAt);
+        setTimeout(drain, Math.max(wait, 0));
+      }
     };
-    drain();
+    tryRun();
   });
+  return { promise, cancel: () => { cancelled = true; } };
 };
 
-/** Run tasks with bounded concurrency + per-host rate limiting. */
 export const throttledMap = async <T>(
   tasks: readonly (() => Promise<T>)[],
   options: { concurrency?: number; host?: string } & RateLimitOptions,

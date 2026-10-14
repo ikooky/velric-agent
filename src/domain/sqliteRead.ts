@@ -74,7 +74,8 @@ export const readSqlite = async (input: SqliteReadInput): Promise<SqliteReadResu
       const why = tableHit ? "sensitive table name" : `sensitive column: ${columns.filter((c) => SENSITIVE_COLUMN_RE.test(c)).join(", ")}`;
       let sample: string[] = [];
       try {
-        const s = db.exec(`SELECT * FROM "${name}" LIMIT ${input.sampleLimit ?? 5}`);
+        const lim = Math.min(Math.max(1, Number.isFinite(Number(input.sampleLimit)) ? Number(input.sampleLimit) : 5), 1000);
+        const s = db.exec(`SELECT * FROM "${name}" LIMIT ${lim}`);
         sample = (s[0]?.values ?? []).map((row) => JSON.stringify(row).slice(0, 200));
       } catch { /* unreadable */ }
       result.sensitive.push({ table: name, why, sample });

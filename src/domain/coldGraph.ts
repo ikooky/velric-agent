@@ -41,23 +41,7 @@ export interface Folded {
 }
 
 /** Downstream-reachable set from a node (yields/proves/spawns edges). */
-const downstreamOf = (edges: ExpEdge[], from: string): Set<string> => {
-  const adj = new Map<string, string[]>();
-  for (const e of edges) {
-    const l = adj.get(e.from) ?? [];
-    l.push(e.to);
-    adj.set(e.from, l);
-  }
-  const seen = new Set<string>();
-  const stack = [from];
-  while (stack.length > 0) {
-    const n = stack.pop()!;
-    for (const nx of adj.get(n) ?? []) {
-      if (!seen.has(nx)) { seen.add(nx); stack.push(nx); }
-    }
-  }
-  return seen;
-};
+
 
 /** Connectivity groups among cold nodes: two cold nodes belong to the same
  *  group when a path (either direction) connects them without passing a warm
@@ -167,7 +151,6 @@ export const compactGraph = (
     }
     void rest; // oversized groups fold partially; remainder folds next round
   }
-  void downstreamOf;
   return { digests, folded, rescued };
 };
 

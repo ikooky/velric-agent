@@ -18,6 +18,8 @@ export interface SubdomainResult {
   readonly crtSh: string[];
   readonly cnameChain: { from: string; to: string }[];
   readonly bruteFound: { host: string; ips: string[] }[];
+  /** True when a random label resolved — wildcard DNS; brute results dropped. */
+  readonly wildcardDns: boolean;
   readonly total: string[];
   readonly artifacts: { path: string; bytes: number }[];
 }
@@ -161,19 +163,25 @@ export const discoverSubdomains = async (
     frontier = next.slice(0, 10);
   }
 
-  // 3) Wordlist brute (bounded concurrency)
+  // 3) Wordlist brute (bounded concurrency). Wildcard DNS guard first: if a
+  //  random label resolves, EVERY word would "resolve" — record the wildcard
+  //  and drop brute results entirely instead of ~100 phantom hosts.
   const wordlist = input.wordlist ?? SUBDOMAIN_WORDLIST;
   const bruteFound: { host: string; ips: string[] }[] = [];
-  const queue = [...wordlist];
-  const worker = async (): Promise<void> => {
-    while (queue.length > 0) {
-      const w = queue.shift()!;
-      const host = `${w}.${domain}`;
-      const { a } = await resolve(host, input.resolvers);
-      if (a.length > 0) bruteFound.push({ host, ips: a });
-    }
-  };
-  await Promise.all(Array.from({ length: 12 }, worker));
+  const wildcardProbe = `${Math.random().toString(36).slice(2, 10)}.${domain}`;
+  const wildcardHit = (await resolve(wildcardProbe, input.resolvers)).a.length > 0;
+  if (!wildcardHit) {
+    const queue = [...wordlist];
+    const worker = async (): Promise<void> => {
+      while (queue.length > 0) {
+        const w = queue.shift()!;
+        const host = `${w}.${domain}`;
+        const { a } = await resolve(host, input.resolvers);
+        if (a.length > 0) bruteFound.push({ host, ips: a });
+      }
+    };
+    await Promise.all(Array.from({ length: 12 }, worker));
+  }
 
   const total = [...new Set([...crtSh, ...bruteFound.map((b) => b.host)])].sort();
 
@@ -185,6 +193,7 @@ export const discoverSubdomains = async (
     crtSh: crtSh.sort(),
     cnameChain,
     bruteFound: bruteFound.sort((x, y) => x.host.localeCompare(y.host)),
+    wildcardDns: wildcardHit,
     total,
     artifacts: [{ path, bytes: Buffer.byteLength(body) }],
   };

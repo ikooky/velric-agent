@@ -291,6 +291,7 @@ export const handlers: Readonly<Record<string, Handler>> = {
       .object({
         mergedFile: z.string(),
         outputRoot: z.string(),
+        baseUrl: z.string().optional(),
         cookie: z.string().optional(),
         proxy: z.string().optional(),
         timeoutMs: z.number().optional(),
@@ -651,7 +652,7 @@ export const handlers: Readonly<Record<string, Handler>> = {
     if (p.action === "list_tasks") return await mod.listTasks(p.outputRoot, p.projectId);
     if (p.action === "list_projects") return await mod.listProjects(p.outputRoot);
     if (p.action === "list_assets") return await mod.listAssets(p.outputRoot, p.query ?? {}, p.page ?? 1, p.pageSize ?? 50);
-    if (!p.query) throw new Error("query required");
+    if (!p.query) return await mod.countAssets(p.outputRoot, {}); // empty query = total count, not an error
     return await mod.countAssets(p.outputRoot, p.query);
   },
   workflow_guide: async () => {

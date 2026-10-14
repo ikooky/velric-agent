@@ -131,6 +131,13 @@ export const runNucleiLite = async (input: NucleiLiteInput): Promise<NucleiLiteR
   const matched: NucleiLiteResult["matched"] = [];
   let scanned = 0;
 
+  // Catch-all calibration: a random-path baseline response that ALSO matches
+  // a template's word/regex means the match is the SPA shell / catch-all
+  // body, not the template's target — drop such matches (pathProbe-style
+  // soft-404 logic applied to template matching).
+  const calibPath = `/${Math.random().toString(36).slice(2, 10)}`;
+  const calib = await fetchUrl(base + calibPath, opts);
+
   const jobs: { tpl: NucleiTemplate; path: string }[] = [];
   for (const tpl of templates) for (const p of tpl.paths) jobs.push({ tpl, path: p });
 
@@ -146,6 +153,12 @@ export const runNucleiLite = async (input: NucleiLiteInput): Promise<NucleiLiteR
       const regexOk = job.tpl.match.regex ? job.tpl.match.regex.some((re) => new RegExp(re, "i").test(r.body)) !== (job.tpl.match.negative ?? false) : true;
 
       if (statusOk && wordsOk && regexOk) {
+        // Same signature on the random baseline = catch-all false positive.
+        const calibStatusOk = job.tpl.match.status ? job.tpl.match.status.includes(calib.status) : calib.status === 200;
+        const calibWordsOk = job.tpl.match.word ? job.tpl.match.word.some((w) => calib.body.includes(w)) : false;
+        const calibRegexOk = job.tpl.match.regex ? job.tpl.match.regex.some((re) => new RegExp(re, "i").test(calib.body)) : false;
+        const calibSame = calibStatusOk && calib.body.trim() === r.body.trim() && (calibWordsOk || calibRegexOk);
+        if (calibSame) continue;
         const evidence = job.tpl.match.word?.find((w) => r.body.includes(w)) ?? job.tpl.match.regex?.find((re) => new RegExp(re, "i").test(r.body)) ?? `status ${r.status}`;
         matched.push({ id: job.tpl.id, severity: job.tpl.severity, name: job.tpl.name, url: r.url, evidence });
       }

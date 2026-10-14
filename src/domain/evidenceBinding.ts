@@ -37,7 +37,7 @@ const load = async (root: string): Promise<BindingStore> => {
 
 const persist = async (root: string, st: BindingStore): Promise<void> => {
   await mkdir(root, { recursive: true });
-  const tmp = join(root, FILE + ".tmp");
+  const tmp = join(root, `${FILE}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`);
   await writeFile(tmp, JSON.stringify(st, null, 2));
   await import("node:fs/promises").then((fs) => fs.rename(tmp, join(root, FILE)));
 };
@@ -67,7 +67,8 @@ export const bindEvidence = async (input: BindInput): Promise<{ version: number;
   }
   for (const r of input.refs) {
     if (f.bindings.some((b) => b.hash === r.hash)) continue; // re-adding a hash is a no-op
-    f.bindings.push({ id: `b${f.bindings.length + 1}`, hash: r.hash, role: r.role, note: r.note });
+    const maxId = f.bindings.reduce((m, b) => Math.max(m, Number(b.id.slice(1)) || 0), 0);
+    f.bindings.push({ id: `b${maxId + 1}`, hash: r.hash, role: r.role, note: r.note });
   }
   f.version += 1;
   st.findings[input.findingId] = f;

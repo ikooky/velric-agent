@@ -17,6 +17,14 @@ describe("output schema shape guards", () => {
     { tool: "probe_oidc", sample: { found: [{ kind: "oidc", url: "https://x/.well-known/openid-configuration" }] } },
     { tool: "workflow_guide", sample: "guide text" },
     { tool: "probe_smuggle", sample: { differentials: [{ dimension: "dot", variantStatus: 200 }], probed: 6 } },
+    // Previously-drifted shapes (declared numbers where handlers return arrays):
+    { tool: "subdomain_enum", sample: { domain: "x.com", crtSh: ["a.x.com"], bruteFound: [{ host: "b.x.com", ips: ["1.2.3.4"] }], wildcardDns: false, total: ["a.x.com"], artifacts: [] } },
+    { tool: "port_scan", sample: { host: "x", open: [{ port: 443, service: "https" }], scanned: 67, artifacts: [] } },
+    { tool: "dom_sinks", sample: { chains: [{ file: "a.js", source: "loc", sink: "eval", excerpt: "x" }], files: 1, artifacts: [] } },
+    { tool: "build_site_map", sample: { apis: ["GET /api/v1/users"], pages: 3, limitations: [] } },
+    { tool: "scan_platform", sample: { id: "p1", name: "demo", targets: ["http://x"], createdAt: "t" } },
+    { tool: "evidence_bind", sample: { findingId: "f1", version: 1, bindings: [{ id: "b1", hash: "a".repeat(64), role: "proof" }] } },
+    { tool: "probe_params", sample: { probed: 1, endpointResults: [], artifacts: [], skippedRelativeEndpoints: 0 } },
   ];
 
   it("declared output shapes parse representative handler returns", () => {

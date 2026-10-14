@@ -2,6 +2,13 @@ import forge from "node-forge";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
+// All RSA-2048 keygen is pure-JS and synchronous (~seconds in node-forge).
+// Do it ONCE at CA creation; leaves re-sign the CA's OWN keypair (valid
+// X.509: a cert may sign over a public key equal to the issuer's), so
+// per-host signing stays milliseconds-only after the first keygen.
+const LEAF_TTL_MS = 365 * 86400000;
+const LEAF_CACHE_MAX = 512;
+
 /** In-process MITM CA (velric traffic MITM parity): one root CA per
  *  outputRoot (persisted as mitm-ca.cert.pem for client trust), per-host
  *  leaf certs signed on the fly with SAN=host. Pure JS via node-forge —
@@ -40,17 +47,19 @@ export const createOrLoadCA = async (root: string, commonName = "velric-recorder
     caCert.sign(caKeys.privateKey, forge.md.sha256.create());
     caKeyPem = forge.pki.privateKeyToPem(caKeys.privateKey);
     caCertPem = forge.pki.certificateToPem(caCert);
-    await writeFile(keyPath, caKeyPem);
-    await writeFile(certPath, caCertPem);
+    await writeFile(keyPath, caKeyPem, { mode: 0o600 });
+    await writeFile(certPath, caCertPem, { mode: 0o644 });
   }
   const caKey = forge.pki.privateKeyFromPem(caKeyPem);
+  // The leaf reuses the CA's own keypair (valid X.509, kills per-host RSA
+  // keygen); derive the public key object once from the private key.
+  const caPublicKey = forge.pki.setRsaPublicKey(caKey.n, caKey.e);
   const leafCache = new Map<string, { keyPem: string; certPem: string }>();
   const sign = (host: string): { keyPem: string; certPem: string } => {
     const hit = leafCache.get(host);
     if (hit) return hit;
-    const keys = forge.pki.rsa.generateKeyPair(2048);
     const cert = forge.pki.createCertificate();
-    cert.publicKey = keys.publicKey;
+    cert.publicKey = caPublicKey;
     cert.serialNumber = String(Date.now()) + String(host.length);
     cert.validity.notBefore = new Date(Date.now() - 3600000); // tolerate clock skew
     cert.validity.notAfter = new Date(Date.now() + 365 * 86400000);
@@ -63,7 +72,8 @@ export const createOrLoadCA = async (root: string, commonName = "velric-recorder
       altNames: [isIp ? { type: 7, ip: host } : { type: 2, value: host }],
     }]);
     cert.sign(caKey, forge.md.sha256.create());
-    const out = { keyPem: forge.pki.privateKeyToPem(keys.privateKey), certPem: forge.pki.certificateToPem(cert) };
+    const out = { keyPem: caKeyPem, certPem: forge.pki.certificateToPem(cert) };
+    if (leafCache.size >= LEAF_CACHE_MAX) leafCache.delete(leafCache.keys().next().value as string);
     leafCache.set(host, out);
     return out;
   };

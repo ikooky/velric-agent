@@ -15,7 +15,7 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 **静态侦察**
 - `harvest` — SPA bundle 全量收割(chunk manifest 迭代下载)，提取 API/路由，内置 secrets 扫描与 robots/sitemap 合并
 - `spider` — MPA 爬虫，抽表单与内联接口
-- `paths` — 65 条敏感路径字典，soft-404 校准 + 通配路由识别 + catch-all 聚簇
+- `paths` — 68 条敏感路径字典，soft-404 校准 + 通配路由识别 + catch-all 聚簇
 - `sourcemaps` — 生产 .map 泄漏检测
 - `wayback` — 历史端点回收
 

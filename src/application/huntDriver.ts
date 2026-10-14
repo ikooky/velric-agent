@@ -180,11 +180,14 @@ export const huntRecord = async (input: HuntRecordInput): Promise<{ graph: Graph
     for (const cu of cited) {
       const statuses = statusByUrl.get(norm(cu)) ?? statusByUrl.get(cu);
       if (!statuses) {
-        // not ledgered verbatim — allow same-origin relative-path match
+        // not ledgered verbatim — allow same-origin relative-path match.
+        // The ledger's site-root entry ("/") matches EVERYTHING, so it is
+        // excluded from the fallback: only non-root paths may vouch.
         let matched = false;
         for (const [k, st] of statusByUrl) {
           try {
             const u = new URL(k);
+            if (u.pathname === "/" || u.pathname === "") continue; // root vouches for nothing
             const stArr = [...st];
             if (cu.includes(u.pathname) || (new URL(cu, "http://l.invalid").pathname === u.pathname)) { matched = stArr.length === 0 || stArr.some((sv) => txt.includes(String(sv))); break; }
           } catch { /* malformed */ }
@@ -283,10 +286,13 @@ export const huntRecord = async (input: HuntRecordInput): Promise<{ graph: Graph
     accepted++;
   }
 
-  // findings: urlOk gate only (severity ranked by host; poc must cite real URLs)
+  // findings: urlOk gate only (severity ranked by host; poc must cite real URLs).
+  // A finding citing ZERO URLs passes every() vacuously — that is a hole:
+  // require at least one cited, ledger-verified URL per finding.
   for (const f of input.findings ?? []) {
     if (!f.name) { drop("finding missing name"); continue; }
     const txt = `${f.summary ?? ""} ${f.poc ?? ""}`;
+    if (citedUrls(txt).length === 0) { drop(`finding '${String(f.name).slice(0, 40)}' cites no URL — cannot verify against ledger`); continue; }
     if (!urlOk(txt)) { drop(`finding '${String(f.name).slice(0, 40)}' url not in ledger`); continue; }
     const id = g.nextId++;
     g.findings.push({

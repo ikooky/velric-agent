@@ -89,10 +89,10 @@ const classify = (pred: RetestPredicate, status: number | null, body: string, er
   if (pred.fixedStatuses?.includes(status)) return "fixed";
   if (pred.fixedBodyAny?.some((s) => body.includes(s))) return "fixed";
   if (pred.vulnerableBodyAny?.some((s) => body.includes(s))) return "reproduced";
-  // No predicate matched: default heuristics — 2xx means the PoC still lands.
-  if ((pred.fixedStatuses ?? []).length === 0 && (pred.fixedBodyAny ?? []).length === 0 && (pred.vulnerableBodyAny ?? []).length === 0) {
-    return status >= 200 && status < 300 ? "reproduced" : "inconclusive";
-  }
+  // No predicate matched: with zero predicates we cannot distinguish a real
+  // PoC landing from a login redirect / catch-all 2xx — the conservative
+  // verdict is inconclusive, NOT reproduced (a false "vulnerable" is worse
+  // than a shrug for consumers tracking fixed findings).
   return "inconclusive";
 };
 

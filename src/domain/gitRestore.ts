@@ -7,6 +7,8 @@ import { gunzipSync, inflateSync } from "node:zlib";
  *  leaked .git, rebuild the source tree locally (loose objects + packfiles),
  *  and surface commit history. Read-only against the target. */
 
+const pSep = (await import("node:path")).sep;
+
 export interface GitRestoreInput {
   readonly baseUrl: string;
   readonly outputRoot: string;
@@ -115,12 +117,20 @@ export const restoreGit = async (input: GitRestoreInput): Promise<GitRestoreResu
     if (!obj || obj.type !== "tree") return;
     for (const entry of parseTree(obj.payload)) {
       const name = prefix ? `${prefix}/${entry.name}` : entry.name;
+      // Tree entry names come from the hostile target's git objects — reject
+      // traversal (../, absolute, drive letters, NUL) and assert containment
+      // before any filesystem write.
+      if (/(^|\/)\.\. (\/.|$)/.test(name) || name.includes("..") || name.startsWith("/") || /^[a-zA-Z]:/.test(name) || name.includes("\0")) continue;
       if (entry.mode === "40000" || entry.mode === "040000") {
         await walkTree(entry.sha, name, depth + 1);
       } else {
         const blob = await fetchObject(entry.sha);
         if (blob && blob.type === "blob") {
           const out = join(workDir, name);
+          // Defense in depth: resolved path must stay inside workDir.
+          const resolved = await import("node:path").then((p) => p.resolve(out));
+          const rootResolved = await import("node:path").then((p) => p.resolve(workDir));
+          if (resolved !== rootResolved && !resolved.startsWith(rootResolved + pSep)) continue;
           await mkdir(join(out, ".."), { recursive: true });
           await writeFile(out, blob.payload);
           filesRestored.n++;
@@ -147,7 +157,10 @@ export const restoreGit = async (input: GitRestoreInput): Promise<GitRestoreResu
         const lineRe = new RegExp(`^([0-9a-f]{40}) refs/heads/${m[1]!.replace(/[^\w-]/g, "\\$&")}$`, "m");
         headSha = (packed.body.match(lineRe) ?? [null])[1] ?? null;
       }
-      if (!headSha) headSha = (packed.body.match(/[0-9a-f]{40}/) ?? [null])[0] ?? null;
+      // Branch named in HEAD was not found in packed-refs — taking the
+      // first sha would restore a peeled TAG's tree, not the branch head.
+      // Better to leave headSha null (falls through to logs/HEAD below)
+      // than silently restore the wrong commit.
     }
   }
 

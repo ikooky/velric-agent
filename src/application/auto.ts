@@ -62,7 +62,9 @@ const readJson = async <T>(p: string): Promise<T | null> => {
 
 /** GraphQL introspection disabled detection: explicit error mentioning it. */
 const introspectionBlocked = (body: string): boolean =>
-  /introspection.*(disabled|not enabled|allowed)|GraphQL introspection/i.test(body);
+  // Only denial semantics count; the bare phrase "GraphQL introspection"
+  // also appears in SUCCESSFUL responses (schema descriptions).
+  /introspection[^]{0,80}(disabled|not enabled|not allowed|has been disabled)/i.test(body);
 
 const statMtime = async (p: string): Promise<number> => {
   const { stat } = await import("node:fs/promises");
@@ -374,7 +376,9 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
           poc: high.join("\n"),
         });
       }
-      const protectedPaths = lines.filter((l) => /^[43]0[13]/.test(l));
+      // Auth-relevant statuses: 401/403 (explicit auth) and 302 (auth
+      // redirect to login) — plain 301/303 rewrites are NOT protected paths.
+      const protectedPaths = lines.filter((l) => /^40[13]|^302/.test(l));
       if (protectedPaths.length > 0) {
         fList.push({
           name: `受保护路径存在 ${protectedPaths.length} 个`,
@@ -480,7 +484,9 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
         body: JSON.stringify({ query: "{ __schema { queryType { name } } }" }),
         timeoutMs: 8000,
       });
-      const looksGql = intro.status === 200 && /__schema|queryType|errors/.test(intro.body);
+      // 'errors' alone is NOT evidence of a GraphQL endpoint — 200+errors is
+      // the standard GraphQL AUTH-FAILURE shape; require schema structure.
+      const looksGql = intro.status === 200 && /__schema|queryType/.test(intro.body);
       const denied = intro.status === 200 && introspectionBlocked(intro.body);
       if (looksGql && !denied) {
         fList.push({

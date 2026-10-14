@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 
@@ -43,7 +43,9 @@ export class AssetStore {
 
   async save(): Promise<void> {
     await mkdir(join(this.file, ".."), { recursive: true });
-    await writeFile(this.file, JSON.stringify(this.graph, null, 2));
+    const tmp = `${this.file}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`;
+    await writeFile(tmp, JSON.stringify(this.graph, null, 2));
+    await rename(tmp, this.file);
   }
 
   /** Read-only snapshot for retrieval layers (scan platform list/count). */
@@ -157,7 +159,9 @@ export class ExplorationGraph {
 
   async save(): Promise<void> {
     await mkdir(join(this.file, ".."), { recursive: true });
-    await writeFile(this.file, JSON.stringify({ nodes: [...this.nodes.values()], edges: this.edges, anchors: this.anchors }, null, 2));
+    const tmp = `${this.file}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`;
+    await writeFile(tmp, JSON.stringify({ nodes: [...this.nodes.values()], edges: this.edges, anchors: this.anchors }, null, 2));
+    await rename(tmp, this.file);
   }
 
   addNode(kind: NodeKind, summary: string, payload?: Record<string, unknown>): ExpNode {
@@ -235,7 +239,9 @@ export class EvidenceStore {
 
   async save(): Promise<void> {
     await mkdir(this.root, { recursive: true });
-    await writeFile(join(this.root, "evidence_index.json"), JSON.stringify(this.index, null, 2));
+    const tmp = join(this.root, `evidence_index.json.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`);
+    await writeFile(tmp, JSON.stringify(this.index, null, 2));
+    await rename(tmp, join(this.root, "evidence_index.json"));
   }
 
   /** Store raw bytes, sha256-addressed, deduped across findings. */

@@ -55,6 +55,17 @@ interface PlatformStore {
 
 const STORE = "scan_platform.json";
 
+/** Per-root in-process mutex: every store mutation (create/run) serializes
+ *  through a promise chain — concurrent runTask on different tasks can no
+ *  longer interleave load→mutate→persist cycles and lose updates. */
+const locks = new Map<string, Promise<unknown>>();
+async function withLock<T>(root: string, fn: () => Promise<T>): Promise<T> {
+  const prev = locks.get(root) ?? Promise.resolve();
+  const run = prev.then(fn, fn);
+  locks.set(root, run.catch(() => {}));
+  return run;
+}
+
 const load = async (root: string): Promise<PlatformStore> => {
   try { return JSON.parse(await readFile(join(root, STORE), "utf8")) as PlatformStore; }
   catch { return { projects: {}, tasks: {} }; }
@@ -165,7 +176,8 @@ const nextId = (prefix: string, st: PlatformStore): string => {
   return id;
 };
 
-export const createProject = async (root: string, input: { name: string; targets: string[] }): Promise<ProjectRecord> => {
+export const createProject = async (root: string, input: { name: string; targets: string[] }): Promise<ProjectRecord> =>
+  withLock<ProjectRecord>(root, async () => {
   if (input.targets.length === 0) throw new Error("project needs at least one target");
   const st = await load(root);
   const dup = Object.values(st.projects).find((p) => p.name === input.name);
@@ -174,11 +186,12 @@ export const createProject = async (root: string, input: { name: string; targets
   st.projects[rec.id] = rec;
   await persist(root, st);
   return rec;
-};
+  });
 
 export const createTask = async (root: string, input: {
   projectId: string; name: string; modules: string[]; targets?: string[]; sourceTask?: string;
-}): Promise<TaskRecord> => {
+}): Promise<TaskRecord> =>
+  withLock<TaskRecord>(root, async () => {
   const st = await load(root);
   const project = st.projects[input.projectId];
   if (!project) throw new Error(`unknown project: ${input.projectId}`);
@@ -199,7 +212,7 @@ export const createTask = async (root: string, input: {
   st.tasks[rec.id] = rec;
   await persist(root, st);
   return rec;
-};
+  });
 
 /** Resolve a task's effective targets: literal, or from the source task's
  *  assets in the shared AssetStore (two-phase chaining). */
@@ -217,7 +230,8 @@ const resolveTargets = async (root: string, task: TaskRecord, st: PlatformStore)
 /** Execute a task: modules in order, assets upserted with the task tag,
  *  per-module stage log, status transitions. Deterministic — same inputs,
  *  same module calls; network variance is captured in stageLog detail. */
-export const runTask = async (root: string, input: { taskId: string; proxy?: string; cookie?: string; timeoutMs?: number }): Promise<TaskRecord> => {
+export const runTask = async (root: string, input: { taskId: string; proxy?: string; cookie?: string; timeoutMs?: number }): Promise<TaskRecord> =>
+  withLock<TaskRecord>(root, async () => {
   const st = await load(root);
   const task = st.tasks[input.taskId];
   if (!task) throw new Error(`unknown task: ${input.taskId}`);
@@ -270,7 +284,7 @@ export const runTask = async (root: string, input: { taskId: string; proxy?: str
   task.finishedAt = new Date().toISOString();
   await persist(root, st);
   return task;
-};
+  });
 
 // ---------------- local retrieval (ScopeSentry list/count parity) ----------------
 

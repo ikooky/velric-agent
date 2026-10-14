@@ -57,10 +57,14 @@ export const writeArtifact = async (
 };
 
 const rootOf = (host: string): string => {
+  // Same algorithm as graphs.ts MULTI_SUFFIX: two-label suffixes that are
+  // public suffixes (co.uk et al) need the eTLD+1 to be three labels —
+  // naive last-2 returned "co.uk" for "target.co.uk".
+  const MULTI_SUFFIX = new Set(["co.uk", "org.uk", "ac.uk", "gov.uk", "com.au", "net.au", "org.au", "co.nz", "com.br", "com.cn", "com.tw", "com.hk", "co.jp", "co.kr", "co.in", "co.za", "com.sg", "com.my"]);
   const parts = host.split(".");
   if (parts.length <= 2) return host;
-  // naive eTLD+1: last two labels (adequate for pentest seed lists)
-  return parts.slice(-2).join(".");
+  const last2 = parts.slice(-2).join(".");
+  return MULTI_SUFFIX.has(last2) ? parts.slice(-3).join(".") : last2;
 };
 
 const resolveHost = async (

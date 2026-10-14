@@ -29,7 +29,9 @@ export interface JwtInspectResult {
   readonly artifacts: { path: string; bytes: number }[];
 }
 
-const JWT_RE = /\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\b/g;
+// Signature segment may be EMPTY (alg=none: "header.payload.") or short —
+// the {0,} quantifier keeps those tokens capturable.
+const JWT_RE = /\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{0,}\b/g;
 
 const b64u = (s: string): Buffer => Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64");
 

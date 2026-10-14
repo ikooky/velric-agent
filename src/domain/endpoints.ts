@@ -63,10 +63,3 @@ export const extractRoutes = (js: string): string[] => {
 };
 
 /** Merge-named URL-ish strings found inside inline scripts / onclick handlers. */
-export const extractInlineApiUrls = (text: string): string[] => {
-  const out = new Set<string>();
-  for (const m of text.matchAll(/["'](\/[^"']{2,120})["']/g)) {
-    if (API_HINT.test(m[1]!)) out.add(m[1]!);
-  }
-  return [...out].sort();
-};
