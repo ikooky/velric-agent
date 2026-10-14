@@ -88,7 +88,11 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
   const isDomainSeed = !/^https?:\/\//.test(input.seed) || /^https?:\/\/[^\/]+\/?$/.test(input.seed);
   if (!done("subdomains") && isDomainSeed) {
     try {
+      // Strip scheme, path AND leading www. — subdomain enumeration must
+      // target the registrable apex (www.shopify.com → shopify.com), else
+      // every subdomain probe looks for www.shopify.com.<word>.
       let domain = input.seed.replace(/^https?:\/\//, "").split("/")[0]!;
+      domain = domain.replace(/^(?:www|m|mobile)\./, "");
       const { discoverSubdomains } = await import("../domain/subdomains.js");
       const sub = await discoverSubdomains({ domain, outputRoot: root, proxy: input.proxy });
       domain = sub.domain;
@@ -118,11 +122,19 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
     const res = await fetchUrl(base, { proxy: input.proxy, cookie: input.cookie, timeoutMs: input.timeoutMs ?? 20000 });
     const html = res.body;
     const scripts = (html.match(/<script[^>]+src=/gi) ?? []).length;
-    const spaMark = /__NUXT__|__NEXT_DATA__|data-v-app|ng-app|id=["']?app["']?/i.test(html);
+    const spaMark = /__NUXT__|__NEXT_DATA__|data-v-app|ng-app/i.test(html);
+    // MPA strong signal: server-rendered internal links. Real SPAs ship an
+    // app shell with almost none; content MPA pages (gov.uk: ~100) have many.
+    const internalLinks = (html.match(/<a[^>]+href=["']?\/[^"']+["']?/gi) ?? []).length;
     const forms = (html.match(/<form/i) ?? []).length;
-    if (scripts >= 3 && spaMark) mode = "spa";
-    else if (scripts >= 5) mode = "spa";
-    else if (forms > 0 && scripts < 3) mode = "mpa";
+    // SPA detection needs converging signals, not a single marker:
+    //   1. framework marker (NUXT/NEXT/vue/ng) AND sparse shell (<40 links), OR
+    //   2. bundle dominance: 10+ external scripts and near-zero server links
+    //      (zhihu SSR shell: 21 scripts / 0 links), OR
+    //   3. micro-frontend marker with few links.
+    // Content MPAs (gov.uk: ng-app widget + 103 links) must stay MPA.
+    if ((spaMark && internalLinks < 40) || (scripts >= 10 && internalLinks <= 2)) mode = "spa";
+    else mode = "mpa";
     stages.push({ stage: "classify", status: "ok", detail: `mode=${mode} scripts=${scripts} forms=${forms}` });
   } catch (e) {
     stages.push({ stage: "classify", status: "fail", detail: String((e as Error).message ?? e).slice(0, 120) });

@@ -115,10 +115,22 @@ export const fetchWayback = async (input: WaybackInput): Promise<WaybackResult> 
     const urls = res.status === 200
       ? res.body.split("\n").map((l) => l.trim()).filter(Boolean)
       : [];
+    // Sanitize archive noise: percent-encoded injection artifacts (%22, %0A,
+    // %27...), pure-fragment/empty paths, and duplicated scheme variants.
+    const cleanUrls = [...new Set(urls)].filter((u) => {
+      try {
+        const p = new URL(u).pathname;
+        if (/%22|%27|%0A|%0D|%3C|%3E|%7B|%7D/i.test(u)) return false;
+        if (p === "/" || p === "") return false;
+        return true;
+      } catch {
+        return false;
+      }
+    }).slice(0, input.maxUrls ?? 500);
     const path = join(input.outputRoot, "wayback_urls.txt");
-    const body = urls.join("\n");
+    const body = cleanUrls.join("\n");
     await writeFile(path, body);
-    return { target, urls, artifacts: [{ path, bytes: Buffer.byteLength(body) }] };
+    return { target, urls: cleanUrls, artifacts: [{ path, bytes: Buffer.byteLength(body) }] };
   } catch {
     return { target, urls: [], artifacts: [] };
   }

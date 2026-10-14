@@ -42,21 +42,46 @@ export const SUBDOMAIN_WORDLIST: readonly string[] = [
   "sandbox", "prod", "production", "online", "release", "canary", "edge", "node1", "node2",
 ];
 
+/** Certificate-transparency fallback chain: crt.sh first, CertSpotter when
+ *  crt.sh is down/overloaded (502 is common). Each source is best-effort. */
+const certSpotterQuery = async (domain: string, timeoutMs?: number, proxy?: string): Promise<string[]> => {
+  try {
+    const res = await fetchUrl(
+      `https://api.certspotter.com/v1/issuances?domain=${domain}&include_subdomains=true&expand=dns_names`,
+      { timeoutMs: timeoutMs ?? 20000, proxy },
+    );
+    if (res.status !== 200) return [];
+    const out = new Set<string>();
+    // Issuances JSON: [{ dns_names: [...] }, ...] — tolerate text-tolerant parse.
+    for (const m of res.body.matchAll(/"dns_names"\s*:\s*\[([^\]]*)\]/g)) {
+      for (const n of m[1]!.matchAll(/"([^"]+)"/g)) {
+        const host = n[1]!.toLowerCase().replace(/^\*\./, "");
+        if (host.endsWith(domain)) out.add(host);
+      }
+    }
+    return [...out];
+  } catch {
+    return [];
+  }
+};
+
 const crtShQuery = async (domain: string, timeoutMs?: number, proxy?: string): Promise<string[]> => {
   try {
     const res = await fetchUrl(
       `https://crt.sh/?q=%25.${domain}&output=json`,
       { timeoutMs: timeoutMs ?? 20000, proxy },
     );
-    if (res.status !== 200) return [];
+    if (res.status !== 200) return certSpotterQuery(domain, timeoutMs, proxy);
     const out = new Set<string>();
     for (const m of res.body.matchAll(/"common_name"\s*:\s*"([^"]+)"/g)) out.add(m[1]!.toLowerCase());
     for (const m of res.body.matchAll(/"name_value"\s*:\s*"([^"]+)"/g)) {
       for (const n of m[1]!.split("\\n")) out.add(n.trim().toLowerCase());
     }
-    return [...out].filter((h) => h.endsWith(domain));
+    const found = [...out].filter((h) => h.endsWith(domain));
+    if (found.length === 0) return certSpotterQuery(domain, timeoutMs, proxy);
+    return found;
   } catch {
-    return [];
+    return certSpotterQuery(domain, timeoutMs, proxy);
   }
 };
 

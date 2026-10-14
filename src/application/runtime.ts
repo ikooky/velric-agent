@@ -298,10 +298,18 @@ export const captureRuntime = async (
         ),
       ),
     );
-    // merge with static when present
-    try {
-      const { readFile } = await import("node:fs/promises");
-      const staticList = await readFile(`${root}/api_static.txt`, "utf8");
+    // api_merged is the canonical endpoint list for downstream stages
+    // (auth_probe / batch summary / run_diff). Write it even when no static
+    // corpus exists — runtime-only endpoints (httpbin /spec.json) must not
+    // be silently dropped.
+    {
+      let staticList = "";
+      try {
+        const { readFile } = await import("node:fs/promises");
+        staticList = await readFile(`${root}/api_static.txt`, "utf8");
+      } catch {
+        /* api_static.txt absent — runtime-only run */
+      }
       const merged = new Set<string>([
         ...uniqueCalls.map((c) => c.split(" ").slice(1).join(" ")),
         ...staticList.split("\n").filter(Boolean),
@@ -309,8 +317,6 @@ export const captureRuntime = async (
       artifacts.push(
         await writeArtifact(root, "api_merged.txt", [...merged].sort().join("\n")),
       );
-    } catch {
-      /* api_static.txt absent — static merge skipped */
     }
     // param_samples.json: bridge runtime detail → merge_params input, so the
     // recorded traffic feeds the parameter-matrix step without manual reshaping.
