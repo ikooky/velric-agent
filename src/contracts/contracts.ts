@@ -160,25 +160,6 @@ export const mergeParamsContract: ToolContract = {
 
 // ---- enrich / report / evidence (velric engine capabilities) ----
 
-export const enrichAssetsContract: ToolContract = {
-  name: "enrich_assets",
-  title: "Enrich asset graph",
-  description:
-    "Asset graph auto-completion: resolve seeds (A/AAAA/CNAME), upsert root_domain/domain/subdomain/ip/service nodes, HTTP-probe web services (status+title). Writes assets.json.",
-  kind: "net",
-  inputSchema: z.object({
-    observationLedgerRoot: z.string().optional().describe("auto-record touched URLs into the hunt observation ledger"),
-    seeds: z.array(z.string()).min(1).describe("domains or URLs"),
-    outputRoot,
-    proxy: z.string().optional(),
-    cookie: z.string().optional(),
-    timeoutMs: z.number().int().min(1000).max(120000).optional(),
-    http: z.boolean().optional().describe("probe web services (default true)"),
-  }),
-  outputSchema: z.object({ assets: z.array(z.unknown()) }),
-  annotations: writingAnnotations(),
-  examples: [{ title: "enrich", input: { seeds: ["example.com"], outputRoot: "/tmp/recon" } }],
-};
 
 export const genReportContract: ToolContract = {
   name: "gen_report",
@@ -198,14 +179,13 @@ export const genReportContract: ToolContract = {
 
 export const autoPipelineContract: ToolContract = {
   name: "auto_recon",
-  title: "Autonomous recon pipeline",
+  title: "Autonomous recon pipeline (run + poll)",
   description:
-    "Starts the full recon pipeline asynchronously (returns immediately; poll auto_status until state=done): fingerprint → subdomains → enrich → classify → harvest/spider → runtime → perm tree + params → sensitive paths → CORS → sourcemaps → auth surface → dom sinks → JWT → findings/report/evidence. Stage-level checkpoint (resume by default, --fresh to rerun). State lives in outputRoot only.",
+    "action=run starts the full recon pipeline asynchronously (returns immediately; then poll action=status until state=done): fingerprint → subdomains → enrich → classify → harvest/spider → runtime → perm tree + params → sensitive paths → CORS → sourcemaps → auth surface → dom sinks → JWT → findings/report/evidence. Stage-level checkpoint (resume by default). State lives in outputRoot only.",
   kind: "runtime",
   inputSchema: z.object({
-    observationLedgerRoot: z.string().optional().describe("auto-record touched URLs into the hunt observation ledger"),
-    seed: z.string().describe("domain or URL"),
-    outputRoot,
+    action: z.enum(["run", "status"]).default("run"),
+    seed: z.string().optional().describe("action=run: domain or URL"),
     chromiumPath: z.string().optional(),
     proxy: z.string().optional(),
     cookie: z.string().optional(),
@@ -213,22 +193,11 @@ export const autoPipelineContract: ToolContract = {
     skipRuntime: z.boolean().optional(),
     maxPages: z.number().int().min(1).max(200).optional(),
   }),
-  outputSchema: z.object({ started: z.boolean(), statusFile: z.string() }),
+  outputSchema: z.object({}).passthrough(), // run:{started,statusFile} status:{state,result?}
   annotations: writingAnnotations(),
   examples: [{ title: "auto", input: { seed: "example.com", outputRoot: "/tmp/recon" } }],
 };
 
-export const autoStatusContract: ToolContract = {
-  name: "auto_status",
-  title: "Poll auto_recon progress",
-  description:
-    "Poll the async auto_recon pipeline: returns {state: running|done|error, result?} from outputRoot/auto_status.json.",
-  kind: "runtime",
-  inputSchema: z.object({ outputRoot }),
-  outputSchema: z.object({ state: z.string() }),
-  annotations: readOnlyAnnotations(),
-  examples: [{ title: "poll", input: { outputRoot: "/tmp/recon" } }],
-};
 
 export const huntContract = {
   name: "hunt_begin",
@@ -305,18 +274,25 @@ export const workflowGuideContract: ToolContract = {
 
 export const saveEvidenceContract: ToolContract = {
   name: "save_evidence",
-  title: "Save evidence blobs",
+  title: "Evidence blob store",
   description:
-    "Content-addressed (sha256) evidence store: writes blobs/<h2>/<hash>.bin + manifest.json, verifies each write.",
+    "Content-addressed (sha256) evidence store, one tool for the whole lifecycle: action=save writes items.json blobs (blobs/<h2>/<hash>.bin + manifest.json, verified); put/get/list manage single blobs by file or hash in the shared finding-evidence index.",
   kind: "structure",
   inputSchema: z.object({
-    itemsFile: z.string().describe("path to items.json [{source,label?,content}]"),
+    action: z.enum(["save", "put", "get", "list"]).default("save"),
+    itemsFile: z.string().optional().describe("action=save: path to items.json [{source,label?,content}]"),
+    file: z.string().optional().describe("action=put: file to store"),
+    hash: z.string().optional().describe("action=get: blob hash"),
+    tag: z.string().optional(),
     outputRoot,
-    observationLedgerRoot: z.string().optional().describe("auto-record touched URLs into the hunt observation ledger"),
+    observationLedgerRoot: LEDGER,
   }),
-  outputSchema: z.object({ blobs: z.array(z.object({ hash: z.string(), bytes: z.number() })) }),
+  outputSchema: z.object({}).passthrough(), // save:{blobs[]} put:{hash,bytes} get:{found} list:{entries[]}
   annotations: writingAnnotations(),
-  examples: [{ title: "evidence", input: { itemsFile: "/tmp/recon/evidence_items.json", outputRoot: "/tmp/recon" } }],
+  examples: [
+    { title: "save batch", input: { action: "save", itemsFile: "/tmp/recon/evidence_items.json", outputRoot: "/tmp/recon" } },
+    { title: "put single", input: { action: "put", file: "/tmp/poc.txt", outputRoot: "/tmp/recon" } },
+  ],
 };
 
 // ---- policy ----
@@ -360,26 +336,6 @@ export const runDiffContract: ToolContract = {
   examples: [{ title: "diff", input: { oldRoot: "/tmp/recon-old", newRoot: "/tmp/recon-new" } }],
 };
 
-export const probeParamsContract: ToolContract = {
-  name: "probe_params",
-  title: "Per-param differential probe",
-  description:
-    "For each merged endpoint: baseline request, then remove one query param at a time and diff status/body. Reveals required params (removal → 4xx) and behavior-switch params without guessing. GET endpoints only.",
-  kind: "runtime",
-  inputSchema: z.object({
-    mergedFile: z.string().describe("path to params_merged.json"),
-    baseUrl: z.string().optional().describe("origin for relative-path endpoints (paramMerge strips hosts); without it relative endpoints are skipped and counted"),
-    outputRoot,
-    observationLedgerRoot: z.string().optional().describe("auto-record touched URLs into the hunt observation ledger"),
-    cookie: z.string().optional(),
-    proxy: z.string().optional(),
-    timeoutMs: z.number().optional(),
-    maxEndpoints: z.number().optional(),
-  }),
-  outputSchema: z.object({ probed: z.number() }),
-  annotations: writingAnnotations(),
-  examples: [{ title: "probe", input: { mergedFile: "/tmp/recon/params_merged.json", outputRoot: "/tmp/recon" } }],
-};
 
 
 export const subdomainsContract: ToolContract = {
@@ -409,18 +365,6 @@ export const portScanContract: ToolContract = {
   examples: [{ title: "scan", input: { host: "1.2.3.4", outputRoot: "/tmp/recon" } }],
 };
 
-export const pathsContract: ToolContract = {
-  name: "probe_paths",
-  title: "Sensitive path probing",
-  description:
-    "Built-in 68 high-signal paths (.git/config, .env, swagger, actuator, druid, phpinfo, backup dumps...) with soft-404 calibration (random-path baseline; isomorphic responses are not findings). Writes sensitive_paths.txt.",
-  kind: "runtime",
-  inputSchema: z.object({
-      proxy: z.string().optional().describe("egress proxy URI"), baseUrl: z.string(), outputRoot, paths: z.array(z.string()).optional(), cookie: z.string().optional(), observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({ found: z.array(z.unknown()) }),
-  annotations: writingAnnotations(),
-  examples: [{ title: "probe", input: { baseUrl: "https://target/", outputRoot: "/tmp/recon" } }],
-};
 
 export const corsContract: ToolContract = {
   name: "probe_cors",
@@ -452,11 +396,10 @@ export const waybackContract: ToolContract = {
   name: "wayback_urls",
   title: "Historical URLs from Wayback",
   description:
-    "web.archive.org CDX API: historical 200-URLs for the domain — dead admin panels, old API versions. Feeds the endpoint pool. Writes wayback_urls.txt.",
+    "Historical intelligence from web.archive.org: action=urls queries the CDX API for the domain historical 200-URLs — dead admin panels, old API versions (writes wayback_urls.txt); action=recover pulls a blocked/dead page archived content (writes archive_recovery.json).",
   kind: "runtime",
-  inputSchema: z.object({
-      proxy: z.string().optional().describe("egress proxy URI"), target: z.string(), outputRoot, maxUrls: z.number().optional(), observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({ urls: z.array(z.string()) }),
+  inputSchema: z.object({ action: z.enum(["urls", "recover"]).default("urls"), target: z.string().optional().describe("action=urls: domain for CDX query"), url: z.string().optional().describe("action=recover: blocked/dead URL to pull from the archive"), proxy: z.string().optional().describe("egress proxy URI"), outputRoot, maxUrls: z.number().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({}).passthrough(), // urls:{urls[]} recover:{snippets[]}
   annotations: writingAnnotations(),
   examples: [{ title: "wb", input: { target: "example.com", outputRoot: "/tmp/recon" } }],
 };
@@ -483,7 +426,7 @@ export const batchContract: ToolContract = {
   inputSchema: z.object({
       proxy: z.string().optional().describe("egress proxy URI"),
       cookie: z.string().optional().describe("auth cookie header"), seedsFile: z.string(), outputRoot, chromiumPath: z.string().optional(), skipRuntime: z.boolean().optional(), notifyWebhook: z.string().optional(), observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({ started: z.boolean(), statusFile: z.string() }),
+  outputSchema: z.object({}).passthrough(), // run:{started,statusFile} status:{state,result?}
   annotations: writingAnnotations(),
   examples: [{ title: "batch", input: { seedsFile: "/tmp/seeds.txt", outputRoot: "/tmp/batch" } }],
 };
@@ -538,18 +481,6 @@ export const domSinksContract: ToolContract = {
   examples: [{ title: "dom", input: { jsDir: "/tmp/recon/js", outputRoot: "/tmp/recon" } }],
 };
 
-export const jwtContract: ToolContract = {
-  name: "jwt_inspect",
-  title: "JWT analysis",
-  description:
-    "Collects JWTs (secrets.txt / js corpus / raw token), decodes header+payload (alg/exp/claims), flags alg=none, cracks HS256 against a weak-secret dictionary. Writes jwt_analysis.json.",
-  kind: "runtime",
-  inputSchema: z.object({
-      proxy: z.string().optional().describe("egress proxy URI"), outputRoot, secretsFile: z.string().optional(), jsDir: z.string().optional(), token: z.string().optional(), observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({ tokens: z.number() }),
-  annotations: writingAnnotations(),
-  examples: [{ title: "jwt", input: { outputRoot: "/tmp/recon", jsDir: "/tmp/recon/js" } }],
-};
 
 export const wsSchemaContract: ToolContract = {
   name: "ws_schema",
@@ -588,17 +519,6 @@ export const smuggleContract: ToolContract = {
   examples: [{ title: "smuggle", input: { baseUrl: "https://target/", outputRoot: "/tmp/recon" } }],
 };
 
-export const archiveContract: ToolContract = {
-  name: "archive_recover",
-  title: "Blocked-page archive recovery",
-  description:
-    "When a URL is blocked (403/429/WAF interstitial): Wayback availability API then archive.today mirror rotation to recover the content. Writes recovered.html.",
-  kind: "runtime",
-  inputSchema: z.object({ url: z.string(), outputRoot, proxy: z.string().optional(), observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({ recoveredFrom: z.string().nullable() }),
-  annotations: writingAnnotations(),
-  examples: [{ title: "recover", input: { url: "https://target/page", outputRoot: "/tmp/recon" } }],
-};
 
 export const wsOriginContract: ToolContract = {
   name: "ws_origin_check",
@@ -743,9 +663,9 @@ export const assetGraphContract: ToolContract = {
   name: "asset_graph",
   title: "Asset graph store",
   description:
-    "velric dual-graph (asset side): global shared asset truth store — upsert root_domain/subdomain/ip/service/endpoint with computed dedup keys and host-chain linking; URL upsert auto-creates the chain. Persists asset_graph.json.",
+    "velric dual-graph (asset side): global shared asset truth store — upsert root_domain/subdomain/ip/service/endpoint with computed dedup keys and host-chain linking; URL upsert auto-creates the chain; action=enrich auto-completes seeds (A/AAAA/CNAME resolve, HTTP status+title probe). Persists asset_graph.json + assets.json.",
   kind: "runtime",
-  inputSchema: z.object({ outputRoot, action: z.enum(["upsert", "upsert_url", "counts", "query"]), type: z.enum(["root_domain", "subdomain", "ip", "service", "app", "endpoint"]).optional(), value: z.string().optional(), parent: z.string().optional(), meta: z.record(z.string(), z.unknown()).optional(), taskTag: z.string().optional(), observationLedgerRoot: LEDGER }),
+  inputSchema: z.object({ outputRoot, action: z.enum(["upsert", "upsert_url", "counts", "query", "enrich"]), type: z.enum(["root_domain", "subdomain", "ip", "service", "app", "endpoint"]).optional(), value: z.string().optional(), parent: z.string().optional(), meta: z.record(z.string(), z.unknown()).optional(), taskTag: z.string().optional(), seeds: z.array(z.string()).min(1).optional().describe("action=enrich: domains/URLs to resolve+probe+upsert"), cookie: z.string().optional(), proxy: z.string().optional(), timeoutMs: z.number().int().min(1000).max(120000).optional(), http: z.boolean().optional().describe("enrich: probe web services (default true)"), observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ ok: z.boolean() }),
   annotations: writingAnnotations(),
   examples: [{ title: "asset", input: { outputRoot: "/tmp/recon", action: "counts" } }],
@@ -755,38 +675,16 @@ export const expGraphContract: ToolContract = {
   name: "exploration_graph",
   title: "Exploration lineage graph",
   description:
-    "velric dual-graph (exploration side): per-run goal→intent→fact→finding lineage with spawns/derived_from/yields/proves edges and asset anchors; lineage/overview queries. Persists exploration_graph.json.",
+    "velric dual-graph (exploration side): per-run goal→intent→fact→finding lineage with spawns/derived_from/yields/proves edges and asset anchors; lineage/overview queries; compact/expand fold cold regions (untouched N rounds) into content-hashed digest nodes. Persists exploration_graph.json + cold_stamps.json.",
   kind: "runtime",
-  inputSchema: z.object({ outputRoot, action: z.enum(["add_node", "add_edge", "anchor", "set_state", "lineage", "overview"]), kind: z.enum(["goal", "intent", "fact", "finding", "hint"]).optional(), summary: z.string().optional(), payload: z.record(z.string(), z.unknown()).optional(), from: z.string().optional(), rel: z.enum(["spawns", "derived_from", "yields", "proves"]).optional(), to: z.string().optional(), nodeId: z.string().optional(), assetKey: z.string().optional(), state: z.enum(["open", "met", "dead", "pending"]).optional(), observationLedgerRoot: LEDGER }),
+  inputSchema: z.object({ outputRoot, action: z.enum(["add_node", "add_edge", "anchor", "set_state", "lineage", "overview", "compact", "expand"]), kind: z.enum(["goal", "intent", "fact", "finding", "hint"]).optional(), summary: z.string().optional(), payload: z.record(z.string(), z.unknown()).optional(), from: z.string().optional(), rel: z.enum(["spawns", "derived_from", "yields", "proves"]).optional(), to: z.string().optional(), nodeId: z.string().optional(), assetKey: z.string().optional(), state: z.enum(["open", "met", "dead", "pending"]).optional(), digestId: z.string().optional().describe("action=expand: digest to rehydrate"), round: z.number().optional(), coldAfterRounds: z.number().optional(), maxDigestSize: z.number().optional(), observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ ok: z.boolean() }),
   annotations: writingAnnotations(),
   examples: [{ title: "node", input: { outputRoot: "/tmp/recon", action: "add_node", kind: "goal", summary: "map target" } }],
 };
 
-export const evidenceContract: ToolContract = {
-  name: "evidence_store",
-  title: "Finding evidence store",
-  description:
-    "velric evidence: sha256-addressed blob store for finding evidence (request/response/command output), deduped across findings, indexed in evidence_index.json.",
-  kind: "runtime",
-  inputSchema: z.object({ outputRoot, action: z.enum(["put", "get", "list"]), file: z.string().optional(), hash: z.string().optional(), tag: z.string().optional(), observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({}).passthrough(), // put:{hash,bytes} get:{hash,bytes,found} list:{entries:[]}
-  annotations: writingAnnotations(),
-  examples: [{ title: "put", input: { outputRoot: "/tmp/recon", action: "put", file: "/tmp/poc.txt" } }],
-};
 
 
-export const coldGraphContract: ToolContract = {
-  name: "cold_graph",
-  title: "Exploration graph compaction",
-  description:
-    "Fold cold exploration regions (untouched for N rounds) into content-hashed digest nodes with member snapshots; expand on demand. Persists cold_stamps.json.",
-  kind: "runtime",
-  inputSchema: z.object({ outputRoot, action: z.enum(["compact", "expand"]), digestId: z.string().optional(), round: z.number().optional(), coldAfterRounds: z.number().optional(), maxDigestSize: z.number().optional(), observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({ digests: z.array(z.string()) }),
-  annotations: writingAnnotations(),
-  examples: [{ title: "compact", input: { outputRoot: "/tmp/recon", action: "compact" } }],
-};
 
 export const retestContract: ToolContract = {
   name: "finding_retest",
@@ -910,15 +808,15 @@ export const roleMatrixContract: ToolContract = {
 };
 
 export const jwtAttackContract: ToolContract = {
-  name: "jwt_attack",
-  title: "JWT attack surface",
+  name: "jwt",
+  title: "JWT analysis + attack surface",
   description:
-    "Differential JWT attacks: alg=none acceptance, kid path traversal (LFI oracle), jku/x5u SSRF, RS->HS confusion note, weak-secret dictionary, plus claims extraction (roles/scopes/permissions) for the role matrix. Verdicts require a server-response change, never a bare 200. Writes jwt_attack.json.",
+    "One entry point for JWT work. action=attack runs differential attacks: alg=none acceptance, kid path traversal (LFI oracle), jku/x5u SSRF, RS->HS confusion note, weak-secret dictionary, plus claims extraction (roles/scopes/permissions) for the role matrix — verdicts require a server-response change, never a bare 200 (writes jwt_attack.json). action=inspect collects JWTs (secrets.txt / js corpus / raw token), decodes header+payload (alg/exp/claims), flags alg=none, cracks HS256 against a weak-secret dictionary (writes jwt_analysis.json).",
   kind: "runtime",
-  inputSchema: z.object({ token: z.string(), endpoint: z.string(), outputRoot, headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), secretCandidates: z.array(z.string()).optional(), observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({ claims: z.object({ roles: z.array(z.string()), scopes: z.array(z.string()), permissions: z.array(z.string()) }) }),
+  inputSchema: z.object({ action: z.enum(["attack", "inspect"]).default("attack"), token: z.string().optional(), endpoint: z.string().optional().describe("action=attack: endpoint that consumes the token"), secretsFile: z.string().optional().describe("action=inspect: secret wordlist"), jsDir: z.string().optional().describe("action=inspect: JS corpus to harvest tokens from"), outputRoot, headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), secretCandidates: z.array(z.string()).optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({}).passthrough(), // attack:{claims{roles,scopes,permissions}} inspect:{tokens}
   annotations: writingAnnotations(),
-  examples: [{ title: "jwt", input: { token: "eyJ...", endpoint: "https://target/api/me", outputRoot: "/tmp/recon" } }],
+  examples: [{ title: "attack", input: { action: "attack", token: "eyJ...", endpoint: "https://target/api/me", outputRoot: "/tmp/recon" } }, { title: "inspect", input: { action: "inspect", jsDir: "/tmp/recon/js", outputRoot: "/tmp/recon" } }],
 };
 
 export const idorDeepContract: ToolContract = {
@@ -1033,10 +931,10 @@ export const hiddenParamsContract: ToolContract = {
   name: "mine_hidden_params",
   title: "Hidden-parameter miner (paired differential)",
   description:
-    "Guesses parameter NAMES the app never advertised: fires each candidate with/without (both cache-busted), flags pairs where responses differ, confirms twice. Wordlist + vocabulary learned from response content (Param-Miner style). Writes hidden_params.json.",
+    "Parameter differential analysis, two modes: action=name-guess (default) guesses parameter NAMES the app never advertised — fires each candidate with/without (both cache-busted), flags pairs where responses differ, confirms twice; wordlist + vocabulary learned from response content (Param-Miner style), writes hidden_params.json. action=remove-diff probes each merged endpoint by removing one param at a time against the full-param baseline — reveals required params (4xx on removal) and behavior-switch params without guessing (writes param_probe.json).",
   kind: "runtime",
-  inputSchema: z.object({ url: z.string(), outputRoot, in: z.enum(["query", "cookie", "header"]).optional(), words: z.array(z.string()).optional(), learn: z.boolean().optional(), method: z.string().optional(), body: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), cookie: z.string().optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxWords: z.number().optional(), observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({ probed: z.number(), found: z.array(z.object({ param: z.string(), in: z.string(), evidence: z.string() })) }),
+  inputSchema: z.object({ action: z.enum(["name-guess", "remove-diff"]).optional(), mergedFile: z.string().optional().describe("action=remove-diff: path to params_merged.json"), baseUrl: z.string().optional().describe("remove-diff: origin for relative endpoints"), maxEndpoints: z.number().optional(), url: z.string().optional().describe("name-guess: target URL"), outputRoot, in: z.enum(["query", "cookie", "header"]).optional(), words: z.array(z.string()).optional(), learn: z.boolean().optional(), method: z.string().optional(), body: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), cookie: z.string().optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxWords: z.number().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({}).passthrough(), // name-guess:{probed,found[]} remove-diff:{probed,endpointResults[]}
   annotations: writingAnnotations(),
   examples: [{ title: "mine", input: { url: "https://target/api/profile", outputRoot: "/tmp/recon" } }],
 };
@@ -1053,49 +951,27 @@ export const subdomainAlterContract: ToolContract = {
   examples: [{ title: "alter", input: { hosts: ["api.example.com", "dev.example.com"], domain: "example.com", outputRoot: "/tmp/recon" } }],
 };
 
-export const backupFindContract: ToolContract = {
-  name: "find_backups",
-  title: "Backup-file discovery",
-  description:
-    "Probes backup suffixes (.bak/.old/.swp/~/.tar.gz/.zip/.sql...) and root dump names (www.tar.gz, dump.sql) for known live paths, with soft-404 calibration. Feeds backup-unpack. Writes backup_candidates.json.",
-  kind: "runtime",
-  inputSchema: z.object({ baseUrl: z.string(), outputRoot, targets: z.array(z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxCandidates: z.number().optional(), observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({ probed: z.number(), found: z.array(z.object({ url: z.string(), status: z.number(), bytes: z.number() })) }),
-  annotations: writingAnnotations(),
-  examples: [{ title: "find", input: { baseUrl: "https://target/", outputRoot: "/tmp/recon" } }],
-};
 
 export const urlRefineContract1: ToolContract = {
-  name: "dedupe_urls",
-  title: "URL-pool decluttering (zero-request)",
+  name: "url_refine",
+  title: "URL-pool refinement (dedupe + classify, zero-request)",
   description:
-    "uro-style URL list refinement without any requests: incremental-path folding (/page/1/ == /page/2/), same-path-different-value folding (?id=1 == ?id=2), static-extension drop, tracking-param strip, fuzzy ID normalization (numeric/uuid/hash -> {id}, dupdurl style). Feeds cleaner input to every downstream probe. Writes deduped_urls.txt.",
+    "uro/gf-style URL-pool refinement, no requests. action=dedupe declutters: incremental-path folding (/page/1/ == /page/2/), same-path-different-value folding (?id=1 == ?id=2), static-extension drop, tracking-param strip, fuzzy ID normalization (numeric/uuid/hash -> {id}, dupdurl style) — writes deduped_urls.txt. action=classify tags URLs by param-name/path patterns into xss/ssrf/redirect/lfi/sqli/idor/debug candidate classes so downstream probes take targeted feeds — writes classified_urls.json.",
   kind: "runtime",
-  inputSchema: z.object({ urls: z.array(z.string()), outputRoot, keepStatic: z.boolean().optional(), keepContent: z.boolean().optional(), fuzzy: z.boolean().optional(), whitelist: z.array(z.string()).optional(), params: z.enum(["has", "none"]).optional() }),
-  outputSchema: z.object({ input: z.number(), kept: z.number() }),
+  inputSchema: z.object({ action: z.enum(["dedupe", "classify"]).default("dedupe"), urls: z.array(z.string()), outputRoot, keepStatic: z.boolean().optional(), keepContent: z.boolean().optional(), fuzzy: z.boolean().optional(), whitelist: z.array(z.string()).optional(), params: z.enum(["has", "none"]).optional() }),
+  outputSchema: z.object({}).passthrough(), // dedupe:{input,kept} classify:{classified,byClass}
   annotations: writingAnnotations(),
-  examples: [{ title: "declutter", input: { urls: ["https://t/a?id=1", "https://t/a?id=2"], outputRoot: "/tmp/recon" } }],
+  examples: [{ title: "dedupe", input: { action: "dedupe", urls: ["https://t/a?id=1", "https://t/a?id=2"], outputRoot: "/tmp/recon" } }, { title: "classify", input: { action: "classify", urls: ["https://t/fetch?url=x"], outputRoot: "/tmp/recon" } }],
 };
 
-export const urlRefineContract2: ToolContract = {
-  name: "classify_urls",
-  title: "Vulnerability-pattern URL classifier",
-  description:
-    "gf-style classification: tags URLs by param-name/path patterns into xss/ssrf/redirect/lfi/sqli/idor/debug candidate classes so downstream probes take targeted feeds. Zero requests. Writes classified_urls.json.",
-  kind: "runtime",
-  inputSchema: z.object({ urls: z.array(z.string()), outputRoot }),
-  outputSchema: z.object({ classified: z.number(), byClass: z.record(z.string(), z.array(z.string())) }),
-  annotations: writingAnnotations(),
-  examples: [{ title: "classify", input: { urls: ["https://t/fetch?url=x"], outputRoot: "/tmp/recon" } }],
-};
 
 export const dirFuzzContract: ToolContract = {
   name: "dir_fuzz",
   title: "Wordlist-driven content discovery",
   description:
-    "ffuf-style fuzzer: FUZZ keyword substitution, auto-calibration against soft-404s (random-probe baseline), extension mutation, optional recursion into discovered dirs, status/size filtering. Generalizes probe_paths to any wordlist. Writes dir_fuzz.json.",
+    "Wordlist-driven content discovery, one entry point for all path probing: preset=custom is ffuf-style fuzzing (FUZZ substitution, soft-404 auto-calibration, extension mutation, recursion, status/size filters); preset=sensitive probes the 68 high-signal paths (.git/config, .env, swagger, actuator, druid, phpinfo…) with soft-404 calibration (writes sensitive_paths.txt); preset=backups probes backup/dump candidates — target×suffix vocabulary + root dumps (www.tar.gz, dump.sql…) — writes backup_find.json.",
   kind: "runtime",
-  inputSchema: z.object({ url: z.string().describe("template containing FUZZ, e.g. https://target/FUZZ"), outputRoot, wordlistFile: z.string().optional(), words: z.array(z.string()).optional(), extensions: z.array(z.string()).optional(), recursion: z.boolean().optional(), recursionDepth: z.number().optional(), calibration: z.number().optional(), matchStatus: z.array(z.number()).optional(), filterSize: z.array(z.number()).optional(), cookie: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxWords: z.number().optional(), delayMs: z.number().optional(), observationLedgerRoot: LEDGER }),
+  inputSchema: z.object({ preset: z.enum(["custom", "sensitive", "backups"]).optional().describe("sensitive=68 high-signal paths (.git/.env/swagger/actuator…); backups=backup-file candidates (suffixes+root dumps); custom (default)=free wordlist"), baseUrl: z.string().optional().describe("preset origin (sensitive/backups)"), url: z.string().optional().describe("custom preset: template containing FUZZ, e.g. https://target/FUZZ"), targets: z.array(z.string()).optional().describe("backups preset: live files/dirs to derive backups from"), paths: z.array(z.string()).optional().describe("s sensitive preset: override path list"), outputRoot, wordlistFile: z.string().optional(), words: z.array(z.string()).optional(), extensions: z.array(z.string()).optional(), recursion: z.boolean().optional(), recursionDepth: z.number().optional(), calibration: z.number().optional(), matchStatus: z.array(z.number()).optional(), filterSize: z.array(z.number()).optional(), cookie: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxWords: z.number().optional(), delayMs: z.number().optional(), observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ probed: z.number(), hits: z.array(z.object({ url: z.string(), status: z.number(), size: z.number() })) }),
   annotations: writingAnnotations(),
   examples: [{ title: "fuzz", input: { url: "https://target/FUZZ", outputRoot: "/tmp/recon", words: ["admin", "backup"] } }],
@@ -1122,16 +998,12 @@ export const ALL_CONTRACTS: readonly ToolContract[] = [
   captureRuntimeContract,
   buildPermTreeContract,
   mergeParamsContract,
-  enrichAssetsContract,
   genReportContract,
   saveEvidenceContract,
   autoPipelineContract,
-  autoStatusContract,
   runDiffContract,
-  probeParamsContract,
   subdomainsContract,
   portScanContract,
-  pathsContract,
   corsContract,
   fingerprintContract,
   waybackContract,
@@ -1141,11 +1013,9 @@ export const ALL_CONTRACTS: readonly ToolContract[] = [
   idorContract,
   gitRestoreContract,
   domSinksContract,
-  jwtContract,
   wsSchemaContract,
   oidcContract,
   smuggleContract,
-  archiveContract,
   wsOriginContract,
   graphqlDeepContract,
   protoDecodeContract,
@@ -1159,8 +1029,6 @@ export const ALL_CONTRACTS: readonly ToolContract[] = [
   trafficRecContract,
   assetGraphContract,
   expGraphContract,
-  evidenceContract,
-  coldGraphContract,
   retestContract,
   trafficQueryContract,
   reportExportContract,
@@ -1177,9 +1045,7 @@ export const ALL_CONTRACTS: readonly ToolContract[] = [
   piiScanContract,
   hiddenParamsContract,
   subdomainAlterContract,
-  backupFindContract,
   urlRefineContract1,
-  urlRefineContract2,
   dirFuzzContract,
   screenshotContract,
   jwtAttackContract,

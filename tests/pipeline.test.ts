@@ -7,7 +7,7 @@ import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-describe("dedupe_urls (uro-style)", () => {
+describe("url_refine dedupe (uro-style)", () => {
   it("folds same-path different-value params", () => {
     const r = dedupeUrls({ urls: [
       "https://t.com/a?id=1", "https://t.com/a?id=2", "https://t.com/a?id=999",
@@ -42,7 +42,7 @@ describe("dedupe_urls (uro-style)", () => {
   });
 });
 
-describe("classify_urls (gf-style)", () => {
+describe("url_refine classify (gf-style)", () => {
   it("tags ssrf/redirect/lfi/xss by param names (multi-class ok)", () => {
     const r = classifyUrls([
       "https://t.com/fetch?url=https://evil",

@@ -8,10 +8,8 @@ describe("output schema shape guards", () => {
   const cases: { tool: string; sample: unknown }[] = [
     { tool: "fingerprint", sample: { baseUrl: "https://x/", waf: ["cloudflare"], methods: { allowed: [], putWorks: false, traceWorks: false }, cookies: [], techHeaders: {} } },
     { tool: "save_evidence", sample: { blobs: [{ hash: "a".repeat(64), bytes: 3 }] } },
-    { tool: "enrich_assets", sample: { assets: [{ key: "domain:x" }] } },
     { tool: "auto_recon", sample: { started: true, statusFile: "/tmp/s.json" } },
     { tool: "auto_batch", sample: { started: true, statusFile: "/tmp/s.json" } },
-    { tool: "probe_paths", sample: { found: [{ path: "/x", status: 200 }], probed: 1 } },
     { tool: "wayback_urls", sample: { urls: ["https://x/a"] } },
     { tool: "nuclei_lite", sample: { matched: [{ id: "e", severity: "high" }] } },
     { tool: "probe_oidc", sample: { found: [{ kind: "oidc", url: "https://x/.well-known/openid-configuration" }] } },
@@ -24,7 +22,7 @@ describe("output schema shape guards", () => {
     { tool: "build_site_map", sample: { apis: ["GET /api/v1/users"], pages: 3, limitations: [] } },
     { tool: "scan_platform", sample: { id: "p1", name: "demo", targets: ["http://x"], createdAt: "t" } },
     { tool: "evidence_bind", sample: { findingId: "f1", version: 1, bindings: [{ id: "b1", hash: "a".repeat(64), role: "proof" }] } },
-    { tool: "probe_params", sample: { probed: 1, endpointResults: [], artifacts: [], skippedRelativeEndpoints: 0 } },
+    { tool: "mine_hidden_params", sample: { probed: 1, endpointResults: [], artifacts: [], skippedRelativeEndpoints: 0 } },
   ];
 
   it("declared output shapes parse representative handler returns", () => {

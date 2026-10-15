@@ -11,7 +11,7 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `subdomain-alter` — 子域排列变形引擎(dev→dev2/dev-qa/pre.dev…，ops 词表交叉+数字递增)，DNS 解析验证，发现 CT/词表都覆盖不到的资产
 - `port-scan` — TCP connect top 67 端口，非 Web 开放端口直出 finding
 - `fingerprint` — WAF/CDN 识别、HTTP 方法枚举、Cookie 安全审计、技术栈 header、安全 header 审计(HSTS/XFO/nosniff/Referrer-Policy/CSP 弱指令评估)、TLS 配置审计(协议/套件/证书过期/旧协议接受)
-- `dns_resolve` / `http_probe` / `enrich_assets` — 解析/单点探测/资产图
+- `dns_resolve` / `http_probe` — 解析/单点探测
 
 **静态侦察**
 - `harvest` — SPA bundle 全量收割(chunk manifest 迭代下载)，提取 API/路由，内置 secrets 扫描与 robots/sitemap 合并
@@ -19,8 +19,7 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `paths` — 68 条敏感路径字典，soft-404 校准 + 通配路由识别 + catch-all 聚簇
 - `sourcemaps` — 生产 .map 泄漏检测
 - `wayback` — 历史端点回收
-- `dedupe-urls` — URL 池零请求清洗(增量折叠/同路径参数值折叠/静态剔除/追踪参数剥离/模糊 ID 归一)
-- `classify-urls` — gf 式六类攻击候选分流(xss/ssrf/redirect/lfi/sqli/idor/debug)
+- `url_refine` — URL 池零请求精炼: action=dedupe(uro 式清洗) / classify(gf 式六类攻击候选分流)
 - `dir-fuzz` — ffuf 式词表内容发现(FUZZ 关键字+soft-404 自动校准+扩展名变异+递归)
 - `screenshot` — gowitness 式截图取证(PNG+sha256+同模板聚类)
 

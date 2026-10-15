@@ -153,21 +153,6 @@ export const handlers: Readonly<Record<string, Handler>> = {
         .object({ samplesFile: z.string(), outputRoot: z.string() })
         .parse(raw),
     ),
-  enrich_assets: async (raw) => {
-    const { enrichAssets } = await import("../application/enrich.js");
-    return enrichAssets(
-      z
-        .object({
-          seeds: z.array(z.string()).min(1),
-          outputRoot: z.string(),
-          proxy: z.string().optional(),
-          cookie: z.string().optional(),
-          timeoutMs: z.number().optional(),
-          http: z.boolean().optional(),
-        })
-        .parse(raw),
-    );
-  },
   gen_report: async (raw) => {
     const p = z
       .object({ reportFile: z.string(), outputRoot: z.string() })
@@ -177,57 +162,37 @@ export const handlers: Readonly<Record<string, Handler>> = {
     return generateReport({ reportJson: await readFile(p.reportFile, "utf8"), outputRoot: p.outputRoot });
   },
   auto_recon: async (raw) => {
-    // Async start + auto_status poll (MCP clients default to a 60s request
-    // timeout; the full pipeline takes minutes). Mirrors the hunt pattern.
     const p = z
-      .object({
-        seed: z.string(),
-        outputRoot: z.string(),
-        chromiumPath: z.string().optional(),
-        proxy: z.string().optional(),
-        cookie: z.string().optional(),
-        timeoutMs: z.number().optional(),
-        skipRuntime: z.boolean().optional(),
-        maxPages: z.number().optional(),
-      })
+      .object({ action: z.enum(["run", "status"]).default("run"), seed: z.string().optional(), outputRoot: z.string(), chromiumPath: z.string().optional(), proxy: z.string().optional(), cookie: z.string().optional(), timeoutMs: z.number().optional(), skipRuntime: z.boolean().optional(), maxPages: z.number().optional() })
       .parse(raw);
     const { join } = await import("node:path");
     const statusFile = join(p.outputRoot, "auto_status.json");
+    if (p.action === "status") {
+      const { readFile } = await import("node:fs/promises");
+      try {
+        const status = JSON.parse(await readFile(statusFile, "utf8"));
+        return status;
+      } catch {
+        return { state: "unknown", hint: "no auto_status.json — run action=run first" };
+      }
+    }
+    if (!p.seed) throw new Error("seed required for run");
+    // Async start + action=status poll (MCP clients default to a 60s request
+    // timeout; the full pipeline takes minutes). Mirrors the hunt pattern.
     const { writeFile, mkdir } = await import("node:fs/promises");
     await mkdir(p.outputRoot, { recursive: true });
     await writeFile(statusFile, JSON.stringify({ state: "running", startedAt: new Date().toISOString() }));
     void (async () => {
       try {
         const { runAutoPipeline } = await import("../application/auto.js");
-        const result = await runAutoPipeline(p);
+        const result = await runAutoPipeline({ ...p, seed: p.seed! });
         await writeFile(statusFile, JSON.stringify({ state: "done", startedAt: new Date().toISOString(), result }));
       } catch (e) {
-        // The error-path write itself can fail (disk full, root removed);
-        // an unhandled rejection here kills the whole MCP process.
         try { await writeFile(statusFile, JSON.stringify({ state: "error", error: String((e as Error).message ?? e) })); }
-        catch { /* status file unwritable — nothing more to persist */ }
+        catch { /* status file unwritable */ }
       }
     })();
-    return { started: true, outputRoot: p.outputRoot, statusFile, pollWith: "auto_status" };
-  },
-  auto_status: async (raw) => {
-    const p = z.object({ outputRoot: z.string() }).parse(raw);
-    const { readFile } = await import("node:fs/promises");
-    const { join } = await import("node:path");
-    try {
-      const status = JSON.parse(await readFile(join(p.outputRoot, "auto_status.json"), "utf8"));
-      // Stage-level progress: pipeline.json is written stage-by-stage when the
-      // pipeline runs in-progress mode; merge what exists into the status.
-      try {
-        const pipeline = JSON.parse(await readFile(join(p.outputRoot, "pipeline.json"), "utf8"));
-        if (Array.isArray(pipeline.stages)) {
-          return { ...status, stages: pipeline.stages };
-        }
-      } catch { /* pipeline.json not written yet — fine */ }
-      return status;
-    } catch {
-      return { state: "unknown", hint: "call auto_recon first" };
-    }
+    return { started: true, outputRoot: p.outputRoot, statusFile, pollWith: "auto_recon action=status" };
   },
   hunt_begin: async (raw) => {
     const { huntBegin } = await import("../application/huntDriver.js");
@@ -289,21 +254,6 @@ export const handlers: Readonly<Record<string, Handler>> = {
     const { runDiff } = await import("../application/runDiff.js");
     return runDiff(p);
   },
-  probe_params: async (raw) => {
-    const p = z
-      .object({
-        mergedFile: z.string(),
-        outputRoot: z.string(),
-        baseUrl: z.string().optional(),
-        cookie: z.string().optional(),
-        proxy: z.string().optional(),
-        timeoutMs: z.number().optional(),
-        maxEndpoints: z.number().optional(),
-      })
-      .parse(raw);
-    const { probeParams } = await import("../application/paramProbe.js");
-    return probeParams(p);
-  },
   subdomain_enum: async (raw) => {
     const p = z.object({ domain: z.string(), outputRoot: z.string(), proxy: z.string().optional(), timeoutMs: z.number().optional() }).parse(raw);
     const { discoverSubdomains } = await import("../domain/subdomains.js");
@@ -313,11 +263,6 @@ export const handlers: Readonly<Record<string, Handler>> = {
     const p = z.object({ host: z.string(), outputRoot: z.string(), ports: z.array(z.number()).optional(), timeoutMs: z.number().optional(), concurrency: z.number().optional(), proxy: z.string().optional() }).parse(raw);
     const { scanPorts } = await import("../domain/portScan.js");
     return scanPorts(p);
-  },
-  probe_paths: async (raw) => {
-    const p = z.object({ baseUrl: z.string(), outputRoot: z.string(), paths: z.array(z.string()).optional(), cookie: z.string().optional(), proxy: z.string().optional() }).parse(raw);
-    const { probePaths } = await import("../domain/pathProbe.js");
-    return probePaths(p);
   },
   probe_cors: async (raw) => {
     const p = z.object({ baseUrl: z.string(), outputRoot: z.string(), origins: z.array(z.string()).optional(), proxy: z.string().optional() }).parse(raw);
@@ -330,9 +275,15 @@ export const handlers: Readonly<Record<string, Handler>> = {
     return fingerprint(p);
   },
   wayback_urls: async (raw) => {
-    const p = z.object({ target: z.string(), outputRoot: z.string(), maxUrls: z.number().optional(), proxy: z.string().optional() }).parse(raw);
+    const p = z.object({ action: z.enum(["urls", "recover"]).default("urls"), target: z.string().optional(), url: z.string().optional(), outputRoot: z.string(), maxUrls: z.number().optional(), proxy: z.string().optional() }).parse(raw);
+    if (p.action === "recover") {
+      if (!p.url) throw new Error("url required for recover");
+      const { recoverUrl } = await import("../domain/archive.js");
+      return recoverUrl({ url: p.url, outputRoot: p.outputRoot, proxy: p.proxy });
+    }
+    if (!p.target) throw new Error("target required for urls");
     const { fetchWayback } = await import("../domain/sourcemap.js");
-    return fetchWayback(p);
+    return fetchWayback({ target: p.target, outputRoot: p.outputRoot, maxUrls: p.maxUrls, proxy: p.proxy });
   },
   detect_sourcemaps: async (raw) => {
     const p = z.object({ outputRoot: z.string(), jsDir: z.string().optional(), baseUrl: z.string().optional(), proxy: z.string().optional() }).parse(raw);
@@ -379,11 +330,6 @@ export const handlers: Readonly<Record<string, Handler>> = {
     const { scanDomSinks } = await import("../domain/domSinks.js");
     return scanDomSinks(p);
   },
-  jwt_inspect: async (raw) => {
-    const p = z.object({ outputRoot: z.string(), secretsFile: z.string().optional(), jsDir: z.string().optional(), token: z.string().optional(), proxy: z.string().optional() }).parse(raw);
-    const { inspectJwt } = await import("../domain/jwt.js");
-    return inspectJwt(p);
-  },
   ws_schema: async (raw) => {
     const p = z.object({ runtimeFile: z.string(), outputRoot: z.string() }).parse(raw);
     const { extractWsSchema } = await import("../domain/wsSchema.js");
@@ -398,11 +344,6 @@ export const handlers: Readonly<Record<string, Handler>> = {
     const p = z.object({ baseUrl: z.string(), outputRoot: z.string(), proxy: z.string().optional() }).parse(raw);
     const { probeSmuggle } = await import("../domain/smuggle.js");
     return probeSmuggle(p);
-  },
-  archive_recover: async (raw) => {
-    const p = z.object({ url: z.string(), outputRoot: z.string(), proxy: z.string().optional() }).parse(raw);
-    const { recoverUrl } = await import("../domain/archive.js");
-    return recoverUrl(p);
   },
   ws_origin_check: async (raw) => {
     const p = z.object({ url: z.string(), outputRoot: z.string(), headers: z.record(z.string(), z.string()).optional() }).parse(raw);
@@ -454,6 +395,25 @@ export const handlers: Readonly<Record<string, Handler>> = {
     const { buildSiteMap } = await import("../domain/siteMap.js");
     return buildSiteMap(p);
   },
+  url_refine: async (raw) => {
+    const p = z.object({ action: z.enum(["dedupe", "classify"]).default("dedupe"), urls: z.array(z.string()), outputRoot: z.string(), keepStatic: z.boolean().optional(), keepContent: z.boolean().optional(), fuzzy: z.boolean().optional(), whitelist: z.array(z.string()).optional(), params: z.enum(["has", "none"]).optional() }).parse(raw);
+    const { dedupeUrls, classifyUrls } = await import("../domain/urlRefine.js");
+    const { writeFile: wf, mkdir: mk } = await import("node:fs/promises");
+    await mk(p.outputRoot, { recursive: true });
+    const { join } = await import("node:path");
+    if (p.action === "classify") {
+      const r = classifyUrls(p.urls);
+      const bodyStr = JSON.stringify(r, null, 2);
+      const path = join(p.outputRoot, "classified_urls.json");
+      await wf(path, bodyStr, "utf8");
+      return { ...r, artifacts: [{ path, bytes: Buffer.byteLength(bodyStr) }] };
+    }
+    const r = dedupeUrls(p);
+    const bodyStr = r.urls.join("\n");
+    const path = join(p.outputRoot, "deduped_urls.txt");
+    await wf(path, bodyStr, "utf8");
+    return { ...r, artifacts: [{ path, bytes: Buffer.byteLength(bodyStr) }] };
+  },
   traffic_record: async (raw) => {
     const p = z.object({ outputRoot: z.string(), port: z.number().optional(), upstreamProxy: z.string().optional(), maxExchanges: z.number().optional(), stop: z.boolean().optional(), mitm: z.boolean().optional() }).parse(raw);
     // One recorder per process, keyed by outputRoot; stop:true tears it down
@@ -474,7 +434,7 @@ export const handlers: Readonly<Record<string, Handler>> = {
     return { port, note: "recorder bound; call again with stop:true to release" };
   },
   asset_graph: async (raw) => {
-    const p = z.object({ outputRoot: z.string(), action: z.enum(["upsert", "upsert_url", "counts", "query"]), type: z.enum(["root_domain", "subdomain", "ip", "service", "app", "endpoint"]).optional(), value: z.string().optional(), parent: z.string().optional(), meta: z.record(z.string(), z.unknown()).optional(), taskTag: z.string().optional() }).parse(raw);
+    const p = z.object({ outputRoot: z.string(), action: z.enum(["upsert", "upsert_url", "counts", "query", "enrich"]), type: z.enum(["root_domain", "subdomain", "ip", "service", "app", "endpoint"]).optional(), value: z.string().optional(), parent: z.string().optional(), meta: z.record(z.string(), z.unknown()).optional(), taskTag: z.string().optional(), seeds: z.array(z.string()).min(1).optional(), cookie: z.string().optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), http: z.boolean().optional() }).parse(raw);
     const { AssetStore } = await import("../domain/graphs.js");
     const st = new AssetStore(p.outputRoot);
     await st.load();
@@ -489,12 +449,17 @@ export const handlers: Readonly<Record<string, Handler>> = {
     } else if (p.action === "query") {
       if (!p.type) throw new Error("type required");
       return { ok: true, assets: st.queryByType(p.type).slice(0, 500).map((a) => ({ key: a.key, value: a.value, parent: a.parent })) };
+    } else if (p.action === "enrich") {
+      if (!p.seeds || p.seeds.length === 0) throw new Error("seeds required for enrich");
+      await st.save();
+      const { enrichAssets } = await import("../application/enrich.js");
+      return enrichAssets({ seeds: p.seeds, outputRoot: p.outputRoot, proxy: p.proxy, cookie: p.cookie, timeoutMs: p.timeoutMs, http: p.http });
     }
     await st.save();
     return { ok: true };
   },
   exploration_graph: async (raw) => {
-    const p = z.object({ outputRoot: z.string(), action: z.enum(["add_node", "add_edge", "anchor", "set_state", "lineage", "overview"]), kind: z.enum(["goal", "intent", "fact", "finding", "hint"]).optional(), summary: z.string().optional(), payload: z.record(z.string(), z.unknown()).optional(), from: z.string().optional(), rel: z.enum(["spawns", "derived_from", "yields", "proves"]).optional(), to: z.string().optional(), nodeId: z.string().optional(), assetKey: z.string().optional(), state: z.enum(["open", "met", "dead", "pending"]).optional() }).parse(raw);
+    const p = z.object({ outputRoot: z.string(), action: z.enum(["add_node", "add_edge", "anchor", "set_state", "lineage", "overview", "compact", "expand"]), kind: z.enum(["goal", "intent", "fact", "finding", "hint"]).optional(), summary: z.string().optional(), payload: z.record(z.string(), z.unknown()).optional(), from: z.string().optional(), rel: z.enum(["spawns", "derived_from", "yields", "proves"]).optional(), to: z.string().optional(), nodeId: z.string().optional(), assetKey: z.string().optional(), state: z.enum(["open", "met", "dead", "pending"]).optional(), digestId: z.string().optional(), round: z.number().optional(), coldAfterRounds: z.number().optional(), maxDigestSize: z.number().optional() }).parse(raw);
     const { ExplorationGraph } = await import("../domain/graphs.js");
     const g = new ExplorationGraph(p.outputRoot);
     await g.load();
@@ -526,50 +491,26 @@ export const handlers: Readonly<Record<string, Handler>> = {
       if (!p.nodeId) throw new Error("nodeId required");
       return { ok: true, lineage: g.lineage(p.nodeId) };
     }
+    if (p.action === "compact" || p.action === "expand") {
+      const { compactGraph, expandDigest, loadStamps, saveStamps, touchLive, DEFAULT_COLD_PARAMS } = await import("../domain/coldGraph.js");
+      const { stamps, round: prevRound } = await loadStamps(p.outputRoot);
+      const round = p.round ?? prevRound + 1;
+      if (p.action === "compact") {
+        touchLive(g, stamps, round - 1);
+        const r = compactGraph(g, stamps, round, { coldAfterRounds: p.coldAfterRounds ?? DEFAULT_COLD_PARAMS.coldAfterRounds, maxDigestSize: p.maxDigestSize ?? DEFAULT_COLD_PARAMS.maxDigestSize });
+        await g.save();
+        await saveStamps(p.outputRoot, stamps, round);
+        return { digests: r.digests, folded: r.folded.length, rescued: r.rescued.length };
+      }
+      if (!p.digestId) throw new Error("digestId required for expand");
+      const r = expandDigest(g, p.digestId, stamps, round);
+      await g.save();
+      await saveStamps(p.outputRoot, stamps, round);
+      return { digests: [], expanded: r.expanded.length };
+    }
     const ov = g.overview();
     await g.save();
     return { ok: true, overview: ov };
-  },
-  evidence_store: async (raw) => {
-    const p = z.object({ outputRoot: z.string(), action: z.enum(["put", "get", "list"]), file: z.string().optional(), hash: z.string().optional(), tag: z.string().optional() }).parse(raw);
-    const { EvidenceStore } = await import("../domain/graphs.js");
-    const store = new EvidenceStore(p.outputRoot);
-    await store.load();
-    if (p.action === "put") {
-      if (!p.file) throw new Error("file required");
-      const { readFile: rf } = await import("node:fs/promises");
-      const buf = await rf(p.file);
-      const blob = await store.put(buf, p.tag);
-      await store.save();
-      return { hash: blob.hash, bytes: blob.bytes };
-    }
-    if (p.action === "get") {
-      if (!p.hash) throw new Error("hash required");
-      const buf = await store.get(p.hash);
-      return { hash: p.hash, bytes: buf ? buf.length : 0, found: buf !== null };
-    }
-    return { entries: store.entries() };
-  },
-  cold_graph: async (raw) => {
-    const p = z.object({ outputRoot: z.string(), action: z.enum(["compact", "expand"]), digestId: z.string().optional(), round: z.number().optional(), coldAfterRounds: z.number().optional(), maxDigestSize: z.number().optional() }).parse(raw);
-    const { ExplorationGraph } = await import("../domain/graphs.js");
-    const { compactGraph, expandDigest, loadStamps, saveStamps, touchLive, DEFAULT_COLD_PARAMS } = await import("../domain/coldGraph.js");
-    const g = new ExplorationGraph(p.outputRoot);
-    await g.load();
-    const { stamps, round: prevRound } = await loadStamps(p.outputRoot);
-    const round = p.round ?? prevRound + 1;
-    if (p.action === "compact") {
-      touchLive(g, stamps, round - 1); // nodes alive now were touched last round
-      const r = compactGraph(g, stamps, round, { coldAfterRounds: p.coldAfterRounds ?? DEFAULT_COLD_PARAMS.coldAfterRounds, maxDigestSize: p.maxDigestSize ?? DEFAULT_COLD_PARAMS.maxDigestSize });
-      await g.save();
-      await saveStamps(p.outputRoot, stamps, round);
-      return { digests: r.digests, folded: r.folded.length, rescued: r.rescued.length };
-    }
-    if (!p.digestId) throw new Error("digestId required for expand");
-    const r = expandDigest(g, p.digestId, stamps, round);
-    await g.save();
-    await saveStamps(p.outputRoot, stamps, round);
-    return { digests: [], expanded: r.expanded.length };
   },
   finding_retest: async (raw) => {
     const p = z.object({ outputRoot: z.string(), action: z.enum(["register", "run", "list"]), id: z.string().optional(), name: z.string().optional(), severity: z.enum(["low", "medium", "high", "critical"]).optional(), poc: z.object({ method: z.string(), url: z.string(), headers: z.record(z.string(), z.string()).optional(), body: z.string().optional() }).optional(), predicates: z.object({ fixedStatuses: z.array(z.number()).optional(), fixedBodyAny: z.array(z.string()).optional(), vulnerableBodyAny: z.array(z.string()).optional() }).optional(), proxy: z.string().optional(), note: z.string().optional() }).parse(raw);
@@ -684,9 +625,15 @@ export const handlers: Readonly<Record<string, Handler>> = {
     };
   },
   mine_hidden_params: async (raw) => {
-    const p = z.object({ url: z.string(), outputRoot: z.string(), in: z.enum(["query", "cookie", "header"]).optional(), words: z.array(z.string()).optional(), learn: z.boolean().optional(), method: z.string().optional(), body: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), cookie: z.string().optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxWords: z.number().optional() }).parse(raw);
+    const p = z.object({ action: z.enum(["name-guess", "remove-diff"]).optional(), mergedFile: z.string().optional(), baseUrl: z.string().optional(), maxEndpoints: z.number().optional(), url: z.string().optional(), outputRoot: z.string(), in: z.enum(["query", "cookie", "header"]).optional(), words: z.array(z.string()).optional(), learn: z.boolean().optional(), method: z.string().optional(), body: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), cookie: z.string().optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxWords: z.number().optional() }).parse(raw);
+    if (p.action === "remove-diff") {
+      if (!p.mergedFile) throw new Error("mergedFile required for remove-diff");
+      const { probeParams } = await import("../application/paramProbe.js");
+      return probeParams({ mergedFile: p.mergedFile, outputRoot: p.outputRoot, baseUrl: p.baseUrl, cookie: p.cookie, proxy: p.proxy, timeoutMs: p.timeoutMs, maxEndpoints: p.maxEndpoints });
+    }
+    if (!p.url) throw new Error("url required for name-guess");
     const { mineHiddenParams } = await import("../domain/hiddenParams.js");
-    return mineHiddenParams(p);
+    return mineHiddenParams({ ...p, url: p.url! });
   },
   subdomain_alter: async (raw) => {
     const p = z.object({ hosts: z.array(z.string()), domain: z.string(), outputRoot: z.string(), resolve: z.boolean().optional(), maxCandidates: z.number().optional(), nameservers: z.array(z.string()).optional(), concurrency: z.number().optional() }).parse(raw);
@@ -699,47 +646,36 @@ export const handlers: Readonly<Record<string, Handler>> = {
     await wf(path, bodyStr, "utf8");
     return { generated: r.generated, resolved: r.resolved, artifacts: [{ path, bytes: Buffer.byteLength(bodyStr) }] };
   },
-  find_backups: async (raw) => {
-    const p = z.object({ baseUrl: z.string(), outputRoot: z.string(), targets: z.array(z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxCandidates: z.number().optional() }).parse(raw);
-    const { findBackups } = await import("../domain/backupFind.js");
-    return findBackups(p);
-  },
-  dedupe_urls: async (raw) => {
-    const p = z.object({ urls: z.array(z.string()), outputRoot: z.string(), keepStatic: z.boolean().optional(), keepContent: z.boolean().optional(), fuzzy: z.boolean().optional(), whitelist: z.array(z.string()).optional(), params: z.enum(["has", "none"]).optional() }).parse(raw);
-    const { dedupeUrls } = await import("../domain/urlRefine.js");
-    const r = dedupeUrls(p);
-    const { writeFile: wf, mkdir: mk } = await import("node:fs/promises");
-    await mk(p.outputRoot, { recursive: true });
-    const bodyStr = r.urls.join("\n");
-    const path = (await import("node:path")).join(p.outputRoot, "deduped_urls.txt");
-    await wf(path, bodyStr, "utf8");
-    return { ...r, artifacts: [{ path, bytes: Buffer.byteLength(bodyStr) }] };
-  },
-  classify_urls: async (raw) => {
-    const p = z.object({ urls: z.array(z.string()), outputRoot: z.string() }).parse(raw);
-    const { classifyUrls } = await import("../domain/urlRefine.js");
-    const r = classifyUrls(p.urls);
-    const { writeFile: wf, mkdir: mk } = await import("node:fs/promises");
-    await mk(p.outputRoot, { recursive: true });
-    const bodyStr = JSON.stringify(r, null, 2);
-    const path = (await import("node:path")).join(p.outputRoot, "classified_urls.json");
-    await wf(path, bodyStr, "utf8");
-    return { ...r, artifacts: [{ path, bytes: Buffer.byteLength(bodyStr) }] };
-  },
+
   dir_fuzz: async (raw) => {
-    const p = z.object({ url: z.string(), outputRoot: z.string(), wordlistFile: z.string().optional(), words: z.array(z.string()).optional(), extensions: z.array(z.string()).optional(), recursion: z.boolean().optional(), recursionDepth: z.number().optional(), calibration: z.number().optional(), matchStatus: z.array(z.number()).optional(), filterSize: z.array(z.number()).optional(), cookie: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxWords: z.number().optional(), delayMs: z.number().optional() }).parse(raw);
+    const p = z.object({ preset: z.enum(["custom", "sensitive", "backups"]).optional(), baseUrl: z.string().optional(), url: z.string().optional(), targets: z.array(z.string()).optional(), paths: z.array(z.string()).optional(), outputRoot: z.string(), wordlistFile: z.string().optional(), words: z.array(z.string()).optional(), extensions: z.array(z.string()).optional(), recursion: z.boolean().optional(), recursionDepth: z.number().optional(), calibration: z.number().optional(), matchStatus: z.array(z.number()).optional(), filterSize: z.array(z.number()).optional(), cookie: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxWords: z.number().optional(), delayMs: z.number().optional() }).parse(raw);
+    if (p.preset === "sensitive" || p.preset === "backups") {
+      if (!p.baseUrl) throw new Error("baseUrl required for preset=" + p.preset);
+      if (p.preset === "sensitive") {
+        const { probePaths } = await import("../domain/pathProbe.js");
+        return probePaths({ baseUrl: p.baseUrl, outputRoot: p.outputRoot, paths: p.paths, cookie: p.cookie, proxy: p.proxy, timeoutMs: p.timeoutMs });
+      }
+      const { findBackups } = await import("../domain/backupFind.js");
+      return findBackups({ baseUrl: p.baseUrl, outputRoot: p.outputRoot, targets: p.targets, proxy: p.proxy, timeoutMs: p.timeoutMs, maxCandidates: p.maxWords });
+    }
+    if (!p.url) throw new Error("url required for preset=custom");
     const { dirFuzz } = await import("../domain/dirFuzz.js");
-    return dirFuzz(p);
+    return dirFuzz({ ...p, url: p.url! });
   },
   screenshot: async (raw) => {
     const p = z.object({ urls: z.array(z.string()), outputRoot: z.string(), chromiumPath: z.string().optional(), concurrency: z.number().optional(), timeoutMs: z.number().optional(), cluster: z.boolean().optional(), proxy: z.string().optional() }).parse(raw);
     const { captureScreenshots } = await import("../domain/screenshot.js");
     return captureScreenshots(p);
   },
-  jwt_attack: async (raw) => {
-    const p = z.object({ token: z.string(), endpoint: z.string(), outputRoot: z.string(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), secretCandidates: z.array(z.string()).optional() }).parse(raw);
+  jwt: async (raw) => {
+    const p = z.object({ action: z.enum(["attack", "inspect"]).default("attack"), token: z.string().optional(), endpoint: z.string().optional(), secretsFile: z.string().optional(), jsDir: z.string().optional(), outputRoot: z.string(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), secretCandidates: z.array(z.string()).optional() }).parse(raw);
+    if (p.action === "inspect") {
+      const { inspectJwt } = await import("../domain/jwt.js");
+      return inspectJwt({ outputRoot: p.outputRoot, secretsFile: p.secretsFile, jsDir: p.jsDir, token: p.token, proxy: p.proxy });
+    }
+    if (!p.token || !p.endpoint) throw new Error("token+endpoint required for attack");
     const { probeJwtAttack } = await import("../domain/jwtAttack.js");
-    return probeJwtAttack(p);
+    return probeJwtAttack({ token: p.token, endpoint: p.endpoint, outputRoot: p.outputRoot, headers: p.headers, proxy: p.proxy, timeoutMs: p.timeoutMs, secretCandidates: p.secretCandidates });
   },
   idor_deep: async (raw) => {
     const p = z.object({ endpoints: z.array(z.object({ method: z.string(), path: z.string(), fields: z.array(z.object({ name: z.string(), in: z.string() })) })), outputRoot: z.string(), baseUrl: z.string().optional(), cookie: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxTargets: z.number().optional(), objectIds: z.array(z.string()).optional() }).parse(raw);
@@ -799,14 +735,34 @@ export const handlers: Readonly<Record<string, Handler>> = {
   },
   save_evidence: async (raw) => {
     const p = z
-      .object({ itemsFile: z.string(), outputRoot: z.string() })
+      .object({ action: z.enum(["save", "put", "get", "list"]).default("save"), itemsFile: z.string().optional(), file: z.string().optional(), hash: z.string().optional(), tag: z.string().optional(), outputRoot: z.string() })
       .parse(raw);
-    const { readFile } = await import("node:fs/promises");
-    const { saveEvidence } = await import("../application/evidence.js");
-    return saveEvidence({
-      outputRoot: p.outputRoot,
-      items: JSON.parse(await readFile(p.itemsFile, "utf8")),
-    });
+    if (p.action === "save") {
+      if (!p.itemsFile) throw new Error("itemsFile required for save");
+      const { readFile } = await import("node:fs/promises");
+      const { saveEvidence } = await import("../application/evidence.js");
+      return saveEvidence({
+        outputRoot: p.outputRoot,
+        items: JSON.parse(await readFile(p.itemsFile, "utf8")),
+      });
+    }
+    const { EvidenceStore } = await import("../domain/graphs.js");
+    const store = new EvidenceStore(p.outputRoot);
+    await store.load();
+    if (p.action === "put") {
+      if (!p.file) throw new Error("file required for put");
+      const { readFile: rf } = await import("node:fs/promises");
+      const buf = await rf(p.file);
+      const blob = await store.put(buf, p.tag);
+      await store.save();
+      return { hash: blob.hash, bytes: blob.bytes };
+    }
+    if (p.action === "get") {
+      if (!p.hash) throw new Error("hash required for get");
+      const buf = await store.get(p.hash);
+      return { hash: p.hash, bytes: buf ? buf.length : 0, found: buf !== null };
+    }
+    return { entries: store.entries() };
   },
 };
 
