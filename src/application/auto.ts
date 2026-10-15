@@ -399,10 +399,11 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
       // endpoints — report once with the cluster note, drop the duplicates.
       const wallCluster = lines.find((l) => /^40[13]|^302/.test(l) && l.includes("[catch-all"));
       if (wallCluster) {
+        const n = Number(wallCluster.match(/×(\d+)/)?.[1] ?? "1");
         fList.push({
-          name: "全站鉴权墙(auth-wall)",
+          name: `统一拦截/${n >= 10 ? "全站鉴权墙(auth-wall)" : `同页拦截簇 ×${n}`}`,
           severity: "low",
-          summary: "多数探测路径统一 401/403(重定向至登录) — 站点对未认证流量整体上锁, 符合预期防护",
+          summary: "多个探测路径落到同一 401/403 页 — 站点统一访问控制/WAF 规则, 非逐路径独立漏洞",
           poc: wallCluster,
         });
       }

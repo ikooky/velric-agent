@@ -204,10 +204,11 @@ export const probePaths = async (input: PathProbeInput): Promise<PathProbeResult
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, paths.length) }, worker));
 
-  // Wildcard/catch-all clustering: a body signature shared by >= 6 distinct
-  // probe paths is a catch-all route rendering the same page (e.g. /{owner}).
-  // Keep ONE representative finding + a cluster note instead of N false hits.
-  const CATCHALL_THRESHOLD = 6;
+  // Wildcard/catch-all clustering: a body signature shared by >= 3 distinct
+  // probe paths is the same page for all of them — a catch-all route (/{owner}
+  // profile renderings) or a WAF's blanket block (every dot-file 403).
+  // Keep ONE representative + cluster note instead of N near-duplicate rows.
+  const CATCHALL_THRESHOLD = 3;
   const catchAllSigs = new Set([...sigCounts.entries()].filter(([, n]) => n >= CATCHALL_THRESHOLD).map(([sig]) => sig));
   const clusters: { signature: string; count: number; representative: string }[] = [];
   if (catchAllSigs.size > 0) {
