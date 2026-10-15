@@ -74,7 +74,7 @@ export const harvestStatic = async (
   if (entry.status === 0) {
     throw { code: "fetch_failed", message: `entry unreachable: ${entry.error}` };
   }
-  await writeFile(join(root, "index.html"), entry.body);
+  await writeArtifact(root, "index.html", entry.body);
 
   // robots.txt / sitemap.xml: public routing surface, feed both the route set
   // and the extraction corpus (cheap: 2 requests, big coverage win).

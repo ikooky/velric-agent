@@ -1,0 +1,953 @@
+{
+  "generatedAt": "2026-10-15T18:03:37.732Z",
+  "excluded": {
+    "subdomain_enum": "external corpora (crt.sh dns brute) — needs real DNS",
+    "subdomain_alter": "needs real DNS resolution of public names",
+    "wayback_urls": "external archive.org/wayback corpus",
+    "oob_confirm": "external interactsh servers (oast.live)",
+    "dns_resolve": "localhost works but resolver-dependent; covered by own unit test",
+    "hunt_begin": "covered by pipeline.test budget tests (real invocations)",
+    "hunt_record": "covered by pipeline.test budget tests",
+    "hunt_overview": "stateful hunt graph — covered by pipeline.test"
+  },
+  "samples": {
+    "http_probe": {
+      "url": "http://127.0.0.1:41265/",
+      "finalUrl": null,
+      "status": 200,
+      "ok": true,
+      "contentType": "text/html",
+      "title": null,
+      "server": null,
+      "poweredBy": null,
+      "bytes": 58,
+      "sha256": "b37c20d8d89627670710fccb0af404cfe8cb1f119880653d4d0cb289eba469ac",
+      "tlsSans": [],
+      "securityHeaders": {},
+      "techStack": []
+    },
+    "harvest_static": {
+      "entryUrl": "http://127.0.0.1:41265",
+      "robotsRoutes": 0,
+      "scriptsInHtml": 0,
+      "touchedUrls": [
+        "http://127.0.0.1:41265"
+      ],
+      "jsDownloaded": 0,
+      "manifestUrls": 0,
+      "unreachable": 0,
+      "apiEndpoints": 2,
+      "otherPaths": 0,
+      "routes": 0,
+      "secrets": 1,
+      "artifacts": [
+        {
+          "path": "/ROOT/api_static.txt",
+          "bytes": 20
+        },
+        {
+          "path": "/ROOT/paths_other.txt",
+          "bytes": 0
+        },
+        {
+          "path": "/ROOT/routes.txt",
+          "bytes": 0
+        },
+        {
+          "path": "/ROOT/chunkmap.txt",
+          "bytes": 0
+        },
+        {
+          "path": "/ROOT/secrets.txt",
+          "bytes": 45
+        }
+      ]
+    },
+    "extract_routes": {
+      "files": 2,
+      "api": 1,
+      "other": 0,
+      "routes": 0,
+      "artifacts": [
+        {
+          "path": "/ROOT/api_static.txt",
+          "bytes": 6
+        },
+        {
+          "path": "/ROOT/paths_other.txt",
+          "bytes": 0
+        },
+        {
+          "path": "/ROOT/routes.txt",
+          "bytes": 0
+        }
+      ]
+    },
+    "spider_mpa": {
+      "crawled": 2,
+      "forms": 0,
+      "inlineApiUrls": 0,
+      "scriptsDownloaded": 0,
+      "links": 1,
+      "artifacts": [
+        {
+          "path": "/tmp/recon/forms.txt",
+          "bytes": 0
+        },
+        {
+          "path": "/tmp/recon/links.txt",
+          "bytes": 1
+        },
+        {
+          "path": "/tmp/recon/api_inline.txt",
+          "bytes": 0
+        },
+        {
+          "path": "/tmp/recon/js_manifest.txt",
+          "bytes": 0
+        }
+      ]
+    },
+    "capture_runtime": {
+      "shell": {
+        "url": "http://127.0.0.1:41265/",
+        "loginForm": false,
+        "links": [
+          "/api/v1/users"
+        ]
+      },
+      "routesVisited": [
+        "/",
+        "/api/v1/users"
+      ],
+      "uniqueCalls": [],
+      "perRoute": {
+        "/": [],
+        "/api/v1/users": []
+      },
+      "details": 0,
+      "wsEndpoints": [],
+      "wsFrames": 0,
+      "sseEndpoints": [],
+      "artifacts": [
+        {
+          "path": "/tmp/recon/runtime_api.json",
+          "bytes": 332
+        },
+        {
+          "path": "/tmp/recon/api_merged.txt",
+          "bytes": 0
+        },
+        {
+          "path": "/tmp/recon/param_samples.json",
+          "bytes": 2
+        }
+      ]
+    },
+    "build_perm_tree": {
+      "authSourceFile": "rbac.js",
+      "entries": 1,
+      "codes": 1,
+      "treeRoots": 1,
+      "tree": [
+        {
+          "code": "admin",
+          "position": "left",
+          "name": "admin"
+        }
+      ],
+      "artifacts": [
+        {
+          "path": "/ROOT/perm_codes_generic.txt",
+          "bytes": 5
+        },
+        {
+          "path": "/ROOT/permissions_tree.json",
+          "bytes": 76
+        },
+        {
+          "path": "/ROOT/permissions_all_stub.json",
+          "bytes": 147
+        },
+        {
+          "path": "/ROOT/role_permissions_stub.json",
+          "bytes": 137
+        }
+      ],
+      "mode": "generic-rbac"
+    },
+    "merge_params": {
+      "samples": 1,
+      "endpoints": 1,
+      "artifacts": [
+        {
+          "path": "/tmp/recon/params_merged.json",
+          "bytes": 100
+        },
+        {
+          "path": "/tmp/recon/params_merged.txt",
+          "bytes": 42
+        }
+      ]
+    },
+    "gen_report": {
+      "findings": 1,
+      "artifacts": [
+        {
+          "path": "/ROOT/report.md",
+          "bytes": 177
+        }
+      ]
+    },
+    "save_evidence": {
+      "blobs": [
+        {
+          "hash": "c1cda26362828b69266512052b97cb3729e3b052e4ade47c0a1e3383defe73c7",
+          "bytes": 5,
+          "path": "/ROOT/blobs/c1/c1cda26362828b69266512052b97cb3729e3b052e4ade47c0a1e3383defe73c7.bin",
+          "label": "poc"
+        }
+      ],
+      "manifestPath": "/ROOT/manifest.json"
+    },
+    "auto_recon": {
+      "started": true,
+      "outputRoot": "/tmp/recon",
+      "statusFile": "/tmp/recon/auto_status.json",
+      "pollWith": "auto_recon action=status"
+    },
+    "run_diff": {
+      "addedApi": [],
+      "removedApi": [],
+      "addedRoutes": [],
+      "addedParams": [],
+      "assetsDelta": [],
+      "summary": "+0 API  -0 API  +0 routes  +0 param-sets  ±0 assets"
+    },
+    "port_scan": {
+      "host": "1.2.3.4",
+      "scanned": 67,
+      "open": [],
+      "artifacts": [
+        {
+          "path": "/tmp/recon/ports_open.txt",
+          "bytes": 0
+        }
+      ]
+    },
+    "probe_cors": {
+      "baseUrl": "http://127.0.0.1:41265",
+      "results": [
+        {
+          "origin": "https://evil-velric.example.com",
+          "acao": null,
+          "acac": false,
+          "verdict": "none"
+        },
+        {
+          "origin": "https://127.0.0.1.evil-velric.example.com",
+          "acao": null,
+          "acac": false,
+          "verdict": "none"
+        },
+        {
+          "origin": "null",
+          "acao": null,
+          "acac": false,
+          "verdict": "none"
+        },
+        {
+          "origin": "http://localhost:8080",
+          "acao": null,
+          "acac": false,
+          "verdict": "none"
+        }
+      ],
+      "misconfigured": false,
+      "artifacts": [
+        {
+          "path": "/tmp/recon/cors_probe.json",
+          "bytes": 575
+        }
+      ]
+    },
+    "fingerprint": {
+      "baseUrl": "http://127.0.0.1:41265",
+      "waf": [],
+      "methods": {
+        "allowed": [],
+        "putWorks": false,
+        "traceWorks": false
+      },
+      "cookies": [],
+      "techHeaders": {},
+      "securityHeaders": {
+        "strict-transport-security": {
+          "present": false,
+          "note": "missing HSTS — protocol downgrade space"
+        },
+        "x-frame-options": {
+          "present": false,
+          "note": "missing XFO — clickjacking space (or use CSP frame-ancestors)"
+        },
+        "x-content-type-options": {
+          "present": false,
+          "note": "missing nosniff — MIME confusion space"
+        },
+        "referrer-policy": {
+          "present": false,
+          "note": "missing referrer policy — URL leakage via Referer"
+        },
+        "content-security-policy": {
+          "present": false,
+          "note": "missing CSP — injection containment absent"
+        },
+        "permissions-policy": {
+          "present": false,
+          "note": "missing permissions policy — powerful features ungated"
+        }
+      },
+      "missingHeaders": [
+        "strict-transport-security",
+        "x-frame-options",
+        "x-content-type-options",
+        "referrer-policy",
+        "content-security-policy"
+      ],
+      "cspFindings": [],
+      "tls": null,
+      "artifacts": [
+        {
+          "path": "/ROOT/fingerprint.json",
+          "bytes": 1194
+        }
+      ]
+    },
+    "detect_sourcemaps": {
+      "checked": 2,
+      "leaked": [],
+      "artifacts": []
+    },
+    "auto_batch": {
+      "started": true,
+      "outputRoot": "/tmp/batch",
+      "statusFile": "/tmp/batch/batch_status.json",
+      "pollHint": "read batch_status.json / each target's pipeline.json"
+    },
+    "auth_probe": {
+      "probed": 0,
+      "anonymous": [],
+      "authRequired": [],
+      "ambiguous": [],
+      "edgeBlocked": false,
+      "artifacts": [
+        {
+          "path": "/tmp/recon/auth_surface.json",
+          "bytes": 101
+        }
+      ]
+    },
+    "idor_prescreen": {
+      "screened": 0,
+      "candidates": [],
+      "artifacts": [
+        {
+          "path": "/tmp/recon/idor_prescreen.json",
+          "bytes": 39
+        }
+      ]
+    },
+    "git_restore": {
+      "baseUrl": "http://127.0.0.1:41265",
+      "gitFound": false,
+      "objectsRecovered": 0,
+      "commits": [],
+      "filesRestored": 0,
+      "workDir": "/tmp/recon/git-restored",
+      "artifacts": []
+    },
+    "dom_sinks": {
+      "scanned": 2,
+      "chains": [],
+      "sinks": [],
+      "artifacts": [
+        {
+          "path": "/ROOT/dom_sinks.json",
+          "bytes": 49
+        }
+      ]
+    },
+    "ws_schema": {
+      "endpoints": 0,
+      "framesParsed": 0,
+      "schemas": [],
+      "artifacts": [
+        {
+          "path": "/tmp/recon/ws_schema.json",
+          "bytes": 58
+        }
+      ]
+    },
+    "probe_oidc": {
+      "baseUrl": "http://127.0.0.1:41265",
+      "found": [
+        {
+          "kind": "oidc",
+          "url": "http://127.0.0.1:41265/.well-known/openid-configuration",
+          "config": {
+            "issuer": "http://127.0.0.1",
+            "jwks_uri": "http://127.0.0.1/jwks"
+          }
+        }
+      ],
+      "findings": [],
+      "artifacts": [
+        {
+          "path": "/ROOT/oidc_probe.json",
+          "bytes": 310
+        }
+      ]
+    },
+    "probe_smuggle": {
+      "baseUrl": "http://127.0.0.1:41265",
+      "probed": 8,
+      "differentials": [
+        {
+          "dimension": "double-slash",
+          "variant": "//healthz-velric",
+          "baselineStatus": 404,
+          "variantStatus": 200,
+          "baselineMs": 0,
+          "variantMs": 0,
+          "note": "status divergence across normalization variants"
+        }
+      ],
+      "artifacts": [
+        {
+          "path": "/ROOT/smuggle_probe.json",
+          "bytes": 351
+        }
+      ]
+    },
+    "ws_origin_check": {
+      "url": "ws://127.0.0.1:41265",
+      "vulnerable": false,
+      "authCarried": "none-visible",
+      "variants": [
+        {
+          "origin": "https://evil-velric.example.com",
+          "upgraded": false,
+          "status": 200,
+          "err": null
+        },
+        {
+          "origin": null,
+          "upgraded": false,
+          "status": 200,
+          "err": null
+        }
+      ],
+      "artifacts": [
+        {
+          "path": "/ROOT/ws_origin.json",
+          "bytes": 357
+        }
+      ]
+    },
+    "graphql_deep": {
+      "endpoint": "https://target/graphql",
+      "introspected": false,
+      "method": null,
+      "typeCount": 0,
+      "queryCount": 0,
+      "mutationCount": 0,
+      "subscriptionCount": 0,
+      "diff": null,
+      "artifacts": []
+    },
+    "proto_decode": {
+      "looksLikeProtobuf": true,
+      "fields": [
+        {
+          "fieldNumber": 1,
+          "wireType": 2,
+          "wireTypeName": "length-delimited",
+          "offset": 0,
+          "bytesLength": 6
+        }
+      ],
+      "consumed": 6,
+      "totalBytes": 6,
+      "artifacts": [
+        {
+          "path": "/tmp/recon/proto_decode.json",
+          "bytes": 246
+        }
+      ]
+    },
+    "nuclei_lite": {
+      "baseUrl": "http://127.0.0.1:41265",
+      "scanned": 14,
+      "matched": [],
+      "artifacts": [
+        {
+          "path": "/ROOT/nuclei_lite.json",
+          "bytes": 94
+        }
+      ]
+    },
+    "login_replay": {
+      "baseUrl": "http://127.0.0.1:41265/login",
+      "formFound": false,
+      "submitted": false,
+      "cookieHeader": null,
+      "landedUrl": "http://127.0.0.1:41265/login",
+      "artifacts": []
+    },
+    "backup_unpack": {
+      "processed": 0,
+      "unpacked": [],
+      "secrets": [],
+      "artifacts": [
+        {
+          "path": "/tmp/recon/backup_unpack.json",
+          "bytes": 74
+        }
+      ]
+    },
+    "sqlite_read": {
+      "file": "/tmp/recon/leak.db",
+      "opened": false,
+      "tables": [],
+      "sensitive": [],
+      "artifacts": [
+        {
+          "path": "/tmp/recon/sqlite_read.json",
+          "bytes": 107
+        }
+      ]
+    },
+    "analyze_gates": {
+      "renderGate": {
+        "storageKeys": [],
+        "cookieKeys": [],
+        "loginStateExpressions": [],
+        "decodeChain": [
+          "plain"
+        ]
+      },
+      "interceptorGate": {
+        "codeFields": [],
+        "successValues": [],
+        "redirectTriggers": []
+      },
+      "contentGate": {
+        "permissionApiPaths": [],
+        "menuApiPaths": [],
+        "authMapObjects": [],
+        "routeMapObjects": []
+      },
+      "suggestedConfig": {
+        "localStorage": {},
+        "cookies": [],
+        "neutralize": {
+          "fields": [
+            "code"
+          ],
+          "success": "0"
+        },
+        "stubs": []
+      }
+    },
+    "run_coverage": {
+      "baseUrl": "http://127.0.0.1:41265",
+      "routesVisited": [
+        "/"
+      ],
+      "interactions": [],
+      "apiLog": [],
+      "paramSamples": [],
+      "artifacts": [
+        {
+          "path": "/tmp/recon/coverage.json",
+          "bytes": 135
+        }
+      ]
+    },
+    "build_site_map": {
+      "site": "http://127.0.0.1:41265",
+      "runtimeMode": "static-only",
+      "appType": "unknown",
+      "routeGuardStrategy": [],
+      "frontendRoutes": [],
+      "apis": [],
+      "apisFromStatic": [],
+      "apisFromRuntime": [],
+      "routesVerifiedByClick": [],
+      "params": [],
+      "featuresTriggered": [],
+      "limitations": "static harvest only; runtime/coverage stages not run"
+    },
+    "traffic_record": {
+      "port": 37681,
+      "note": "recorder bound; call again with stop:true to release"
+    },
+    "asset_graph": {
+      "ok": true,
+      "counts": {
+        "subdomain": 1,
+        "root_domain": 1,
+        "service": 6
+      }
+    },
+    "exploration_graph": {
+      "ok": true,
+      "node": {
+        "id": "n8",
+        "kind": "goal",
+        "summary": "map target"
+      }
+    },
+    "finding_retest": {
+      "findings": []
+    },
+    "traffic_query": {
+      "total": 0,
+      "page": 1,
+      "exchanges": []
+    },
+    "export_findings": {
+      "files": 1
+    },
+    "evidence_bind": {
+      "findingId": "f1",
+      "version": 0,
+      "bindings": []
+    },
+    "scan_platform": [],
+    "replay_tamper": {
+      "replayed": 1,
+      "outcomes": [],
+      "accepted": [],
+      "artifacts": [
+        {
+          "path": "/ROOT/replay_tamper.json",
+          "bytes": 55
+        }
+      ]
+    },
+    "deobfuscate_js": {
+      "files": 2,
+      "restored": [],
+      "artifacts": [
+        {
+          "path": "/ROOT/deobf_summary.json",
+          "bytes": 34
+        }
+      ]
+    },
+    "waf_adapt": {
+      "attempts": [
+        {
+          "mutation": "raw",
+          "url": "http://127.0.0.1:41265/?q=1%27+UNION+SELECT--",
+          "status": 200,
+          "wafSignature": null,
+          "delivered": true
+        }
+      ],
+      "deliveredBy": "raw",
+      "wafFingerprint": null,
+      "artifacts": [
+        {
+          "path": "/ROOT/waf_adapt.json",
+          "bytes": 245
+        }
+      ]
+    },
+    "session_crawl": {
+      "crawled": 0,
+      "pages": [],
+      "relogins": 0,
+      "tokenRefreshes": 0,
+      "blocked": [],
+      "sessionCookieNames": [
+        "sid"
+      ],
+      "artifacts": [
+        {
+          "path": "/ROOT/session_crawl.json",
+          "bytes": 131
+        }
+      ]
+    },
+    "role_matrix": {
+      "probed": 0,
+      "matrix": [],
+      "accessByEndpoint": [],
+      "escalations": [],
+      "artifacts": [
+        {
+          "path": "/tmp/recon/role_matrix.json",
+          "bytes": 80
+        }
+      ]
+    },
+    "authz_replay": {
+      "replayed": 1,
+      "bypassed": [],
+      "enforced": 0,
+      "unknown": 1,
+      "artifacts": [
+        {
+          "path": "/ROOT/authz_replay.json",
+          "bytes": 711
+        }
+      ]
+    },
+    "mass_assign": {
+      "probed": 1,
+      "sinks": [],
+      "outcomes": [],
+      "artifacts": [
+        {
+          "path": "/ROOT/mass_assign.json",
+          "bytes": 50
+        }
+      ]
+    },
+    "pii_scan": {
+      "blobsScanned": 1,
+      "exposures": [],
+      "credentialPairs": [],
+      "artifacts": [
+        {
+          "path": "/ROOT/pii_exposure.json",
+          "bytes": 85
+        }
+      ]
+    },
+    "mine_hidden_params": {
+      "probed": 3,
+      "found": [],
+      "artifacts": [
+        {
+          "path": "/ROOT/hidden_params.json",
+          "bytes": 73
+        }
+      ]
+    },
+    "url_refine": {
+      "input": 2,
+      "kept": 1,
+      "urls": [
+        "http://127.0.0.1:41265/a?id=1"
+      ],
+      "artifacts": [
+        {
+          "path": "/ROOT/deduped_urls.txt",
+          "bytes": 29
+        }
+      ]
+    },
+    "dir_fuzz": {
+      "probed": 2,
+      "hits": [
+        {
+          "url": "http://127.0.0.1:41265/admin",
+          "status": 200,
+          "size": 31,
+          "words": 1,
+          "lines": 1,
+          "contentType": "text/html",
+          "depth": 0
+        }
+      ],
+      "calibration": {
+        "words": [
+          "87yd28tc47",
+          "p804cdv96f"
+        ],
+        "softStatus": 404,
+        "softSizes": [
+          4,
+          4
+        ]
+      },
+      "artifacts": [
+        {
+          "path": "/ROOT/dir_fuzz.json",
+          "bytes": 367
+        }
+      ]
+    },
+    "screenshot": {
+      "captured": 1,
+      "failed": 0,
+      "entries": [
+        {
+          "url": "http://127.0.0.1:41265/",
+          "finalUrl": "http://127.0.0.1:41265/",
+          "title": "",
+          "status": 200,
+          "screenshotHash": "0245b1c53119f8c4178c62a0a8b29b8342f17e537635fe2fc08be8b5951a7e83",
+          "bytes": 5449,
+          "cluster": "0245b1c53119f8c4"
+        }
+      ],
+      "clusters": {
+        "0245b1c53119f8c4": [
+          "http://127.0.0.1:41265/"
+        ]
+      },
+      "artifacts": [
+        {
+          "path": "/ROOT/screenshots.json",
+          "bytes": 437
+        }
+      ]
+    },
+    "jwt": {
+      "tokenPreview": "eyJhbGciOiJIUzI1NiIsInR5",
+      "claims": {
+        "roles": [
+          "user"
+        ],
+        "scopes": [],
+        "permissions": [],
+        "subject": "u1",
+        "issuer": null,
+        "audience": null
+      },
+      "header": {
+        "alg": "HS256",
+        "typ": "JWT"
+      },
+      "attacks": [
+        {
+          "name": "alg_none",
+          "detail": "unsigned token accepted (identical 2xx AND body hash to signed token)",
+          "baseline": 200,
+          "tampered": 200,
+          "verdict": "vulnerable"
+        },
+        {
+          "name": "kid_traversal_devnull",
+          "detail": "kid=../../../dev/null with empty-key HMAC: accepted = server reads the file as HMAC key",
+          "baseline": 200,
+          "tampered": 200,
+          "verdict": "vulnerable"
+        },
+        {
+          "name": "weak_secret",
+          "detail": "no dictionary secret matched",
+          "baseline": 200,
+          "tampered": 200,
+          "verdict": "safe"
+        }
+      ],
+      "artifacts": [
+        {
+          "path": "/ROOT/jwt_attack.json",
+          "bytes": 879
+        }
+      ]
+    },
+    "idor_deep": {
+      "probed": 1,
+      "candidates": [],
+      "artifacts": [
+        {
+          "path": "/tmp/recon/idor_deep.json",
+          "bytes": 37
+        }
+      ]
+    },
+    "header_bypass": {
+      "probed": 1,
+      "attempts": [],
+      "bypasses": [],
+      "artifacts": [
+        {
+          "path": "/ROOT/header_bypass.json",
+          "bytes": 53
+        }
+      ]
+    },
+    "verb_matrix": {
+      "probed": 1,
+      "matrix": [
+        {
+          "url": "https://target/api/orders",
+          "verb": "GET",
+          "status": 0,
+          "bytes": 0
+        },
+        {
+          "url": "https://target/api/orders",
+          "verb": "OPTIONS",
+          "status": 0,
+          "bytes": 0
+        }
+      ],
+      "verbGaps": [],
+      "artifacts": [
+        {
+          "path": "/ROOT/verb_matrix.json",
+          "bytes": 281
+        }
+      ]
+    },
+    "admin_surface": {
+      "probed": 23,
+      "found": [
+        {
+          "url": "http://127.0.0.1:41265/admin",
+          "kind": "admin-generic",
+          "status": 200,
+          "bytes": 31
+        }
+      ],
+      "artifacts": [
+        {
+          "path": "/ROOT/admin_surface.json",
+          "bytes": 163
+        }
+      ]
+    },
+    "graphql_authz": {
+      "probed": 3,
+      "anonymous": [
+        {
+          "field": "users",
+          "kind": "query",
+          "status": 200,
+          "errors": "[{\"id\":1,\"name\":\"a\",\"email\":\"a@x.com\"}]",
+          "dataLeak": false
+        },
+        {
+          "field": "deleteUser",
+          "kind": "mutation",
+          "status": 200,
+          "errors": "[{\"id\":1,\"name\":\"a\",\"email\":\"a@x.com\"}]",
+          "dataLeak": false
+        },
+        {
+          "field": "id",
+          "kind": "mutation",
+          "status": 200,
+          "errors": "[{\"id\":1,\"name\":\"a\",\"email\":\"a@x.com\"}]",
+          "dataLeak": false
+        }
+      ],
+      "lowPriv": [],
+      "unauthed": [],
+      "artifacts": [
+        {
+          "path": "/ROOT/graphql_authz.json",
+          "bytes": 627
+        }
+      ]
+    }
+  }
+}

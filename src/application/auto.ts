@@ -304,10 +304,14 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
   } else stages.push({ stage: "sourcemaps", status: "skip", detail: "checkpoint" });
 
   // ---- Stage 5e: verification passes (auth surface / dom sinks / jwt) ----
-  if (!done("auth_probe") && (await exists(join(root, "api_merged.txt")))) {
+  // Runtime capture can fail (both retries) leaving api_merged.txt absent —
+  // auth_probe then silently skipped despite api_static.txt existing. Fall
+  // back to the static corpus so the stage never starves.
+  const authCorpus = (await exists(join(root, "api_merged.txt"))) ? join(root, "api_merged.txt") : (await exists(join(root, "api_static.txt"))) ? join(root, "api_static.txt") : null;
+  if (!done("auth_probe") && authCorpus) {
     try {
       const { probeAuth } = await import("../domain/authProbe.js");
-      const au = await probeAuth({ endpointsFile: join(root, "api_merged.txt"), outputRoot: root, proxy: input.proxy, cookie: input.cookie, timeoutMs: input.timeoutMs, maxEndpoints: 60 });
+      const au = await probeAuth({ endpointsFile: authCorpus, outputRoot: root, proxy: input.proxy, cookie: input.cookie, timeoutMs: input.timeoutMs, maxEndpoints: 60 });
       stages.push({ stage: "auth_probe", status: "ok", detail: `anon=${au.anonymous.length} authReq=${au.authRequired.length}` });
       await mark("auth_probe");
     } catch (e) {

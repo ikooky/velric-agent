@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ALL_CONTRACTS } from "../src/contracts/contracts.js";
+import golden from "./golden_samples.json" with { type: "json" };
 
 /** Golden-shape guard: every contract's outputSchema must safely parse a
  *  representative of the handler's REAL return shape. This is the class of
@@ -30,6 +31,34 @@ describe("output schema shape guards", () => {
       expect(contract, `contract ${c.tool} missing`).toBeTruthy();
       const parsed = contract!.outputSchema.safeParse(c.sample);
       expect(parsed.success, `${c.tool}: outputSchema rejects the real return shape — ${JSON.stringify(parsed.success ? null : parsed.error.issues?.slice(0, 2))}`).toBe(true);
+    }
+  });
+
+  it("every advertised tool has a representative sample (bidirectional)", () => {
+    // Advertised → sample: a contract with no sample means its output shape is
+    // never validated — the "10 wrong schemas" drift class re-ships silently.
+    // Golden samples are REAL handler returns (scripts/generate-golden-samples.mjs
+    // invokes every handler against a local mock) — hand-written samples are
+    // self-deception and forbidden.
+    const missing = ALL_CONTRACTS.filter((c) => !cases.some((s) => s.tool === c.name) && !(c.name in golden.excluded) && !(c.name in golden.samples));
+    expect(missing.map((c) => c.name)).toEqual([]);
+    // Sample → advertised: a sample naming a retired/renamed tool is asserting
+    // a dead surface (registry drift).
+    const dead = cases.filter((s) => !ALL_CONTRACTS.some((c) => c.name === s.tool));
+    expect(dead.map((s) => s.tool)).toEqual([]);
+    // Every exclusion must carry a reason — no free-pass dumping ground.
+    for (const [name, reason] of Object.entries(golden.excluded)) {
+      expect(String(reason).length, `exclusion ${name} must justify itself`).toBeGreaterThan(10);
+      expect(ALL_CONTRACTS.some((c) => c.name === name), `exclusion ${name} names a nonexistent tool`).toBe(true);
+    }
+  });
+
+  it("golden samples: every REAL handler return parses its declared outputSchema", () => {
+    for (const [tool, sample] of Object.entries(golden.samples)) {
+      const contract = ALL_CONTRACTS.find((x) => x.name === tool);
+      expect(contract, `golden sample for unknown tool ${tool}`).toBeTruthy();
+      const parsed = contract!.outputSchema.safeParse(sample);
+      expect(parsed.success, `${tool}: outputSchema rejects the REAL handler return — ${JSON.stringify(parsed.success ? null : parsed.error.issues?.slice(0, 2))}`).toBe(true);
     }
   });
 

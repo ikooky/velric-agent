@@ -1,4 +1,5 @@
-import { writeFile, mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
+import { ensureDir, writeArtifact } from "../adapters/artifacts.js";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 
@@ -59,9 +60,8 @@ const findChromium = async (): Promise<string | null> => {
 };
 
 export const captureScreenshots = async (input: ScreenshotInput): Promise<ScreenshotResult> => {
-  await mkdir(input.outputRoot, { recursive: true });
-  const shotDir = join(input.outputRoot, "screenshots");
-  await mkdir(shotDir, { recursive: true });
+  await ensureDir(input.outputRoot);
+  await ensureDir(input.outputRoot + "/screenshots");
 
   const { chromium } = await import("playwright-core");
   const execPath = input.chromiumPath ?? (await findChromium());
@@ -82,32 +82,39 @@ export const captureScreenshots = async (input: ScreenshotInput): Promise<Screen
   let idx = 0;
   const worker = async (): Promise<void> => {
     const ctx = await browser.newContext({ viewport: { width: 1366, height: 768 } });
-    const page = await ctx.newPage();
-    while (idx < urls.length) {
-      const url = urls[idx++]!;
-      try {
-        const resp = await page.goto(url, { timeout: input.timeoutMs ?? 20000, waitUntil: "domcontentloaded" });
-        await page.waitForTimeout(600); // settle SPA paint
-        const buf = await page.screenshot({ type: "png" });
-        const hash = createHash("sha256").update(buf).digest("hex");
-        const file = join(shotDir, `${hash.slice(0, 16)}.png`);
-        await writeFile(file, buf);
-        entries.push({
-          url,
-          finalUrl: page.url(),
-          title: await page.title().catch(() => ""),
-          status: resp?.status() ?? null,
-          screenshotHash: hash,
-          bytes: buf.length,
-        });
-      } catch (e) {
-        entries.push({ url, finalUrl: url, title: "", status: null, screenshotHash: "", bytes: 0, error: e instanceof Error ? e.message.slice(0, 120) : String(e).slice(0, 120) });
+    try {
+      const page = await ctx.newPage();
+      while (idx < urls.length) {
+        const url = urls[idx++]!;
+        try {
+          const resp = await page.goto(url, { timeout: input.timeoutMs ?? 20000, waitUntil: "domcontentloaded" });
+          await page.waitForTimeout(600); // settle SPA paint
+          const buf = await page.screenshot({ type: "png" });
+          const hash = createHash("sha256").update(buf).digest("hex");
+          await writeArtifact(input.outputRoot, `screenshots/${hash.slice(0, 16)}.png`, buf);
+          entries.push({
+            url,
+            finalUrl: page.url(),
+            title: await page.title().catch(() => ""),
+            status: resp?.status() ?? null,
+            screenshotHash: hash,
+            bytes: buf.length,
+          });
+        } catch (e) {
+          entries.push({ url, finalUrl: url, title: "", status: null, screenshotHash: "", bytes: 0, error: e instanceof Error ? e.message.slice(0, 120) : String(e).slice(0, 120) });
+        }
       }
+    } finally {
+      // Reap the context even when newPage/goto crash mid-worker — otherwise
+      // the Chromium context leaks for the browser's lifetime.
+      await ctx.close().catch(() => undefined);
     }
-    await ctx.close().catch(() => undefined);
   };
-  await Promise.all(Array.from({ length: Math.min(conc, urls.length) }, worker));
-  await browser.close().catch(() => undefined);
+  try {
+    await Promise.all(Array.from({ length: Math.min(conc, urls.length) }, worker));
+  } finally {
+    await browser.close().catch(() => undefined);
+  }
 
   // clustering: exact-hash buckets (identical pages: same login/error template)
   const clusters: Record<string, string[]> = {};
@@ -126,9 +133,9 @@ export const captureScreenshots = async (input: ScreenshotInput): Promise<Screen
   const manifest = { capturedAt: new Date().toISOString(), entries: finalEntries, clusters };
   const manifestPath = join(input.outputRoot, "screenshots.json");
   const manifestStr = JSON.stringify(manifest, null, 2);
-  await writeFile(manifestPath, manifestStr, "utf8");
+  const artM = await writeArtifact(input.outputRoot, "screenshots.json", manifestStr);
   const evidenceManifest = finalEntries.filter((e) => e.screenshotHash).map((e) => ({ source: `screenshot:${e.url}`, label: e.title || e.finalUrl, hash: e.screenshotHash, bytes: e.bytes }));
-  await writeFile(join(input.outputRoot, "screenshot_evidence.json"), JSON.stringify(evidenceManifest, null, 2), "utf8");
+  const artE = await writeArtifact(input.outputRoot, "screenshot_evidence.json", JSON.stringify(evidenceManifest, null, 2));
 
   const captured = finalEntries.filter((e) => e.screenshotHash).length;
   return {

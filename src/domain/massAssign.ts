@@ -164,6 +164,12 @@ export const probeMassAssign = async (input: MassAssignInput): Promise<MassAssig
       h[k.toLowerCase()] = v;
     }
     if (input.credential) {
+      // Credential discipline (REPLACE, never stack): the recorded high-priv
+      // credential headers must be stripped entirely before the low-priv
+      // override lands — otherwise the untouched carrier leaks the recorded
+      // principal and every verdict is wrong-principal.
+      delete h.authorization;
+      delete h.cookie;
       if (/^authorization\s*:/i.test(input.credential)) h.authorization = input.credential.replace(/^authorization\s*:\s*/i, "");
       else if (/^cookie\s*:/i.test(input.credential)) h.cookie = input.credential.replace(/^cookie\s*:\s*/i, "");
       else if (/^bearer\s+\S/i.test(input.credential)) h.authorization = input.credential;

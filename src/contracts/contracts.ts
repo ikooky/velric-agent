@@ -192,6 +192,7 @@ export const autoPipelineContract: ToolContract = {
     timeoutMs: z.number().int().min(1000).max(120000).optional(),
     skipRuntime: z.boolean().optional(),
     maxPages: z.number().int().min(1).max(200).optional(),
+    outputRoot: z.string().describe("absolute output directory (state + artifacts)"),
   }),
   outputSchema: z.object({}).passthrough(), // run:{started,statusFile} status:{state,result?}
   annotations: writingAnnotations(),
@@ -219,6 +220,8 @@ export const huntRecordContract = {
   kind: "runtime",
   inputSchema: z.object({
     outputRoot,
+    round: z.number().int().min(0).optional().describe("current hunt round (index from 0)"),
+    costDelta: z.number().optional().describe("cost units consumed by this round"),
     intentId: z.number().optional(),
     intentSummary: z.string().optional(),
     goals: z.array(z.object({ summary: z.string(), vulnclass: z.string().optional() })).optional(),
@@ -348,7 +351,7 @@ export const portScanContract: ToolContract = {
     "TCP connect scan of top 67 ports (web/db/middleware/admin). Non-web open ports (redis/mongodb/es...) are direct findings. Writes ports_open.txt.",
   kind: "runtime",
   inputSchema: z.object({
-      timeoutMs: z.number().optional().describe("per-request timeout"), host: z.string(), outputRoot, ports: z.array(z.number()).optional(), observationLedgerRoot: LEDGER }),
+      timeoutMs: z.number().optional().describe("per-request timeout"), host: z.string(), outputRoot, ports: z.array(z.number()).optional(), concurrency: z.number().int().min(1).max(512).optional().describe("parallel socket dials"), observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ open: z.array(z.object({ port: z.number(), service: z.string() })), scanned: z.number() }),
   annotations: writingAnnotations(),
   examples: [{ title: "scan", input: { host: "1.2.3.4", outputRoot: "/tmp/recon" } }],
@@ -614,7 +617,7 @@ export const coverageContract: ToolContract = {
     "api-recon Phase 3b: drives headless Chromium through sidebar/tabs/table-actions/toolbar, records outbound API calls per interaction, builds the parameter trigger matrix. Writes coverage.json.",
   kind: "runtime",
   inputSchema: z.object({ baseUrl: z.string(), outputRoot, hook: z.record(z.string(), z.unknown()).optional(), cookie: z.string().optional(), chromiumPath: z.string().optional(), maxClicksPerCategory: z.number().optional(), observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({ interactions: z.number() }),
+  outputSchema: z.object({ baseUrl: z.string(), routesVisited: z.array(z.unknown()).optional(), interactions: z.array(z.unknown()), apiLog: z.array(z.unknown()).optional(), paramSamples: z.array(z.unknown()).optional(), artifacts: z.array(z.unknown()).optional() }),
   annotations: writingAnnotations(),
   examples: [{ title: "cov", input: { baseUrl: "https://target/", outputRoot: "/tmp/recon" } }],
 };
@@ -685,7 +688,7 @@ export const retestContract: ToolContract = {
     "Register findings with PoC + status/body predicates; replay PoC and classify reproduced/fixed/inconclusive; disposition flips on verdicts. Persists retest_store.json.",
   kind: "runtime",
   inputSchema: z.object({ outputRoot, action: z.enum(["register", "run", "list"]), id: z.string().optional(), name: z.string().optional(), severity: z.enum(["low", "medium", "high", "critical"]).optional(), poc: z.object({ method: z.string(), url: z.string(), headers: z.record(z.string(), z.string()).optional(), body: z.string().optional() }).optional(), predicates: z.object({ fixedStatuses: z.array(z.number()).optional(), fixedBodyAny: z.array(z.string()).optional(), vulnerableBodyAny: z.array(z.string()).optional() }).optional(), proxy: z.string().optional(), note: z.string().optional(), observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({ ok: z.boolean() }),
+  outputSchema: z.object({ ok: z.boolean().optional() }).passthrough(), // register/run:{ok,...} list:{findings:[...]}
   annotations: writingAnnotations(),
   examples: [{ title: "run", input: { outputRoot: "/tmp/recon", action: "run", id: "f1" } }],
 };
@@ -818,7 +821,7 @@ export const idorDeepContract: ToolContract = {
   description:
     "Beyond numeric +1: path-segment IDs, UUID swaps, POST body ID params, cross-object variants, content differentials (same status different body = data leak). Writes idor_deep.json.",
   kind: "runtime",
-  inputSchema: z.object({ endpoints: z.array(z.object({ method: z.string(), path: z.string(), fields: z.array(z.object({ name: z.string(), in: z.string() })) })), outputRoot, baseUrl: z.string().optional(), cookie: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxTargets: z.number().optional(), objectIds: z.array(z.string()).optional(), observationLedgerRoot: LEDGER }),
+  inputSchema: z.object({ endpoints: z.array(z.object({ method: z.string(), path: z.string(), fields: z.array(z.object({ name: z.string(), in: z.string() })) })), outputRoot, baseUrl: z.string().optional(), cookie: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxTargets: z.number().optional(), objectIds: z.array(z.string()).optional(), applyBodyIdor: z.boolean().optional().describe("opt-in: re-fire POST/PUT/PATCH with body-ID variants (state change risk)"), observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ probed: z.number() }),
   annotations: writingAnnotations(),
   examples: [{ title: "deep", input: { endpoints: [{ method: "GET", path: "/api/users/123", fields: [] }], outputRoot: "/tmp/recon" } }],
@@ -879,7 +882,7 @@ export const scanPlatformContract: ToolContract = {
     "ScopeSentry functional equivalent built in-process: projects -> tasks (ordered module pipeline: subdomain_scan/port_scan/fingerprint/dir_scan/web_crawler/nuclei_lite/web_probes) -> shared AssetStore with task provenance + local list/count retrieval. Two-phase chaining via sourceTask (targets resolved from a done task's subdomain assets). No external platform, no credentials.",
   kind: "runtime",
   inputSchema: z.object({ outputRoot, action: z.enum(["create_project", "create_task", "run_task", "get_task", "list_tasks", "list_projects", "list_assets", "count_assets"]), name: z.string().optional(), targets: z.array(z.string()).optional(), projectId: z.string().optional(), taskId: z.string().optional(), modules: z.array(z.string()).optional(), sourceTask: z.string().optional(), query: z.object({ type: z.string().optional(), taskTag: z.string().optional(), valuePrefix: z.string().optional(), valueRegex: z.string().optional() }).optional(), page: z.number().optional(), pageSize: z.number().optional(), proxy: z.string().optional(), cookie: z.string().optional(), timeoutMs: z.number().optional(), observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({}).passthrough(), // per-action shapes: Project/Task records, arrays, {total,page,items}
+  outputSchema: z.union([z.object({}).passthrough(), z.array(z.unknown())]), // per-action shapes: Project/Task records, arrays, {total,page,items}
   annotations: writingAnnotations(),
   examples: [{ title: "two-phase chain", input: { outputRoot: "/tmp/recon", action: "create_task", projectId: "p1", name: "phase2", modules: ["port_scan", "fingerprint"], sourceTask: "t1" } }],
 };
@@ -945,7 +948,7 @@ export const subdomainAlterContract: ToolContract = {
 };
 
 
-export const urlRefineContract1: ToolContract = {
+export const urlRefineContract: ToolContract = {
   name: "url_refine",
   title: "URL-pool refinement (dedupe + classify, zero-request)",
   description:
@@ -1038,7 +1041,7 @@ export const ALL_CONTRACTS: readonly ToolContract[] = [
   piiScanContract,
   hiddenParamsContract,
   subdomainAlterContract,
-  urlRefineContract1,
+  urlRefineContract,
   dirFuzzContract,
   screenshotContract,
   jwtAttackContract,

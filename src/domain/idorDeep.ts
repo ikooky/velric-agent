@@ -16,6 +16,7 @@ export interface IdorDeepInput {
   readonly proxy?: string;
   readonly timeoutMs?: number;
   readonly maxTargets?: number;
+  readonly applyBodyIdor?: boolean;
   /** Extra attacker-visible object IDs to try (from other roles' responses). */
   readonly objectIds?: readonly string[];
 }
@@ -91,7 +92,11 @@ export const probeIdorDeep = async (input: IdorDeepInput): Promise<IdorDeepResul
       else if (id.kind === "query") original = url.searchParams.get(id.name) ?? "1";
       else original = "1";
 
-      const method = e.method.toUpperCase() === "GET" ? "GET" : e.method.toUpperCase();
+      const method = e.method.toUpperCase();
+      // State-change discipline: body-kind ID variants on mutating methods
+      // re-fire POST/PUT/PATCH with attacker-chosen values — skip unless the
+      // caller explicitly opted in (same gate as massAssign/replayTamper).
+      if (id.kind === "body" && !["GET", "HEAD", "OPTIONS"].includes(method) && input.applyBodyIdor !== true) continue;
       const baseBody = id.kind === "body" ? JSON.stringify({ [id.name]: original }) : undefined;
       const baseCall = await fetchUrl(url.toString(), { ...opts, method, body: baseBody });
       if (baseCall.status === 0 || baseCall.status >= 400) continue;

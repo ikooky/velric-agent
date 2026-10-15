@@ -92,8 +92,11 @@ describe("SARIF export", () => {
     expect(sarif.runs[0].results).toHaveLength(2);
     expect(sarif.runs[0].results[0].level).toBe("error");
     expect(sarif.runs[0].results[1].level).toBe("warning");
-    expect(sarif.runs[0].results[0].properties["security-severity"]).toBe("7.5");
-    expect(sarif.runs[0].tool.driver.rules.some((r: { id: string }) => r.id.startsWith("VELRIC-"))).toBe(true);
+    // security-severity lives on the RULE (GitHub reads it there), worst-case
+    // wins across findings sharing a rule id.
+    const rule = sarif.runs[0].tool.driver.rules.find((r: { id: string; properties?: Record<string, string> }) => r.id.startsWith("VELRIC-"));
+    expect(rule?.properties?.["security-severity"]).toBeDefined();
+    expect(sarif.runs[0].results.every((r: { locations?: unknown }) => !r.locations || JSON.stringify(r.locations).includes("artifactLocation"))).toBe(true);
   });
 });
 

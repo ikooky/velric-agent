@@ -12,6 +12,7 @@
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { toolError } from "../domain/result.js";
 import {
   loadGraph, saveGraph, graphOverview,
   type Graph, type Intent,
@@ -45,8 +46,14 @@ export const budgetPath = (root: string): string => join(root, BUDGET_FILE);
 const loadBudget = async (root: string): Promise<HuntBudget> => {
   try {
     return JSON.parse(await readFile(budgetPath(root), "utf8")) as HuntBudget;
-  } catch {
-    return { startedAt: new Date().toISOString(), rounds: 0, cost: 0 };
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") {
+      return { startedAt: new Date().toISOString(), rounds: 0, cost: 0 };
+    }
+    // Fail-closed: a corrupt budget file must NOT silently disarm the caps —
+    // treat as budget-exhausted so hunt_record refuses until the file is
+    // fixed or removed (the write path atomically replaces it).
+    throw toolError("corrupt_hunt_budget", "hunt_budget.json is unreadable — refusing writes until fixed (delete it to reset)", { details: { path: budgetPath(root), error: String((e as Error).message) } });
   }
 };
 

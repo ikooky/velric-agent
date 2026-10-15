@@ -55,7 +55,7 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `nuclei-lite` — 模板匹配(暴露面板/泄漏特征)
 - `login-replay` — 登录自动重放,导出会话 cookie
 - `backup-unpack` — 备份/转储解包+秘密扫描
-- `find-backups` — 备份文件发现器(.bak/.old/.swp/tar.gz/sql 后缀+根转储名，soft-404 校准)，衔接 backup-unpack 成完整链
+- `dir_fuzz preset=backups` — 备份文件发现(.bak/.old/.swp/tar.gz/sql 后缀+根转储名，soft-404 校准)，衔接 backup-unpack 成完整链
 - `sqlite-read` — SQLite 泄漏文件解析
 - `idor-prescreen` — id 类参数数值邻域差分预筛(只读)
 - `git-restore` — 泄漏 .git 源码树还原
@@ -114,7 +114,7 @@ velric-agent help
 
 ## MCP 接入
 
-`velric-agent mcp` 启动 stdio MCP server:68 个工具 + 2 个 resources(`velric://driver-playbook`、`velric://workflow-guide`)+ 1 个 prompt(`hunt-driver`)。
+`velric-agent mcp` 启动 stdio MCP server:67 个工具 + 2 个 resources(`velric://driver-playbook`、`velric://workflow-guide`)+ 1 个 prompt(`hunt-driver`)。
 
 ```json
 {

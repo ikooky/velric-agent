@@ -183,10 +183,16 @@ const sarifRank = (sev: string | undefined): number => {
 };
 
 export const findingsSarif = (findings: readonly FindingView[]): string => {
-  const rules = new Map<string, { id: string; name: string; shortDescription: { text: string } }>();
+  const rules = new Map<string, { id: string; name: string; shortDescription: { text: string }; properties: { "security-severity": string } }>();
   for (const f of findings) {
     const id = `VELRIC-${(f.vulnClass ?? f.name ?? "unknown").replace(/[^a-z0-9]+/gi, "_").toUpperCase().slice(0, 40)}`;
-    if (!rules.has(id)) rules.set(id, { id, name: f.vulnClass ?? f.name ?? "unknown", shortDescription: { text: f.name ?? f.vulnClass ?? "finding" } });
+    // GitHub code scanning reads security-severity from the RULE (worst-case
+    // wins when multiple findings share a rule id), never from results.
+    if (!rules.has(id)) rules.set(id, { id, name: f.vulnClass ?? f.name ?? "unknown", shortDescription: { text: f.name ?? f.vulnClass ?? "finding" }, properties: { "security-severity": String(sarifRank(f.severity)) } });
+    else {
+      const cur = rules.get(id)!;
+      if (sarifRank(f.severity) > Number(cur.properties["security-severity"])) cur.properties["security-severity"] = String(sarifRank(f.severity));
+    }
   }
   const results = [...findings]
     .sort((a, b) => (sevRank[a.severity ?? ""] ?? 9) - (sevRank[b.severity ?? ""] ?? 9))
@@ -198,10 +204,9 @@ export const findingsSarif = (findings: readonly FindingView[]): string => {
         level: sarifLevel(f.severity),
         message: { text: f.summary ?? f.name ?? "" },
         locations: url
-          ? [{ physicalLocation: { locationDisplayString: url } }]
+          ? [{ physicalLocation: { artifactLocation: { uri: url } } }]
           : undefined,
         properties: {
-          "security-severity": String(sarifRank(f.severity)),
           disposition: (f as { disposition?: string }).disposition ?? "pending",
         },
       };
@@ -227,26 +232,19 @@ export const generateReportExports = async (input: {
   format: "csv" | "json" | "md-all" | "sarif";
   findings: readonly FindingView[];
 }): Promise<string[]> => {
-  const { writeFile, mkdir } = await import("node:fs/promises");
-  const { join } = await import("node:path");
-  await mkdir(input.outputRoot, { recursive: true });
   const out: string[] = [];
   if (input.format === "csv") {
-    const p = join(input.outputRoot, "findings.csv");
-    await writeFile(p, findingsCsv(input.findings), "utf8");
+    const { path: p } = await writeArtifact(input.outputRoot, "findings.csv", findingsCsv(input.findings));
     out.push(p);
   } else if (input.format === "json") {
-    const p = join(input.outputRoot, "findings.json");
-    await writeFile(p, findingsJson(input.findings), "utf8");
+    const { path: p } = await writeArtifact(input.outputRoot, "findings.json", findingsJson(input.findings));
     out.push(p);
   } else if (input.format === "sarif") {
-    const p = join(input.outputRoot, "findings.sarif");
-    await writeFile(p, findingsSarif(input.findings), "utf8");
+    const { path: p } = await writeArtifact(input.outputRoot, "findings.sarif", findingsSarif(input.findings));
     out.push(p);
   } else {
     for (const f of input.findings) {
-      const p = join(input.outputRoot, `finding_${String(f.id ?? f.name ?? "x").replace(/[^\w.-]/g, "_")}.md`);
-      await writeFile(p, findingMarkdown(f), "utf8");
+      const { path: p } = await writeArtifact(input.outputRoot, `finding_${String(f.id ?? f.name ?? "x").replace(/[^\w.-]/g, "_")}.md`, findingMarkdown(f));
       out.push(p);
     }
   }

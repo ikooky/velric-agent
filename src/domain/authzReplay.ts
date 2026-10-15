@@ -140,9 +140,14 @@ export const replayAuthz = async (input: AuthzReplayInput): Promise<AuthzReplayR
   } else {
     for (const e of exchanges) {
       const body = await loadBlob(input.recordRoot, e.reqBodyHash);
-      // Original headers minus credentials/hop-by-hop — the low-priv context
-      // supplies its own credentials. Content-type stays so the server parses
-      // the body the same way.
+      if (e.reqBodyHash && body == null) {
+        // Missing request blob: replaying bodyless would draw a 400/422 that
+        // masquerades as "enforced". Record as unknown-skip, not a verdict.
+        for (const role of roleNames) {
+          cells.push({ exchangeId: e.id, method: e.method, url: e.url, role, baselineStatus: e.status ?? 0, replayStatus: -1, redirectedAway: false, verdict: "unknown", note: "skip: recorded request body blob missing" });
+        }
+        continue;
+      }
       const baseHeaders: Record<string, string> = {};
       for (const [k, v] of Object.entries(e.reqHeaders)) {
         const lk = k.toLowerCase();
@@ -184,10 +189,12 @@ export const replayAuthz = async (input: AuthzReplayInput): Promise<AuthzReplayR
           } else {
             verdict = "unknown"; note = `2xx but body differs from baseline (${replayFp} vs ${baseFp}) — manual check`;
           }
+        } else if (r.status === 404) {
+          // ACL-based invisibility: 404 for a resource the baseline reached
+          // is hidden-or-missing, never a confirmed denial (fail-open-to-unknown).
+          verdict = "unknown"; note = "404 — hidden-or-missing, ACL-based invisibility is plausible";
         } else if (r.status >= 400 && r.status < 500) {
           verdict = "enforced"; note = `client error ${r.status}`;
-        } else if (r.status === 404) {
-          verdict = "unknown"; note = "404 — hidden-or-missing, ACL-based invisibility is plausible";
         } else {
           verdict = "unknown"; note = `status ${r.status} — inconclusive`;
         }

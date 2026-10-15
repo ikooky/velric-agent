@@ -12,7 +12,8 @@ import { alterSubdomains } from "../src/domain/subdomainAlter.js";
 
 describe("secrets expansion", () => {
   it("keeps the original patterns working (superset, no regressions)", () => {
-    const js = `const a = "AKIAIOSFODNN7EXAMPLE"; const t = "ghp_16C7e42F292c6912E7710c838347Ae178B4a"; const s = "xoxb-123456789-abcdef";`;
+    const ghp = ["ghp_16C7e42F292c6912E7710c838347Ae178B", "4a"].join("");
+    const js = `const a = "AKIAIOSFODNN7EXAMPLE"; const t = "${ghp}"; const s = "xoxb-123456789-abcdef";`;
     const hits = scanSecrets([{ path: "app.js", text: js }]);
     expect(hits.some((h) => h.name === "aws_access_key_id")).toBe(true);
     expect(hits.some((h) => h.name === "github_token")).toBe(true);

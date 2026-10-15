@@ -169,12 +169,22 @@ export const handlers: Readonly<Record<string, Handler>> = {
     const statusFile = join(p.outputRoot, "auto_status.json");
     if (p.action === "status") {
       const { readFile } = await import("node:fs/promises");
+      let status: Record<string, unknown>;
       try {
-        const status = JSON.parse(await readFile(statusFile, "utf8"));
-        return status;
+        status = JSON.parse(await readFile(statusFile, "utf8"));
       } catch {
         return { state: "unknown", hint: "no auto_status.json — run action=run first" };
       }
+      // Stale-running detection: the async pipeline updates this file on
+      // done/error; a process crash mid-run leaves it "running" forever.
+      // Mark anything older than 30 minutes as stale so the host stops polling.
+      if (status.state === "running") {
+        const startedAt = typeof status.startedAt === "string" ? Date.parse(status.startedAt) : NaN;
+        if (!Number.isFinite(startedAt) || Date.now() - startedAt > 30 * 60 * 1000) {
+          return { ...status, state: "stale", hint: "pipeline process died mid-run (no done/error within 30min) — restart with action=run" };
+        }
+      }
+      return status;
     }
     if (!p.seed) throw new Error("seed required for run");
     // Async start + action=status poll (MCP clients default to a 60s request

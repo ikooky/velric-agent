@@ -1,5 +1,5 @@
 import { fetchUrl } from "../adapters/http.js";
-import { writeFile, mkdir } from "node:fs/promises";
+import { ensureDir, writeArtifact } from "../adapters/artifacts.js";
 import { join } from "node:path";
 import { createHmac, randomUUID } from "node:crypto";
 
@@ -64,7 +64,7 @@ const claimList = (v: unknown): string[] => {
 };
 
 export const probeJwtAttack = async (input: JwtAttackInput): Promise<JwtAttackResult> => {
-  await mkdir(input.outputRoot, { recursive: true });
+  await ensureDir(input.outputRoot);
   const parsed = decodeJwt(input.token);
   if (!parsed) throw new Error("invalid JWT (need header.payload[.sig])");
 
@@ -94,8 +94,13 @@ export const probeJwtAttack = async (input: JwtAttackInput): Promise<JwtAttackRe
   const attacks: JwtAttackResult["attacks"] = [];
   const base = await call(input.token);
   const baseStatus = base.status;
+  // Oracle validity gate: the differential only means anything when the real
+  // token is accepted (2xx). An expired token / dead oracle answering 401 to
+  // everything makes every tampered variant match "the same way" — those are
+  // false "safe" verdicts, not evidence of soundness. Fail to inconclusive.
+  const oracleDead = !(baseStatus >= 200 && baseStatus < 300);
   const record = (name: string, detail: string, tampered: number, vulnerableWhen: boolean, inconclusiveWhen = false): void => {
-    attacks.push({ name, detail, baseline: baseStatus, tampered, verdict: vulnerableWhen ? "vulnerable" : inconclusiveWhen ? "inconclusive" : "safe" });
+    attacks.push({ name, detail, baseline: baseStatus, tampered, verdict: oracleDead ? "inconclusive" : vulnerableWhen ? "vulnerable" : inconclusiveWhen ? "inconclusive" : "safe" });
   };
 
   // --- 1. alg=none acceptance (differential, not just structure) ---------
@@ -163,14 +168,13 @@ export const probeJwtAttack = async (input: JwtAttackInput): Promise<JwtAttackRe
   }
 
   const body = JSON.stringify({ tokenPreview: input.token.slice(0, 24), claims, header, attacks }, null, 2);
-  const path = join(input.outputRoot, "jwt_attack.json");
-  await writeFile(path, body, "utf8");
+  const art = await writeArtifact(input.outputRoot, "jwt_attack.json", body);
   return {
     tokenPreview: input.token.slice(0, 24),
     claims,
     header,
     attacks,
-    artifacts: [{ path, bytes: Buffer.byteLength(body) }],
+    artifacts: [art],
   };
 };
 

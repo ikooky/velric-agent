@@ -167,7 +167,13 @@ export class TrafficRecorder {
         // ProxyAgent built on a relaxed connect option (previously the
         // proxied path validated certs the direct path did not — inverted
         // posture between the two branches).
-        this.upstreamAgent = new ProxyAgent({ uri: this.upstreamProxy, requestTls: { rejectUnauthorized: false } });
+        const agent = new ProxyAgent({ uri: this.upstreamProxy, requestTls: { rejectUnauthorized: false } });
+        // Init race guard: two concurrent first requests can both pass the
+        // !upstreamAgent check; the loser's agent would be overwritten and
+        // never destroyed (pooled socket leak). Keep the winner, destroy the
+        // loser immediately.
+        if (this.upstreamAgent) await agent.destroy().catch(() => undefined);
+        else this.upstreamAgent = agent;
       }
       // One shared relaxed Agent for direct fetches — created once, pooled,
       // destroyed in stop(). Recon posture: operator-authorized targets,

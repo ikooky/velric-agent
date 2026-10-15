@@ -417,7 +417,7 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
       case "paths": {
         const [base, dir] = positional;
         if (!base || !dir) {
-          console.error("usage: paths <baseUrl> <outdir> [--paths FILE] [--cookie STR]");
+          console.error("usage: paths <baseUrl> <outdir> [--cookie STR]");
           return 2;
         }
         const { probePaths } = await import("./domain/pathProbe.js");

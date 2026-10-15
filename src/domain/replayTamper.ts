@@ -149,15 +149,41 @@ export const replayTamper = async (input: ReplayInput): Promise<ReplayResult> =>
     const body = await loadBlob(input.recordRoot, e.reqBodyHash);
     const headers: Record<string, string> = { ...e.reqHeaders, ...input.extraHeaders };
     if (input.cookie) headers.cookie = input.cookie;
+    // Credential discipline (REPLACE, never stack): the recorded high-priv
+    // credential header must not leak into the low-priv override context.
+    if (input.cookie) {
+      for (const k of Object.keys(headers)) {
+        if (/^authorization$/i.test(k)) delete headers[k];
+      }
+    }
     // strip hop-by-hop / length headers that no longer match
     delete headers["content-length"];
     delete headers["host"];
     delete headers["connection"];
 
-    // LIVE baseline: re-fire the untampered exchange first. The recorded
-    // respBodyHash may be stale (server state moved) — comparing tampered
-    // responses against a stale baseline produces false "accepted" verdicts
-    // for every rule. The live baseline is the only sound reference.
+    if (input.applyTamper !== true) {
+      // Dry-run (default): inventory only — the untampered exchange is NOT
+      // re-fired either (it is itself a recorded POST/PUT/PATCH mutation;
+      // re-firing it is a live state change needing the same opt-in).
+      const rules0 = input.rules.length > 0 ? input.rules : DEFAULT_RULES;
+      for (const rule of rules0) {
+        let applies = false;
+        if (rule.in === "body") {
+          if (body != null && tamperBody(body, rule.field, rule.value) !== null) applies = true;
+        } else {
+          try { applies = new URL(e.url).searchParams.has(rule.field); } catch { applies = false; }
+        }
+        if (!applies) continue;
+        outcomes.push({ exchangeId: e.id, method: e.method, url: e.url, rule: rule.label, field: rule.field, value: String(rule.value), baselineStatus: e.status ?? 0, replayStatus: -1, verdict: "dry-run", contentChanged: false });
+      }
+      continue;
+    }
+
+    // LIVE baseline: re-fire the untampered exchange first (applyTamper=true
+    // only). The recorded respBodyHash may be stale (server state moved) —
+    // comparing tampered responses against a stale baseline produces false
+    // "accepted" verdicts for every rule. The live baseline is the only
+    // sound reference.
     const live = await fetchUrl(e.url, { ...opts, method: e.method, headers, body: body ?? undefined });
     const liveFp = `${live.status}:${live.sha256?.slice(0, 16) ?? ""}`;
     if (live.status === 0) continue; // endpoint unreachable now — skip exchange
@@ -180,16 +206,6 @@ export const replayTamper = async (input: ReplayInput): Promise<ReplayResult> =>
       }
       if (!applied) continue;
 
-      if (input.applyTamper !== true) {
-        // Dry-run (default): the differential was computed, but firing the
-        // tampered mutation against the live target needs an explicit opt-in.
-        outcomes.push({
-          exchangeId: e.id, method: e.method, url: e.url, rule: rule.label, field: rule.field,
-          value: String(rule.value), baselineStatus: live.status, replayStatus: -1,
-          verdict: "dry-run", contentChanged: false,
-        });
-        continue;
-      }
       const r = await fetchUrl(target, { ...opts, method: e.method, headers, body: reqBody });
       const rFp = `${r.status}:${r.sha256?.slice(0, 16) ?? ""}`;
       const contentChanged = rFp !== liveFp;

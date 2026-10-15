@@ -1,4 +1,5 @@
-import { writeFile, mkdir, readFile, readdir } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
+import { ensureDir, writeArtifact } from "../adapters/artifacts.js";
 import { join, relative } from "node:path";
 import { createHash } from "node:crypto";
 
@@ -55,7 +56,7 @@ const looksTextual = (buf: Buffer): boolean => {
 };
 
 export const scanTrafficPii = async (input: PiiScanInput): Promise<PiiScanResult> => {
-  await mkdir(input.outputRoot, { recursive: true });
+  await ensureDir(input.outputRoot);
 
   // exchange index: respBodyHash -> {method,url}
   const hashToExchange = new Map<string, NdExchange>();
@@ -131,7 +132,6 @@ export const scanTrafficPii = async (input: PiiScanInput): Promise<PiiScanResult
     .sort((a, b) => Object.keys(b.kinds).length - Object.keys(a.kinds).length);
 
   const bodyStr = JSON.stringify({ blobsScanned: scanned, exchanges: exchangeCount, exposures, credentialPairs }, null, 2);
-  const path = join(input.outputRoot, "pii_exposure.json");
-  await writeFile(path, bodyStr, "utf8");
-  return { blobsScanned: scanned, exchanges: exchangeCount, exposures, credentialPairs, artifacts: [{ path, bytes: Buffer.byteLength(bodyStr) }] };
+  const art = await writeArtifact(input.outputRoot, "pii_exposure.json", bodyStr);
+  return { blobsScanned: scanned, exchanges: exchangeCount, exposures, credentialPairs, artifacts: [art] };
 };

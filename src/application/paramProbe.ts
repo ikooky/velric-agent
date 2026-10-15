@@ -1,5 +1,5 @@
 import { fetchUrl } from "../adapters/http.js";
-import { writeFile, mkdir } from "node:fs/promises";
+import { writeArtifact } from "../adapters/artifacts.js";
 import { join } from "node:path";
 
 /** Param differential probe: for each merged endpoint, remove one param at a
@@ -91,6 +91,20 @@ export const probeParams = async (input: ParamProbeInput): Promise<ParamProbeRes
     if (built === "") { if (relSkipped) skippedCount++; continue; }
     const base = await fetchUrl(built, { ...opts });
     if (base.status === 0) continue; // endpoint unreachable — not probeable
+    // Baseline stability calibration (same discipline as hiddenParams):
+    // fetch the SAME url twice — a body-hash that moves between two
+    // identical requests means per-request noise (timestamp/nonce), and
+    // every remove-diff candidate would false-positive. Abort the whole
+    // endpoint, never degrade to status-only for this probe family.
+    const base2 = await fetchUrl(built, { ...opts });
+    if (base2.status === 0) continue;
+    const unstable = base2.status !== base.status || (base2.sha256 ?? "") !== (base.sha256 ?? "");
+    if (unstable) {
+      // Baseline noise: abort the whole endpoint. Recorded as an empty result
+      // with baseline status -1 so downstream consumers see "not probed".
+      endpointResults.push({ method: ep.method, url: ep.path, baseline: { status: -1, bytes: 0, sha256: "unstable-baseline" }, params: [] });
+      continue;
+    }
     const baseline = { status: base.status, bytes: base.bytes, sha256: base.sha256 };
     const params: ParamProbeResult["endpointResults"][0]["params"] = [];
     for (const f of ep.fields.filter((x) => x.in === "query")) {
@@ -110,13 +124,12 @@ export const probeParams = async (input: ParamProbeInput): Promise<ParamProbeRes
     endpointResults.push({ method: ep.method, url: ep.path, baseline, params });
   }
 
-  await mkdir(input.outputRoot, { recursive: true });
-  const outPath = join(input.outputRoot, "param_probe.json");
-  await writeFile(outPath, JSON.stringify({ probedAt: new Date().toISOString(), endpointResults }, null, 2));
+  const body = JSON.stringify({ probedAt: new Date().toISOString(), endpointResults }, null, 2);
+  const art = await writeArtifact(input.outputRoot, "param_probe.json", body);
   return {
     probed: endpointResults.length,
     endpointResults,
-    artifacts: [{ path: outPath, bytes: Buffer.byteLength(JSON.stringify(endpointResults)) }],
+    artifacts: [art],
     skippedRelativeEndpoints: skippedCount,
   };
 };

@@ -1,5 +1,6 @@
 import { fetchUrl } from "../adapters/http.js";
-import { writeFile, mkdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
+import { ensureDir, writeArtifact } from "../adapters/artifacts.js";
 import { join } from "node:path";
 
 /** Wordlist-driven content discovery (ffuf/feroxbuster design): FUZZ keyword
@@ -69,7 +70,7 @@ const shouldMatch = (status: number, match: readonly number[]): boolean =>
   match.length > 0 ? match.includes(status) : (status >= 200 && status < 400) || status === 401 || status === 403;
 
 export const dirFuzz = async (input: DirFuzzInput): Promise<DirFuzzResult> => {
-  await mkdir(input.outputRoot, { recursive: true });
+  await ensureDir(input.outputRoot);
 
   // wordlist resolution: inline > file > builtin
   let words = input.words ?? [];
@@ -138,7 +139,6 @@ export const dirFuzz = async (input: DirFuzzInput): Promise<DirFuzzResult> => {
   await scanOne(base, 0);
 
   const bodyStr = JSON.stringify({ probed, hits, calibration: { words: calWords, softStatus, softSizes } }, null, 2);
-  const path = join(input.outputRoot, "dir_fuzz.json");
-  await writeFile(path, bodyStr, "utf8");
-  return { probed, hits, calibration: { words: calWords, softStatus, softSizes }, artifacts: [{ path, bytes: Buffer.byteLength(bodyStr) }] };
+  const art = await writeArtifact(input.outputRoot, "dir_fuzz.json", bodyStr);
+  return { probed, hits, calibration: { words: calWords, softStatus, softSizes }, artifacts: [art] };
 };

@@ -1,5 +1,5 @@
 import { fetchUrl } from "../adapters/http.js";
-import { writeFile, mkdir } from "node:fs/promises";
+import { ensureDir, writeArtifact } from "../adapters/artifacts.js";
 import { join } from "node:path";
 
 /** Hidden-parameter miner (Param-Miner-style): guesses parameter NAMES the
@@ -92,7 +92,7 @@ const learnWords = (bodies: readonly string[], cap = 200): string[] => {
 const fp = (r: { status: number; bytes: number; sha256: string }): string => `${r.status}:${r.sha256.slice(0, 12)}:${r.bytes}`;
 
 export const mineHiddenParams = async (input: HiddenParamInput): Promise<HiddenParamResult> => {
-  await mkdir(input.outputRoot, { recursive: true });
+  await ensureDir(input.outputRoot);
   const where = input.in ?? "query";
   const opts = { proxy: input.proxy, timeoutMs: input.timeoutMs ?? 8000, method: input.method ?? "GET", body: input.body, headers: input.headers, cookie: input.cookie };
 
@@ -110,9 +110,8 @@ export const mineHiddenParams = async (input: HiddenParamInput): Promise<HiddenP
   const stable = b1.fp === b2.fp;
   if (!stable) {
     const bodyStr = JSON.stringify({ probed: 0, found: [], note: "baseline unstable (rotating content) — differential not trustworthy, aborted" }, null, 2);
-    const path = join(input.outputRoot, "hidden_params.json");
-    await writeFile(path, bodyStr, "utf8");
-    return { probed: 0, found: [], artifacts: [{ path, bytes: Buffer.byteLength(bodyStr) }] };
+    const art = await writeArtifact(input.outputRoot, "hidden_params.json", bodyStr);
+    return { probed:0, found: [], artifacts: [art] };
   }
 
   // --- candidate words: builtin + caller + learned vocabulary.
@@ -164,7 +163,6 @@ export const mineHiddenParams = async (input: HiddenParamInput): Promise<HiddenP
   }
 
   const bodyStr = JSON.stringify({ probed, found, where, learnedWords: learned.length }, null, 2);
-  const path = join(input.outputRoot, "hidden_params.json");
-  await writeFile(path, bodyStr, "utf8");
-  return { probed, found, artifacts: [{ path, bytes: Buffer.byteLength(bodyStr) }] };
+  const art = await writeArtifact(input.outputRoot, "hidden_params.json", bodyStr);
+  return { probed, found, artifacts: [art] };
 };

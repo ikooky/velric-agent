@@ -56,6 +56,10 @@ export const probeSmuggle = async (input: SmuggleInput): Promise<SmuggleResult> 
     const r = await fetchUrl(v.path(base), opts);
     probed++;
     if (r.status === 0) continue;
+    // Unreachable baseline: any variant answering anything would record a
+    // false "status divergence" differential — there is nothing to diverge
+    // FROM. Skip the whole probe when the baseline itself failed.
+    if (baseline.status === 0) break;
     // Differential signal: a normalization variant answers differently from
     // the canonical path → two parsers disagree somewhere in the chain.
     if (r.status !== baseline.status) {

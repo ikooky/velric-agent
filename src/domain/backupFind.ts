@@ -1,5 +1,5 @@
 import { fetchUrl } from "../adapters/http.js";
-import { writeFile, mkdir } from "node:fs/promises";
+import { ensureDir, writeArtifact } from "../adapters/artifacts.js";
 import { join } from "node:path";
 
 /** Backup-file discovery (Wapiti mod_backup-style): probes common backup
@@ -48,7 +48,7 @@ const ROOT_DUMPS: readonly string[] = [
 ];
 
 export const findBackups = async (input: BackupFindInput): Promise<BackupFindResult> => {
-  await mkdir(input.outputRoot, { recursive: true });
+  await ensureDir(input.outputRoot);
   const origin = new URL(input.baseUrl).origin;
   const opts = { proxy: input.proxy, timeoutMs: input.timeoutMs ?? 8000 };
 
@@ -86,7 +86,6 @@ export const findBackups = async (input: BackupFindInput): Promise<BackupFindRes
   }
 
   const bodyStr = JSON.stringify({ probed, found }, null, 2);
-  const path = join(input.outputRoot, "backup_candidates.json");
-  await writeFile(path, bodyStr, "utf8");
-  return { probed, found, artifacts: [{ path, bytes: Buffer.byteLength(bodyStr) }] };
+  const art = await writeArtifact(input.outputRoot, "backup_candidates.json", bodyStr);
+  return { probed, found, artifacts: [art] };
 };
