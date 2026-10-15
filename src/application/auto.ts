@@ -379,7 +379,11 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
     const sensFile = join(root, "sensitive_paths.txt");
     if (await fresh(sensFile)) {
       const lines = (await readFile(sensFile, "utf8")).split("\n").filter(Boolean);
-      const high = lines.filter((l) => /^200/.test(l) && /\.git|\.env|swagger|api-docs|actuator\/env|heapdump|druid|pprof|backup|dump\.sql|WEB-INF|\.well-known\/openid-configuration|\.well-known\/oauth-authorization-server/.test(l));
+      // wildcard-suspect rows are /{param} route renderings (title echoes the
+      // probed segment, e.g. a username-profile page), never the endpoint
+      // itself — excluded from the HIGH bucket, still visible in the artifact.
+      const high = lines.filter((l) => /^200/.test(l) && !l.includes("[wildcard-suspect")
+        && /\.git|\.env|swagger|api-docs|actuator\/env|heapdump|druid|pprof|backup|dump\.sql|WEB-INF|\.well-known\/openid-configuration|\.well-known\/oauth-authorization-server/.test(l));
       if (high.length > 0) {
         fList.push({
           name: `敏感路径命中 ${high.length} 个`,
