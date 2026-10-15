@@ -88,12 +88,20 @@ export const probeRoleMatrix = async (input: RoleMatrixInput): Promise<RoleMatri
     if (!url) continue;
     for (const role of roleNames) {
       const header = input.roles[role]!;
-      const r = await fetchUrl(url, {
-        ...opts,
-        method: "GET",
-        headers: /^bearer /i.test(header) ? { authorization: header } : { cookie: header.replace(/^cookie:\s*/i, "") },
-      });
-      matrix.push({ role, endpoint: url, status: r.status, access: accessOf(r.status) });
+      // Accept both the bare credential ("Bearer x", "x=y;…") and the full
+      // header form ("Authorization: Bearer x", "Cookie: a=b").
+      const isAuthHeader = /^authorization\s*:/i.test(header);
+      const isCookieHeader = /^cookie\s*:/i.test(header);
+      const isBearerValue = /^bearer\s+\S/i.test(header);
+      const headers: Record<string, string> = isAuthHeader || isBearerValue
+        ? { authorization: header.replace(/^authorization\s*:\s*/i, "") }
+        : { cookie: isCookieHeader ? header.replace(/^cookie\s*:\s*/i, "") : header };
+      const r = await fetchUrl(url, { ...opts, method: "GET", headers });
+      // 2xx is not "allowed" on its own: many gateways answer 200 with a
+      // JSON access-denied body. Downgrade to ambiguous when the body smells
+      // like a denial (differential discipline: content, not bare status).
+      const deniedish = r.status >= 200 && r.status < 300 && /access[- ]?denied|forbidden|unauthori[sz]ed|permission denied/i.test(r.body.slice(0, 2048));
+      matrix.push({ role, endpoint: url, status: r.status, access: deniedish ? "ambiguous" : accessOf(r.status) });
     }
   }
 

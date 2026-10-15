@@ -72,7 +72,7 @@ export const throttledMap = async <T>(
       const idx = cursor++;
       const t = tasks[idx];
       if (!t) continue;
-      if (options.host) await acquire(options.host, options);
+      if (options.host) await acquire(options.host, options).promise;
       results[idx] = await t();
     }
   };

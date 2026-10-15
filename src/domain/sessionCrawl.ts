@@ -49,12 +49,13 @@ interface Session {
   bearer: string | null;
 }
 
-const extractSetCookies = (headers: Record<string, string>): string[] => {
-  // fetchUrl flattens headers; set-cookie may be comma-joined
+const extractSetCookies = (headers: Record<string, string>, setCookies?: readonly string[]): string[] => {
+  // Prefer the structured array from FetchResult.setCookies (every line,
+  // Expires-safe). Fallback: the flattened header may be comma-joined —
+  // split only between pairs (a naive split breaks expires dates).
+  if (setCookies && setCookies.length > 0) return setCookies.map((c) => c.split(";")[0]!);
   const raw = headers["set-cookie"] ?? "";
   if (!raw) return [];
-  // split on cookie boundaries: comma followed by " token=" — naive split
-  // breaks expires dates; tolerate by splitting only between pairs
   const parts: string[] = [];
   for (const piece of raw.split(/,(?=\s*[^;=,\s]+=)/)) {
     const p = piece.trim();
@@ -82,7 +83,7 @@ export const crawlSession = async (input: SessionCrawlInput): Promise<SessionCra
       body,
     });
     if (r.status === 0 || r.status >= 400) return null;
-    const cookies = extractSetCookies(r.headers ?? {});
+    const cookies = extractSetCookies(r.headers ?? {}, r.setCookies);
     // bearer from json response
     let bearer: string | null = null;
     try {

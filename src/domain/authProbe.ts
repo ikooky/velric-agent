@@ -81,10 +81,14 @@ export const probeAuth = async (input: AuthProbeInput): Promise<AuthProbeResult>
       if (anon.status === 0) continue;
       const anonOk = anon.status >= 200 && anon.status < 300;
       const anonAuthish = anon.status === 401 || anon.status === 403;
+      const anonRedirect = anon.status >= 300 && anon.status < 400;
 
       if (!input.cookie) {
         // No cookie supplied: classify by anonymous response alone.
-        if (anonOk) anonymous.push({ url: full, status: anon.status });
+        // A 3xx (typically → login page) is an auth redirect, not anonymous
+        // content; park it as ambiguous rather than inflating the anon set.
+        if (anonRedirect) ambiguous.push({ url: full, anonStatus: anon.status, note: `auth redirect ${anon.status}` });
+        else if (anonOk) anonymous.push({ url: full, status: anon.status });
         else if (anonAuthish) authRequired.push({ url: full, anonStatus: anon.status, authStatus: null });
         else ambiguous.push({ url: full, anonStatus: anon.status, note: `status ${anon.status}` });
         continue;

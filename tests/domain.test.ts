@@ -5,6 +5,24 @@ import { chunkUrls } from "../src/domain/chunks.js";
 import { buildPermTree, parseUserRouteAuth, DEFAULT_PERM_HEURISTICS } from "../src/domain/permTree.js";
 import { mergeParams } from "../src/domain/params.js";
 import { buildPreloadScript, DEFAULT_HOOK_CONFIG } from "../src/domain/preload.js";
+import { throttledMap } from "../src/domain/rateLimit.js";
+
+describe("throttledMap rate limiting", () => {
+  it("with host: acquisitions are spaced by the min interval (awaits acquire().promise, not the wrapper)", async () => {
+    const starts: number[] = [];
+    const tasks = Array.from({ length: 3 }, () => async () => { starts.push(Date.now()); return 1; });
+    await throttledMap(tasks, { concurrency: 3, host: "spacing-test", rps: 20 }); // 50ms interval
+    expect(starts).toHaveLength(3);
+    // a wrapper-object await (old bug) resolves immediately -> spacing ~0ms and this fails
+    expect(starts[2]! - starts[0]!).toBeGreaterThanOrEqual(90);
+  }, 10000);
+
+  it("without host: tasks run unthrottled and results keep order", async () => {
+    const tasks = Array.from({ length: 4 }, (_, i) => async () => i * 2);
+    const out = await throttledMap(tasks, { concurrency: 4 });
+    expect(out).toEqual([0, 2, 4, 6]);
+  });
+});
 
 describe("endpoints", () => {
   it("classifies api vs other paths", () => {

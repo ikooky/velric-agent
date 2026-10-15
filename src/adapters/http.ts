@@ -30,6 +30,9 @@ export interface FetchResult {
   readonly ok: boolean;
   readonly contentType: string;
   readonly headers: Record<string, string>;
+  /** Every Set-Cookie line, unjoined. Header flattening merges them into one
+   *  comma-joined value (losing order and rows); session consumers must use this. */
+  readonly setCookies?: readonly string[];
   readonly body: string;
   readonly bytes: number;
   readonly sha256: string;
@@ -37,7 +40,26 @@ export interface FetchResult {
   readonly error?: string;
 }
 
-const DEFAULT_UA = "Mozilla/5.0 (velric-recon)";
+const DEFAULT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
+/** header key normalizer: consumers index headers case-insensitively, so both
+ *  fetch paths (early-return and full read) must emit lowercase keys. */
+const lowerHeaders = (headers: Headers): Record<string, string> => {
+  const obj: Record<string, string> = {};
+  headers.forEach((v, k) => { obj[k.toLowerCase()] = v; });
+  return obj;
+};
+
+/** All Set-Cookie lines via the structured accessor; comma-joined fallback
+ *  only when the runtime lacks getSetCookie (it splits Expires dates). */
+const collectSetCookies = (headers: Headers): string[] => {
+  const get = (headers as unknown as { getSetCookie?: () => string[] }).getSetCookie;
+  if (typeof get === "function") return get.call(headers);
+  const joined = headers.get("set-cookie");
+  return joined ? [joined] : [];
+};
+
+const IDEMPOTENT_METHODS = new Set(["GET", "HEAD", "OPTIONS", "TRACE"]);
 
 export const fetchUrl = async (
   url: string,
@@ -45,7 +67,10 @@ export const fetchUrl = async (
 ): Promise<FetchResult> => {
   // Default retry policy: initial + 2 retries on transient failures
   // (network errors, timeouts, 5xx), 1s backoff — user-wide convention.
-  const maxAttempts = 3;
+  // Retries are limited to idempotent methods: replaying POST/PUT/DELETE can
+  // duplicate state changes server-side (double submit / double delete).
+  const method = (options.method ?? "GET").toUpperCase();
+  const maxAttempts = IDEMPOTENT_METHODS.has(method) ? 3 : 1;
   let last: FetchResult | undefined;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const r = await fetchOnce(url, options);
@@ -121,7 +146,7 @@ const fetchOnce = async (
       const headerObj: Record<string, string> = {};
       res.headers.forEach((v, k) => { headerObj[k.toLowerCase()] = v; });
       try { await res.body?.cancel(); } catch { /* already gone */ }
-      return { url, status: res.status, ok: res.ok, contentType: res.headers.get("content-type") ?? "", headers: headerObj, body: "", bytes: 0, sha256: createHash("sha256").update("").digest("hex"), finalUrl: finalRedirect ?? null };
+      return { url, status: res.status, ok: res.ok, contentType: res.headers.get("content-type") ?? "", headers: headerObj, setCookies: collectSetCookies(res.headers), body: "", bytes: 0, sha256: createHash("sha256").update("").digest("hex"), finalUrl: finalRedirect ?? null };
     }
     // Stream-cap: works for chunked too (content-length absent) — read the
     // body incrementally and stop at the cap instead of buffering it all.
@@ -143,10 +168,7 @@ const fetchOnce = async (
     if (options.raw) {
       (res as unknown as { __rawBuffer?: Buffer }).__rawBuffer = slice;
     }
-    const headerObj: Record<string, string> = {};
-    res.headers.forEach((v, k) => {
-      headerObj[k] = v;
-    });
+    const headerObj: Record<string, string> = lowerHeaders(res.headers);
     return {
       url,
       status: res.status,
@@ -154,6 +176,7 @@ const fetchOnce = async (
       rawBuffer: (res as unknown as { __rawBuffer?: Buffer }).__rawBuffer,
       contentType: res.headers.get("content-type") ?? "",
       headers: headerObj,
+      setCookies: collectSetCookies(res.headers),
       body: options.raw ? "" : slice.toString("utf8"),
       bytes: buf.length,
       sha256: createHash("sha256").update(buf).digest("hex"),

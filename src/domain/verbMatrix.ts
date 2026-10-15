@@ -14,6 +14,9 @@ export interface VerbMatrixInput {
   readonly proxy?: string;
   readonly timeoutMs?: number;
   readonly maxUrls?: number;
+  /** Fire DELETE/PUT/PATCH (mutating, potentially destructive). Default OFF:
+   *  a verb probe that lands could modify or destroy real records. */
+  readonly allowDestructive?: boolean;
 }
 
 export interface VerbMatrixResult {
@@ -25,6 +28,9 @@ export interface VerbMatrixResult {
 }
 
 const VERBS = ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"] as const;
+/** A mutating verb carrying a syntactically valid but empty body; never sent
+ *  unless allowDestructive is set. */
+const MUTATING_VERBS = new Set(["POST", "PUT", "DELETE", "PATCH"]);
 
 export const probeVerbMatrix = async (input: VerbMatrixInput): Promise<VerbMatrixResult> => {
   await mkdir(input.outputRoot, { recursive: true });
@@ -34,14 +40,16 @@ export const probeVerbMatrix = async (input: VerbMatrixInput): Promise<VerbMatri
   const matrix: VerbMatrixResult["matrix"] = [];
   const verbGaps: VerbMatrixResult["verbGaps"] = [];
 
+  const verbs = input.allowDestructive ? VERBS : VERBS.filter((v) => !MUTATING_VERBS.has(v));
   for (const url of urls) {
     let getBaseline = -1;
-    for (const verb of VERBS) {
-      const r = await fetchUrl(url, { ...opts, method: verb, body: verb === "GET" || verb === "OPTIONS" ? undefined : "{}" });
+    for (const verb of verbs) {
+      const r = await fetchUrl(url, { ...opts, method: verb, body: MUTATING_VERBS.has(verb) ? "{}" : undefined });
       matrix.push({ url, verb, status: r.status, bytes: r.bytes });
       if (verb === "GET") getBaseline = r.status;
       else if (getBaseline === 401 || getBaseline === 403) {
-        if (r.status >= 200 && r.status < 300) {
+        // OPTIONS 200 is a CORS-preflight property, not an ACL gap — excluded.
+        if (verb !== "OPTIONS" && r.status >= 200 && r.status < 300) {
           verbGaps.push({ url, verb, getBaseline, verbStatus: r.status, note: `${getBaseline} on GET but ${r.status} on ${verb} — verb-level ACL gap` });
         }
       }

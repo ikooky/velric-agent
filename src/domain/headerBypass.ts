@@ -80,8 +80,12 @@ export const probeHeaderBypass = async (input: HeaderBypassInput): Promise<Heade
       }
       const r = await fetchUrl(target, { ...opts, method: "GET", headers });
       if (r.status === 0) continue;
+      // Differential: a redirect that lands on a login page (200) is the
+      // same wall, not a bypass; only a 2xx whose BODY differs from the
+      // denied baseline counts. 3xx never counts as bypassed.
       const verdict: "bypassed" | "no-change" | "softer-error" =
-        r.status >= 200 && r.status < 300 ? "bypassed" :
+        r.status >= 300 && r.status < 400 ? "no-change" :
+        r.status >= 200 && r.status < 300 && r.sha256.slice(0, 16) !== baseFp.split(":")[1] ? "bypassed" :
         baseFp === `${r.status}:${r.sha256.slice(0, 16)}` ? "no-change" :
         (r.status === 401 || r.status === 403) ? "no-change" : "softer-error";
       attempts.push({ url, technique: t.name, headerName: Object.keys(t.headers)[0] ?? "?_method=", baseline: baseline.status, tampered: r.status, verdict });

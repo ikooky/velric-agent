@@ -80,7 +80,11 @@ export const probeSmuggle = async (input: SmuggleInput): Promise<SmuggleResult> 
     const u = new URL(base);
     const port = Number(u.port || (u.protocol === "https:" ? 443 : 80));
     const t0 = Date.now();
-    const raw = `POST /healthz-velric HTTP/1.1\r\nHost: ${u.hostname}\r\ncontent-type: application/x-www-form-urlencoded\r\ncontent-length: 6\r\ntransfer-encoding: chunked\r\n\r\n0\r\n\r\n`;
+    // Host must carry the port when non-default (HTTP/1.1 virtual hosts and
+    // some proxies route on it); body `0\r\n\r\n` is exactly 5 bytes — CL
+    // must match the wire truth byte-for-byte or the probe itself desyncs.
+    const hostHeader = u.port ? `${u.hostname}:${u.port}` : u.hostname;
+    const raw = `POST /healthz-velric HTTP/1.1\r\nHost: ${hostHeader}\r\ncontent-type: application/x-www-form-urlencoded\r\ncontent-length: 5\r\ntransfer-encoding: chunked\r\n\r\n0\r\n\r\n`;
     const res = await new Promise<{ status: number; ms: number }>((resolve) => {
       const sock: net.Socket = u.protocol === "https:"
         ? tls.connect({ host: u.hostname, port, rejectUnauthorized: false, servername: u.hostname })
