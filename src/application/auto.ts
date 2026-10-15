@@ -174,8 +174,16 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
       stages.push({ stage: "harvest_static", status: "fail", detail: String((e as Error).message ?? e).slice(0, 120) });
     }
   } else {
+    const runSpider = (): ReturnType<typeof spiderMpa> =>
+      spiderMpa({ baseUrl: base, outputRoot: root, proxy: input.proxy, cookie: input.cookie, maxPages: input.maxPages ?? 30, depth: 2, delayMs: 500 });
     try {
-      const r = await spiderMpa({ baseUrl: base, outputRoot: root, proxy: input.proxy, cookie: input.cookie, maxPages: input.maxPages ?? 30, depth: 2, delayMs: 500 });
+      let r = await runSpider();
+      // Entry-page fetches sometimes hit an edge challenge or flaky proxy and
+      // yield a single page with no links — a hollow crawl that poisons every
+      // downstream stage. Retry once in that case before accepting.
+      if (r.crawled <= 1 && r.links === 0) {
+        r = await runSpider();
+      }
       stages.push({ stage: "spider_mpa", status: "ok", detail: `crawled=${r.crawled} forms=${r.forms} js=${r.scriptsDownloaded}` });
     } catch (e) {
       stages.push({ stage: "spider_mpa", status: "fail", detail: String((e as Error).message ?? e).slice(0, 120) });
