@@ -729,7 +729,12 @@ export const trafficRecContract: ToolContract = {
     "velric platform: forward proxy recording every exchange (full req/resp for HTTP, tunnel metadata for HTTPS) to traffic.ndjson + sha256 blob store. Long-running; returns bound port.",
   kind: "runtime",
   inputSchema: z.object({ outputRoot, port: z.number().optional(), upstreamProxy: z.string().optional(), maxExchanges: z.number().optional(), mitm: z.boolean().optional(), stop: z.boolean().optional(), observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({ port: z.number() }),
+  outputSchema: z.object({
+    port: z.number(),
+    stopped: z.boolean().optional(),
+    exchanges: z.number().optional(),
+    note: z.string().optional(),
+  }),
   annotations: writingAnnotations(),
   examples: [{ title: "rec", input: { outputRoot: "/tmp/recon" } }],
 };

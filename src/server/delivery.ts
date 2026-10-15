@@ -55,7 +55,22 @@ export const deliver = async (
   run: () => Promise<unknown>,
 ): Promise<CallToolResult> => {
   try {
-    return successResult(await run());
+    const value = await run();
+    // Output validation: the contract's outputSchema was previously declared
+    // but never enforced — schema drift shipped silently. A mismatch is now a
+    // structured contract_violation error naming the offending tool.
+    const parsed = contract.outputSchema.safeParse(value);
+    if (!parsed.success) {
+      return errorResult({
+        code: "contract_violation",
+        message: `tool output failed its declared outputSchema: ${contract.name}`,
+        details: {
+          issues: parsed.error.issues.slice(0, 8).map((i) => ({ path: i.path.join("."), message: i.message })),
+        },
+        remediation: "the tool and its contract have drifted — report this to the toolset maintainer",
+      });
+    }
+    return successResult(parsed.data);
   } catch (cause) {
     const error =
       cause !== null &&
