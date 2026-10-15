@@ -394,9 +394,19 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
       }
       // Auth-relevant statuses: 401/403 (explicit auth) and 302 (auth
       // redirect to login) — plain 301/303 rewrites are NOT protected paths.
-      // catch-all cluster members share one 403/401 page — a rewrite, not an
-      // auth gate on each of those paths. Only unclustered rows count.
-      const protectedPaths = lines.filter((l) => /^40[13]|^302/.test(l) && !l.includes("[catch-all"));
+      // Auth-wall cluster: N probe paths collapsing onto one 401/403 sign-in
+      // landing is a whole-site auth wall, not N individually protected
+      // endpoints — report once with the cluster note, drop the duplicates.
+      const wallCluster = lines.find((l) => /^40[13]|^302/.test(l) && l.includes("[catch-all"));
+      if (wallCluster) {
+        fList.push({
+          name: "全站鉴权墙(auth-wall)",
+          severity: "low",
+          summary: "多数探测路径统一 401/403(重定向至登录) — 站点对未认证流量整体上锁, 符合预期防护",
+          poc: wallCluster,
+        });
+      }
+      const protectedPaths = lines.filter((l) => /^40[13]|^302/.test(l) && !l.includes("[catch-all") && !l.includes("[redirectrw"));
       if (protectedPaths.length > 0) {
         fList.push({
           name: `受保护路径存在 ${protectedPaths.length} 个`,

@@ -150,15 +150,18 @@ export const probePaths = async (input: PathProbeInput): Promise<PathProbeResult
         if (t !== "" && baselineTitles.has(t)) continue;
       }
       // Third shape channel: redirect-followed responses that landed on a
-      // path OTHER than the probed one are platform rewrites (e.g.
-      // /dump.sql → 301 → /{username} profile). Following fetch records the
-      // FINAL body/status; if finalUrl differs from the probe path, the hit
-      // is a rewrite, not the sensitive endpoint.
-      if (r.finalUrl) {
+      // path OTHER than the probed one are rewrites (e.g.
+      // /dump.sql → 301 → /{username} profile). BUT an auth-redirect landing
+      // (sign_in / login / auth) means the probed path EXISTS and is access-
+      // controlled — that is a real protected-path signal, kept as-is.
+      if (r.finalUrl && !/sign[_-]?in|login|auth|sso/i.test(r.finalUrl)) {
         let finalPath = "";
         try { finalPath = new URL(r.finalUrl).pathname; } catch { /* keep */ }
         const probedPath = p.replace(/\/$/, "");
         if (finalPath !== "" && finalPath.replace(/\/$/, "") !== probedPath) {
+          // Tally the rewrite signature too: a whole-site auth wall (every
+          // probe path 302→sign_in) clusters into ONE row instead of 50.
+          sigCounts.set(respSig, (sigCounts.get(respSig) ?? 0) + 1);
           found.push({ path: `${p}  [redirectrw: → ${finalPath}]`, status: r.status, bytes: r.bytes, contentType: r.contentType.slice(0, 60), signature: respSig });
           continue;
         }
