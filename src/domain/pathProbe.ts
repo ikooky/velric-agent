@@ -104,7 +104,10 @@ export const probePaths = async (input: PathProbeInput): Promise<PathProbeResult
     // Brand suffix from the home title ("GitLab", "Allbirds: ..."): probe
     // paths whose page titles end in "· <brand>" are /{user} profile
     // renderings (gitlab.com/.env → Dmitry Mityanin · GitLab).
-    const m = ht.match(/([a-z0-9][a-z0-9 .&'-]{1,40})$/i);
+    // Brand = the LEADING word(s) of the home title ("GitLab - Speed...").
+    // Profile pages are titled "<user> · <brand>", so the brand must match
+    // the head, not the tail, of the home title.
+    const m = ht.match(/^([a-z0-9][a-z0-9 .&'-]{0,40}?)(?:\s*[-–|·:]|\s{2,}|$)/i);
     if (m) siteBrand = m[1]!.trim().toLowerCase();
   } catch { /* home fetch failure: title channel simply stays smaller */ }
   const soft404Signature = baselineSigs.size > 0 ? [...baselineSigs] : null;
