@@ -993,6 +993,30 @@ export const scanPlatformContract: ToolContract = {
   examples: [{ title: "two-phase chain", input: { outputRoot: "/tmp/recon", action: "create_task", projectId: "p1", name: "phase2", modules: ["port_scan", "fingerprint"], sourceTask: "t1" } }],
 };
 
+export const authzReplayContract: ToolContract = {
+  name: "authz_replay",
+  title: "Autorize-style enforcement replay",
+  description:
+    "Re-fires recorded exchanges (traffic.ndjson + blobs from traffic_record) VERBATIM (method+body+headers) under each low-privilege credential and diffs against the high-priv baseline: enforced (401/403/auth-redirect/denial-shaped 2xx) vs bypassed (same success fingerprint) vs unknown. Catches POST/PUT/PATCH/DELETE authorization gaps the GET-only role_matrix cannot see. Writes authz_replay.json.",
+  kind: "runtime",
+  inputSchema: z.object({ recordRoot: z.string(), outputRoot, roles: z.record(z.string(), z.string()).describe("role -> credential (Cookie: … / Authorization: Bearer … / raw)"), roleHeaders: z.record(z.string(), z.record(z.string(), z.string())).optional(), exchangeIds: z.array(z.string()).optional(), methods: z.array(z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxExchanges: z.number().optional(), denyFingerprints: z.array(z.string()).optional().describe("app-specific denial body strings"), readOnly: z.boolean().optional(), apply: z.boolean().optional().describe("fire replays; default true"), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ replayed: z.number(), bypassed: z.array(z.object({ url: z.string(), role: z.string(), note: z.string() })), enforced: z.number(), unknown: z.number() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "replay", input: { recordRoot: "/tmp/recon", outputRoot: "/tmp/recon", roles: { viewer: "Cookie: bookstack_session=…" } } }],
+};
+
+export const massAssignContract: ToolContract = {
+  name: "mass_assign",
+  title: "Mass-assignment radar",
+  description:
+    "Injects privilege/ownership fields (role, isAdmin, user_id, tenant_id, permissions, plan, verified…) that the client NEVER sent into recorded mutating exchanges (POST/PUT/PATCH JSON bodies) and re-fires them against a live baseline. reflected (field bound in response) or accepted-changed = CWE-915 sink. Dry-run inventory by default. Writes mass_assign.json.",
+  kind: "runtime",
+  inputSchema: z.object({ recordRoot: z.string(), outputRoot, credential: z.string().optional().describe("attacker credential; default recorded headers verbatim"), exchangeIds: z.array(z.string()).optional(), fields: z.array(z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxExchanges: z.number().optional(), apply: z.boolean().optional().describe("fire injected replays; default dry-run"), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ probed: z.number(), sinks: z.array(z.object({ url: z.string(), field: z.string(), verdict: z.string(), note: z.string() })) }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "radar", input: { recordRoot: "/tmp/recon", outputRoot: "/tmp/recon", apply: true, credential: "Cookie: lowuser=…" } }],
+};
+
 export const ALL_CONTRACTS: readonly ToolContract[] = [
   dnsResolveContract,
   httpProbeContract,
@@ -1052,6 +1076,8 @@ export const ALL_CONTRACTS: readonly ToolContract[] = [
   wafAdaptContract,
   sessionCrawlContract,
   roleMatrixContract,
+  authzReplayContract,
+  massAssignContract,
   jwtAttackContract,
   idorDeepContract,
   headerBypassContract,

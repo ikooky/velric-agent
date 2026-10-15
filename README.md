@@ -57,6 +57,8 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `jwt-inspect` — JWT 解码 + HS256 弱密钥爆破
 - `cors` — Origin 变体(反射/null/localhost/后缀匹配)
 - `probe-params` — 参数差分(必填/开关参数识别)
+- `authz-replay` — 录制流量按低权凭据逐条重放,Autorize 式三态判定(enforced/bypassed/unknown),覆盖 GET-only 矩阵看不到的 POST/PUT/PATCH/DELETE 越权
+- `mass-assign` — 向录制变更请求注入客户端从未发送的特权/归属字段(role/isAdmin/user_id/tenant_id/plan…),响应绑定即 CWE-915 sink,默认 dry-run
 
 **编排与交付**
 - `auto` — 一键管道 18 阶段(指纹→子域→静态→运行时→验证→报告)，stage 级 checkpoint 断点续跑

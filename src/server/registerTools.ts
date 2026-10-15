@@ -660,6 +660,18 @@ export const handlers: Readonly<Record<string, Handler>> = {
     const { probeRoleMatrix } = await import("../domain/roleMatrix.js");
     return probeRoleMatrix(p);
   },
+  authz_replay: async (raw) => {
+    const p = z.object({ recordRoot: z.string(), outputRoot: z.string(), roles: z.record(z.string(), z.string()), roleHeaders: z.record(z.string(), z.record(z.string(), z.string())).optional(), exchangeIds: z.array(z.string()).optional(), methods: z.array(z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxExchanges: z.number().optional(), denyFingerprints: z.array(z.string()).optional(), readOnly: z.boolean().optional(), apply: z.boolean().optional() }).parse(raw);
+    const { replayAuthz } = await import("../domain/authzReplay.js");
+    const r = await replayAuthz(p);
+    return { replayed: r.replayed, bypassed: r.bypassed.map((c) => ({ url: c.url, role: c.role, note: c.note })), enforced: r.enforced.length, unknown: r.unknown.length, artifacts: r.artifacts };
+  },
+  mass_assign: async (raw) => {
+    const p = z.object({ recordRoot: z.string(), outputRoot: z.string(), credential: z.string().optional(), exchangeIds: z.array(z.string()).optional(), fields: z.array(z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxExchanges: z.number().optional(), apply: z.boolean().optional() }).parse(raw);
+    const { probeMassAssign } = await import("../domain/massAssign.js");
+    const r = await probeMassAssign(p);
+    return { probed: r.probed, sinks: r.sinks.map((o) => ({ url: o.url, field: o.field, verdict: o.verdict, note: o.note })), outcomes: r.outcomes, artifacts: r.artifacts };
+  },
   jwt_attack: async (raw) => {
     const p = z.object({ token: z.string(), endpoint: z.string(), outputRoot: z.string(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), secretCandidates: z.array(z.string()).optional() }).parse(raw);
     const { probeJwtAttack } = await import("../domain/jwtAttack.js");
