@@ -160,8 +160,9 @@ export const probePaths = async (input: PathProbeInput): Promise<PathProbeResult
       let authFinalPath = "";
       try { authFinalPath = new URL(r.finalUrl ?? "").pathname.replace(/\/$/, ""); } catch { /* not a URL */ }
       const probedNorm = p.replace(/\/$/, "");
-      if (authFinalPath !== "" && authFinalPath !== probedNorm && /sign[_-]?in\b|\blogin\b|signin|sso/i.test(r.finalUrl ?? "") && r.status >= 200 && r.status < 400) {
-        const flagged = `${p}  [authwall: → ${r.finalUrl.slice(0, 90)}]`;
+      const authFinal = r.finalUrl ?? "";
+      if (authFinalPath !== "" && authFinalPath !== probedNorm && /sign[_-]?in\b|\blogin\b|signin|sso/i.test(authFinal) && r.status >= 200 && r.status < 400) {
+        const flagged = `${p}  [authwall: → ${authFinal.slice(0, 90)}]`;
         sigCounts.set(respSig, (sigCounts.get(respSig) ?? 0) + 1);
         found.push({ path: flagged, status: 302, bytes: r.bytes, contentType: r.contentType.slice(0, 60), signature: respSig });
         continue;
