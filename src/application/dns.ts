@@ -38,6 +38,8 @@ export const resolveHost = async (host: string): Promise<DnsResult> => {
   return {
     host,
     answers,
-    ...(answers.length === 0 && errors.length > 0 ? { error: errors.join("; ") } : {}),
+    // Partial failures (some types resolved, others timed out) must stay
+    // visible — the old gate dropped errors whenever ANY answer existed.
+    ...(errors.length > 0 ? { error: errors.join("; ") } : {}),
   };
 };

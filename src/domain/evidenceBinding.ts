@@ -1,5 +1,5 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { EvidenceStore } from "./graphs.js";
 
 /** Finding↔evidence binding lifecycle (velric 漏洞流量证据.md, deterministic
@@ -152,7 +152,7 @@ export const exportBindings = async (input: {
   files["index.md"] = new Uint8Array(Buffer.from(md.join("\n")));
   const zipped = zipSync(files);
   const { writeFile } = await import("node:fs/promises");
-  await import("node:fs/promises").then((fs) => fs.mkdir(join(input.zipPath, ".."), { recursive: true }));
+  await import("node:fs/promises").then((fs) => fs.mkdir(dirname(input.zipPath), { recursive: true }));
   await writeFile(input.zipPath, zipped);
   return { entries: f.bindings.length, zipBytes: zipped.length };
 };

@@ -45,6 +45,10 @@ export interface ReplayInput {
   readonly proxy?: string;
   readonly timeoutMs?: number;
   readonly maxExchanges?: number;
+  /** Fire the TAMPERED replays (the live baseline replay always runs).
+   *  Default OFF: a tampered POST/PUT against a live target can repeat a
+   *  state change (double order, price edit) — opt in per run. */
+  readonly applyTamper?: boolean;
 }
 
 export interface ReplayOutcome {
@@ -56,7 +60,7 @@ export interface ReplayOutcome {
   readonly value: string;
   readonly baselineStatus: number | null;
   readonly replayStatus: number;
-  readonly verdict: "accepted-tamper" | "rejected" | "same-response" | "error" | "skip";
+  readonly verdict: "accepted-tamper" | "rejected" | "same-response" | "error" | "skip" | "dry-run";
   /** response body hash moved AND status stayed 2xx — server acted on tampered input */
   readonly contentChanged: boolean;
 }
@@ -176,6 +180,16 @@ export const replayTamper = async (input: ReplayInput): Promise<ReplayResult> =>
       }
       if (!applied) continue;
 
+      if (input.applyTamper !== true) {
+        // Dry-run (default): the differential was computed, but firing the
+        // tampered mutation against the live target needs an explicit opt-in.
+        outcomes.push({
+          exchangeId: e.id, method: e.method, url: e.url, rule: rule.label, field: rule.field,
+          value: String(rule.value), baselineStatus: live.status, replayStatus: -1,
+          verdict: "dry-run", contentChanged: false,
+        });
+        continue;
+      }
       const r = await fetchUrl(target, { ...opts, method: e.method, headers, body: reqBody });
       const rFp = `${r.status}:${r.sha256?.slice(0, 16) ?? ""}`;
       const contentChanged = rFp !== liveFp;

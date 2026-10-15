@@ -7,6 +7,20 @@ import { join } from "node:path";
 
 const buckets = new Map<string, Bucket>();
 
+// Idle-prune sweeper: the drain-path prune only fires when NEW acquires
+// queue up, so a host probed once leaks its bucket forever. A 60s sweep
+// keeps the map bounded without timers per bucket.
+if (typeof setInterval === "function" && !(globalThis as { __velricRateSweep?: boolean }).__velricRateSweep) {
+  (globalThis as { __velricRateSweep?: boolean }).__velricRateSweep = true;
+  const sweep = setInterval((): void => {
+    const now = Date.now();
+    for (const [k, b] of buckets) {
+      if (b.queue.length === 0 && !b.draining && now - b.lastAt > 60000) buckets.delete(k);
+    }
+  }, 60000);
+  sweep.unref?.();
+}
+
 interface Bucket {
   readonly interval: number;
   lastAt: number;

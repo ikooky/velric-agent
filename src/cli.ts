@@ -389,7 +389,17 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
           return 2;
         }
         const { discoverSubdomains } = await import("./domain/subdomains.js");
-        const wl = typeof flags.wordlist === "string" && flags.wordlist.trim() !== "" ? (await import("node:fs/promises")).readFile(flags.wordlist, "utf8").then((t) => t.split("\n").map((l) => l.trim()).filter((l) => l !== "" && !l.startsWith("#"))).catch(() => undefined) : undefined;
+        let wl: string[] | undefined;
+        if (typeof flags.wordlist === "string" && flags.wordlist.trim() !== "") {
+          try {
+            const t = await (await import("node:fs/promises")).readFile(flags.wordlist, "utf8");
+            wl = t.split("\n").map((l) => l.trim()).filter((l) => l !== "" && !l.startsWith("#"));
+          } catch (err) {
+            // A requested-but-unreadable wordlist must be loud, not a silent
+            // empty brute pass the user believes ran.
+            console.error(`wordlist unreadable (${(err as Error).message}) — falling back to built-in prefixes`);
+          }
+        }
         out(await discoverSubdomains({ domain, outputRoot: dir, proxy: await resolveProxy(flags), wordlist: await wl }));
         return 0;
       }
@@ -636,14 +646,21 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
         const rec = new TrafficRecorder({ outputRoot: dir, port: num(flags.port), upstreamProxy: typeof flags.upstream === "string" ? flags.upstream : undefined, maxExchanges: num(flags.max), mitm: flags.mitm === true });
         const port = await rec.start(num(flags.port) || 0);
         console.error(`recorder listening on 127.0.0.1:${port}`);
+        // Ctrl-C must flush and release the port — the old bare hang had no
+        // signal handling and rec.stop() was unreachable.
+        const stopped = new Promise<void>((resolve) => {
+          const stop = (): void => { void rec.stop().finally(resolve); };
+          process.once("SIGINT", stop);
+          process.once("SIGTERM", stop);
+        });
         if (flags.daemon) {
           const secs = num(flags.seconds) || 3600;
           await new Promise((r) => setTimeout(r, secs * 1000));
+          await rec.stop();
         } else {
           console.error("press Ctrl-C to stop; exchanges: " + rec.getExchanges().length);
-          await new Promise(() => {});
+          await stopped;
         }
-        await rec.stop();
         return 0;
       }
       case "asset-graph": {

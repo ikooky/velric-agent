@@ -219,8 +219,11 @@ export const probeOob = async (input: OobProbeInput): Promise<OobProbeResult> =>
     await new Promise((r) => setTimeout(r, 3000));
     for (const i of await client.poll()) {
       // fullId is unreliable (observed empty on live traffic) — key on
-      // protocol+timestamp+remoteAddr instead.
-      const key = `${i.protocol}:${i.timestamp}:${i.remoteAddr}`;
+      // protocol+timestamp+remoteAddr PLUS a raw-request fingerprint: two
+      // distinct callbacks in the same second from the same resolver were
+      // merged into one, undercounting confirmations.
+      const rawFp = String(i.rawRequest ?? "").slice(0, 96);
+      const key = `${i.protocol}:${i.timestamp}:${i.remoteAddr}:${rawFp}`;
       seen.set(key, i);
     }
     // keep polling the full window: interactions arrive with jitter

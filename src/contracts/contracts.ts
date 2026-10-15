@@ -838,7 +838,7 @@ export const replayTamperContract: ToolContract = {
   description:
     "Re-fires recorded exchanges (traffic.ndjson + blobs from traffic_record) with business-logic tampering — price=0.01, quantity=-1, step-skip, role=admin, status=paid — against a LIVE re-measured baseline. Accepted tampers = server trusts client-side business fields. Writes replay_tamper.json.",
   kind: "runtime",
-  inputSchema: z.object({ recordRoot: z.string(), outputRoot, exchangeIds: z.array(z.string()).optional(), rules: z.array(z.object({ field: z.string(), in: z.enum(["body", "query"]), value: z.union([z.string(), z.number(), z.boolean(), z.null()]), label: z.string().optional() })).optional(), cookie: z.string().optional(), extraHeaders: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxExchanges: z.number().optional(), observationLedgerRoot: LEDGER }),
+  inputSchema: z.object({ recordRoot: z.string(), outputRoot, exchangeIds: z.array(z.string()).optional(), rules: z.array(z.object({ field: z.string(), in: z.enum(["body", "query"]), value: z.union([z.string(), z.number(), z.boolean(), z.null()]), label: z.string().optional() })).optional(), cookie: z.string().optional(), extraHeaders: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxExchanges: z.number().optional(), applyTamper: z.boolean().optional().describe("fire tampered replays; default dry-run"), observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ replayed: z.number(), accepted: z.array(z.object({ rule: z.string(), field: z.string() })) }),
   annotations: writingAnnotations(),
   examples: [{ title: "replay", input: { recordRoot: "/tmp/recon", outputRoot: "/tmp/recon" } }],

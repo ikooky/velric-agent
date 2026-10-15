@@ -69,10 +69,31 @@ const SURFACES: Surface[] = [
   { path: "/metrics", kind: "metrics-endpoint" },
 ];
 
+/** Body signature robust to embedded random tokens (mirrors pathProbe):
+ *  SPA catch-alls answer 200 to /admin too — a signature identical to the
+ *  random-path baseline is the soft-404 page, not a real panel. */
+const sigOf = (status: number, bytes: number, contentType: string, body: string): string => {
+  const kind = contentType.includes("json") ? "json" : contentType.includes("html") ? "html" : "other";
+  const band = bytes < 512 ? "s" : bytes < 2048 ? "m" : bytes < 16384 ? "l" : "xl";
+  const marker = kind === "json"
+    ? (body.match(/"(?:error|message|code|msg|status)"\s*:/) ?? [""])[0]
+    : kind === "html"
+      ? (body.match(/<(?:title|h1)[^>]*>([^<]{0,60})/) ?? [""])[0]
+      : "";
+  return `${status}:${kind}:${band}:${marker}`;
+};
+
 export const probeAdminSurface = async (input: AdminSurfaceInput): Promise<AdminSurfaceResult> => {
   await mkdir(input.outputRoot, { recursive: true });
   const opts = { proxy: input.proxy, timeoutMs: input.timeoutMs ?? 8000, cookie: input.cookie, headers: input.headers };
   const base = input.baseUrl.replace(/\/+$/, "");
+
+  // Soft-404 calibration: 3 random paths → the catch-all signature to EXCLUDE.
+  const softSigs = new Set<string>();
+  for (const rnd of ["/zzqq-velric-404-a", "/zzqq-velric-404-b", "/zzqq-velric-404-c"]) {
+    const r = await fetchUrl(base + rnd, opts);
+    if (r.status > 0) softSigs.add(sigOf(r.status, r.bytes, r.contentType, r.body));
+  }
 
   const found: AdminSurfaceFound[] = [];
   let probed = 0;
@@ -81,13 +102,15 @@ export const probeAdminSurface = async (input: AdminSurfaceInput): Promise<Admin
     const url = `${base}${s.path}`;
     probed += 1;
     const r = await fetchUrl(url, { ...opts, method: "GET" });
-    if (r.status >= 200 && r.status < 300 && r.bytes > 0) {
+    const isSoft404 = softSigs.has(sigOf(r.status, r.bytes, r.contentType, r.body));
+    if (r.status >= 200 && r.status < 300 && r.bytes > 0 && !isSoft404) {
       found.push({ url, kind: s.kind, status: r.status, bytes: r.bytes, evidence: s.evidence?.(r.body.slice(0, 4096)) });
       for (const sub of s.subs ?? []) {
         const su = `${base}${sub.path}`;
         probed += 1;
         const sr = await fetchUrl(su, { ...opts, method: "GET" });
-        if (sr.status >= 200 && sr.status < 300 && sr.bytes > 0) {
+        const subSoft = softSigs.has(sigOf(sr.status, sr.bytes, sr.contentType, sr.body));
+        if (sr.status >= 200 && sr.status < 300 && sr.bytes > 0 && !subSoft) {
           found.push({ url: su, kind: sub.kind, status: sr.status, bytes: sr.bytes, evidence: sub.evidence?.(sr.body.slice(0, 4096)) });
         }
       }

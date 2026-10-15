@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { enrichAssets } from "./enrich.js";
 import { harvestStatic } from "./harvest.js";
@@ -599,6 +599,12 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
     const entries = await import("node:fs/promises").then((m) => m.readdir(root, { recursive: true }));
     for (const e of entries) artifactCounts[e] = 1;
   } catch { /* ignore */ }
-  await writeFile(join(root, "pipeline.json"), JSON.stringify({ seed: input.seed, base, mode, stages, generatedAt: new Date().toISOString() }, null, 2), "utf8");
+  // Atomic (tmp+rename): a crash mid-write must not leave a half JSON that
+  // poisons the next resume's checkpoint read.
+  {
+    const tmp = join(root, `pipeline.json.${process.pid}.tmp`);
+    await writeFile(tmp, JSON.stringify({ seed: input.seed, base, mode, stages, generatedAt: new Date().toISOString() }, null, 2), "utf8");
+    await rename(tmp, join(root, "pipeline.json"));
+  }
   return { seed: input.seed, stages, reportPath, artifactCounts };
 };

@@ -631,7 +631,7 @@ export const handlers: Readonly<Record<string, Handler>> = {
     return b ?? { findingId: p.findingId, version: 0, bindings: [] };
   },
   replay_tamper: async (raw) => {
-    const p = z.object({ recordRoot: z.string(), outputRoot: z.string(), exchangeIds: z.array(z.string()).optional(), rules: z.array(z.object({ field: z.string(), in: z.enum(["body", "query"]), value: z.union([z.string(), z.number(), z.boolean(), z.null()]), label: z.string().optional() })).optional(), cookie: z.string().optional(), extraHeaders: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxExchanges: z.number().optional() }).parse(raw);
+    const p = z.object({ recordRoot: z.string(), outputRoot: z.string(), exchangeIds: z.array(z.string()).optional(), rules: z.array(z.object({ field: z.string(), in: z.enum(["body", "query"]), value: z.union([z.string(), z.number(), z.boolean(), z.null()]), label: z.string().optional() })).optional(), cookie: z.string().optional(), extraHeaders: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxExchanges: z.number().optional(), applyTamper: z.boolean().optional() }).parse(raw);
     const { replayTamper } = await import("../domain/replayTamper.js");
     return replayTamper({ ...p, rules: (p.rules ?? []).map((x) => ({ ...x, label: x.label ?? `${x.field}=${String(x.value)}` })) });
   },
