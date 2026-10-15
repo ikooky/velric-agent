@@ -143,6 +143,20 @@ export const probePaths = async (input: PathProbeInput): Promise<PathProbeResult
         const t = titleOf(r.body);
         if (t !== "" && baselineTitles.has(t)) continue;
       }
+      // Third shape channel: redirect-followed responses that landed on a
+      // path OTHER than the probed one are platform rewrites (e.g.
+      // /dump.sql → 301 → /{username} profile). Following fetch records the
+      // FINAL body/status; if finalUrl differs from the probe path, the hit
+      // is a rewrite, not the sensitive endpoint.
+      if (r.finalUrl) {
+        let finalPath = "";
+        try { finalPath = new URL(r.finalUrl).pathname; } catch { /* keep */ }
+        const probedPath = p.replace(/\/$/, "");
+        if (finalPath !== "" && finalPath.replace(/\/$/, "") !== probedPath) {
+          found.push({ path: `${p}  [redirectrw: → ${finalPath}]`, status: r.status, bytes: r.bytes, contentType: r.contentType.slice(0, 60), signature: respSig });
+          continue;
+        }
+      }
       if (r.status === 404 || r.status === 410) continue;
       // 401/403 are interesting (path exists, protected) — record with flag
       sigCounts.set(respSig, (sigCounts.get(respSig) ?? 0) + 1);

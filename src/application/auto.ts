@@ -382,7 +382,7 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
       // wildcard-suspect rows are /{param} route renderings (title echoes the
       // probed segment, e.g. a username-profile page), never the endpoint
       // itself — excluded from the HIGH bucket, still visible in the artifact.
-      const high = lines.filter((l) => /^200/.test(l) && !l.includes("[wildcard-suspect")
+      const high = lines.filter((l) => /^200/.test(l) && !l.includes("[wildcard-suspect") && !l.includes("[redirectrw")
         && /\.git|\.env|swagger|api-docs|actuator\/env|heapdump|druid|pprof|backup|dump\.sql|WEB-INF|\.well-known\/openid-configuration|\.well-known\/oauth-authorization-server/.test(l));
       if (high.length > 0) {
         fList.push({
@@ -394,7 +394,9 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
       }
       // Auth-relevant statuses: 401/403 (explicit auth) and 302 (auth
       // redirect to login) — plain 301/303 rewrites are NOT protected paths.
-      const protectedPaths = lines.filter((l) => /^40[13]|^302/.test(l));
+      // catch-all cluster members share one 403/401 page — a rewrite, not an
+      // auth gate on each of those paths. Only unclustered rows count.
+      const protectedPaths = lines.filter((l) => /^40[13]|^302/.test(l) && !l.includes("[catch-all"));
       if (protectedPaths.length > 0) {
         fList.push({
           name: `受保护路径存在 ${protectedPaths.length} 个`,
