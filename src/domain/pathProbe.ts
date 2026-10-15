@@ -72,17 +72,35 @@ export const probePaths = async (input: PathProbeInput): Promise<PathProbeResult
 
   // Soft-404 calibration: 3 random paths → consensus signature + real byte
   // sizes (exact, not band midpoints — used for the size-proximity guard).
+  // Baseline pages can render in more than one shape: some platforms answer
+  // unknown top-level paths with a "not found" page but rewrite dot-file-ish
+  // names to the HOME page (Shopify: 430KB 404 title vs 715KB home title).
+  // Both shapes are catch-alls — collect the baseline <title> set as a second
+  // discriminator so a home-rewrite never scores as a sensitive-path hit.
   const baselineSigs = new Set<string>();
+  const baselineTitles = new Set<string>();
   let baselineBytes = 0;
   let baselineN = 0;
-  for (const rnd of ["/zzqq-velric-404-a", "/zzqq-velric-404-b", "/zzqq-velric-404-c"]) {
+  const titleOf = (body: string): string =>
+    (body.match(/<title[^>]*>([^<]{0,120})<\/title>/i)?.[1] ?? "").trim().toLowerCase();
+  const BASELINE_RANDOM_PATHS = ["/zzqq-velric-404-a", "/zzqq-velric-404-b", "/zzqq-velric-404-c"];
+  for (const rnd of BASELINE_RANDOM_PATHS) {
     const r = await fetchUrl(base + rnd, opts);
     if (r.status > 0) {
       baselineSigs.add(bodySignature(r.status, r.bytes, r.contentType, r.body));
+      const bt = titleOf(r.body);
+      if (bt !== "") baselineTitles.add(bt);
       baselineBytes += r.bytes;
       baselineN += 1;
     }
   }
+  // Direct home-page shape: fetch "/" once — a probe path whose body title
+  // equals the HOME title (and is HTML) is a home-rewrite catch-all too.
+  try {
+    const home = await fetchUrl(base + "/", opts);
+    const ht = titleOf(home.body);
+    if (home.status > 0 && ht !== "") baselineTitles.add(ht);
+  } catch { /* home fetch failure: title channel simply stays smaller */ }
   const soft404Signature = baselineSigs.size > 0 ? [...baselineSigs] : null;
   const soft404Bytes = baselineN > 0 ? Math.round(baselineBytes / baselineN) : null;
   const soft404StatusBytes = soft404Signature
@@ -117,6 +135,14 @@ export const probePaths = async (input: PathProbeInput): Promise<PathProbeResult
       if (r.status >= 200 && r.status < 300 && soft404Signature?.includes(respSig)
         && soft404Bytes !== null && soft404Bytes > 0 && r.bytes > 0
         && (r.bytes / soft404Bytes < 2.5 && soft404Bytes / r.bytes < 2.5)) continue;
+      // Second shape channel: HTML whose <title> matches a baseline page
+      // (random-404 or home) is that catch-all page wearing a different size
+      // band — the Shopify-style home rewrite. Real endpoints (JSON, XML,
+      // distinct titles) are never affected by this rule.
+      if (r.status >= 200 && r.status < 300 && r.contentType.includes("html") && baselineTitles.size > 0) {
+        const t = titleOf(r.body);
+        if (t !== "" && baselineTitles.has(t)) continue;
+      }
       if (r.status === 404 || r.status === 410) continue;
       // 401/403 are interesting (path exists, protected) — record with flag
       sigCounts.set(respSig, (sigCounts.get(respSig) ?? 0) + 1);
