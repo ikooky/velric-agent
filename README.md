@@ -93,7 +93,7 @@ velric-agent help
 
 ## MCP 接入
 
-`velric-agent mcp` 启动 stdio MCP server:56 个工具 + 2 个 resources(`velric://driver-playbook`、`velric://workflow-guide`)+ 1 个 prompt(`hunt-driver`)。
+`velric-agent mcp` 启动 stdio MCP server:68 个工具 + 2 个 resources(`velric://driver-playbook`、`velric://workflow-guide`)+ 1 个 prompt(`hunt-driver`)。
 
 ```json
 {

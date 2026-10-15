@@ -240,7 +240,7 @@ export const huntContract = {
   outputSchema: z.object({ goal: z.string() }),
   annotations: writingAnnotations(),
   examples: [{ title: "begin", input: { goal: "对 example.com 做 API 面侦察", outputRoot: "/tmp/recon" } }],
-} as unknown as ToolContract;
+} satisfies ToolContract;
 
 export const huntRecordContract = {
   name: "hunt_record",
@@ -277,7 +277,7 @@ export const huntRecordContract = {
   outputSchema: z.object({ accepted: z.number(), dropped: z.number() }),
   annotations: writingAnnotations(),
   examples: [{ title: "record", input: { outputRoot: "/tmp/recon", facts: [{ summary: "GET /x → 200", evidence: "GET https://t/x → 200", confidence: "observed" }] } }],
-} as unknown as ToolContract;
+} satisfies ToolContract;
 
 export const huntOverviewContract = {
   name: "hunt_overview",
@@ -289,7 +289,7 @@ export const huntOverviewContract = {
   outputSchema: z.object({ overview: z.string() }),
   annotations: readOnlyAnnotations(),
   examples: [{ title: "overview", input: { outputRoot: "/tmp/recon" } }],
-} as unknown as ToolContract;
+} satisfies ToolContract;
 
 export const workflowGuideContract: ToolContract = {
   name: "workflow_guide",
@@ -403,7 +403,6 @@ export const portScanContract: ToolContract = {
     "TCP connect scan of top 67 ports (web/db/middleware/admin). Non-web open ports (redis/mongodb/es...) are direct findings. Writes ports_open.txt.",
   kind: "runtime",
   inputSchema: z.object({
-      proxy: z.string().optional().describe("egress proxy URI"),
       timeoutMs: z.number().optional().describe("per-request timeout"), host: z.string(), outputRoot, ports: z.array(z.number()).optional(), observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ open: z.array(z.object({ port: z.number(), service: z.string() })), scanned: z.number() }),
   annotations: writingAnnotations(),
@@ -533,7 +532,7 @@ export const domSinksContract: ToolContract = {
     "Static taint analysis over harvested JS: location.hash/search/referrer/name → innerHTML/eval/document.write/insertAdjacentHTML/jQuery chains. Outputs candidate sinks + trigger context. Writes dom_sinks.json.",
   kind: "runtime",
   inputSchema: z.object({
-      proxy: z.string().optional().describe("egress proxy URI"), jsDir: z.string(), outputRoot, observationLedgerRoot: LEDGER }),
+      jsDir: z.string(), outputRoot, observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ chains: z.array(z.object({ file: z.string(), source: z.string(), sink: z.string(), excerpt: z.string() })) }),
   annotations: writingAnnotations(),
   examples: [{ title: "dom", input: { jsDir: "/tmp/recon/js", outputRoot: "/tmp/recon" } }],

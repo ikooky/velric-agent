@@ -82,7 +82,7 @@ export const PHASE_TAGS: Record<string, string> = {
   probe_params: "[Phase 4 深化] 参数差分:逐个剔除参数对比响应,识别必填/开关参数",
   subdomain_enum: "[Phase 1 资产] 子域枚举:crt.sh + CNAME 链 + 词表爆破",
   port_scan: "[Phase 1 资产] TCP top-端口扫描:非 Web 开放端口直出 finding",
-  probe_paths: "[Phase 2 探测] 敏感路径:soft-404 校准,60 高信号路径",
+  probe_paths: "[Phase 2 探测] 敏感路径:soft-404 校准,高信号默认路径集",
   probe_cors: "[Phase 4 深化] CORS 配置缺陷:Origin 反射/null + credentials",
   fingerprint: "[Phase 0 指纹] WAF/CDN 识别 + 方法枚举 + Cookie 安全审计",
   wayback_urls: "[Phase 1 资产] Wayback 历史 URL:死接口/老管理面回收",

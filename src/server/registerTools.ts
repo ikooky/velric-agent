@@ -202,7 +202,10 @@ export const handlers: Readonly<Record<string, Handler>> = {
         const result = await runAutoPipeline(p);
         await writeFile(statusFile, JSON.stringify({ state: "done", startedAt: new Date().toISOString(), result }));
       } catch (e) {
-        await writeFile(statusFile, JSON.stringify({ state: "error", error: String((e as Error).message ?? e) }));
+        // The error-path write itself can fail (disk full, root removed);
+        // an unhandled rejection here kills the whole MCP process.
+        try { await writeFile(statusFile, JSON.stringify({ state: "error", error: String((e as Error).message ?? e) })); }
+        catch { /* status file unwritable — nothing more to persist */ }
       }
     })();
     return { started: true, outputRoot: p.outputRoot, statusFile, pollWith: "auto_status" };
@@ -302,12 +305,12 @@ export const handlers: Readonly<Record<string, Handler>> = {
     return probeParams(p);
   },
   subdomain_enum: async (raw) => {
-    const p = z.object({ domain: z.string(), outputRoot: z.string(), proxy: z.string().optional() }).parse(raw);
+    const p = z.object({ domain: z.string(), outputRoot: z.string(), proxy: z.string().optional(), timeoutMs: z.number().optional() }).parse(raw);
     const { discoverSubdomains } = await import("../domain/subdomains.js");
     return discoverSubdomains(p);
   },
   port_scan: async (raw) => {
-    const p = z.object({ host: z.string(), outputRoot: z.string(), ports: z.array(z.number()).optional(), timeoutMs: z.number().optional(), concurrency: z.number().optional() }).parse(raw);
+    const p = z.object({ host: z.string(), outputRoot: z.string(), ports: z.array(z.number()).optional(), timeoutMs: z.number().optional(), concurrency: z.number().optional(), proxy: z.string().optional() }).parse(raw);
     const { scanPorts } = await import("../domain/portScan.js");
     return scanPorts(p);
   },
@@ -337,7 +340,7 @@ export const handlers: Readonly<Record<string, Handler>> = {
     return detectSourceMaps(p);
   },
   auto_batch: async (raw) => {
-    const p = z.object({ seedsFile: z.string(), outputRoot: z.string(), chromiumPath: z.string().optional(), skipRuntime: z.boolean().optional(), notifyWebhook: z.string().optional() }).parse(raw);
+    const p = z.object({ seedsFile: z.string(), outputRoot: z.string(), chromiumPath: z.string().optional(), skipRuntime: z.boolean().optional(), notifyWebhook: z.string().optional(), proxy: z.string().optional(), cookie: z.string().optional() }).parse(raw);
     // Async start (batch = N × minutes); poll each target's pipeline.json.
     const { join } = await import("node:path");
     const { writeFile, mkdir } = await import("node:fs/promises");
@@ -350,7 +353,8 @@ export const handlers: Readonly<Record<string, Handler>> = {
         const result = await runBatch(p);
         await writeFile(statusFile, JSON.stringify({ state: "done", result }));
       } catch (e) {
-        await writeFile(statusFile, JSON.stringify({ state: "error", error: String((e as Error).message ?? e) }));
+        try { await writeFile(statusFile, JSON.stringify({ state: "error", error: String((e as Error).message ?? e) })); }
+        catch { /* status file unwritable — nothing more to persist */ }
       }
     })();
     return { started: true, outputRoot: p.outputRoot, statusFile, pollHint: "read batch_status.json / each target's pipeline.json" };
@@ -376,7 +380,7 @@ export const handlers: Readonly<Record<string, Handler>> = {
     return scanDomSinks(p);
   },
   jwt_inspect: async (raw) => {
-    const p = z.object({ outputRoot: z.string(), secretsFile: z.string().optional(), jsDir: z.string().optional(), token: z.string().optional() }).parse(raw);
+    const p = z.object({ outputRoot: z.string(), secretsFile: z.string().optional(), jsDir: z.string().optional(), token: z.string().optional(), proxy: z.string().optional() }).parse(raw);
     const { inspectJwt } = await import("../domain/jwt.js");
     return inspectJwt(p);
   },

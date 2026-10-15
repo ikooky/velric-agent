@@ -287,7 +287,7 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
       }
       case "enrich": {
         const seeds = positional.filter((p) => !p.startsWith("-"));
-        const dir = flags.out as string | undefined;
+        const dir = typeof flags.out === "string" ? flags.out : undefined;
         if (seeds.length === 0 || !dir) {
           console.error("usage: enrich <seed...> --out DIR [--no-http] [--proxy URL] [--cookie STR] [--timeout MS]");
           return 2;

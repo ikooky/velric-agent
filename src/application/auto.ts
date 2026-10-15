@@ -183,7 +183,9 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
   }
 
   // ---- Stage 4: runtime capture (if chromium) ----
-  const chromium = input.chromiumPath ?? "/usr/bin/chromium";
+  // Let captureRuntime's env-aware resolver (VELRIC_CHROMIUM/CHROMIUM +
+  //  common paths) pick the binary — a hardcoded default shadowed it.
+  const chromium = input.chromiumPath;
   let runtimeCalls = 0;
   if (!input.skipRuntime) {
     // Heavy SPAs can crash the renderer under memory pressure (gitlab: Target
@@ -493,6 +495,7 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ query: "{ __schema { queryType { name } } }" }),
         timeoutMs: 8000,
+        proxy: input.proxy,
       });
       // 'errors' alone is NOT evidence of a GraphQL endpoint — 200+errors is
       // the standard GraphQL AUTH-FAILURE shape; require schema structure.
