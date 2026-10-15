@@ -26,6 +26,11 @@ export interface FingerprintResult {
     httpOnly: boolean;
     sameSite: string | null;
   }[];
+  /** security-header audit + CSP evaluation + TLS audit (Wapiti-style). */
+  readonly securityHeaders?: Record<string, { present: boolean; value?: string; note?: string }>;
+  readonly missingHeaders?: string[];
+  readonly cspFindings?: string[];
+  readonly tls?: import("./tlsAudit.js").TlsAudit | null;
   readonly artifacts: { path: string; bytes: number }[];
 }
 
@@ -109,7 +114,50 @@ export const fingerprint = async (input: FingerprintInput): Promise<FingerprintR
     if (typeof v === "string" && v.length > 0) techHeaders[k] = v;
   }
 
-  const result = { baseUrl: base, waf: [...new Set(waf)], methods: { allowed, putWorks, traceWorks }, cookies, techHeaders };
+  // Security-header audit (Wapiti-style): presence + value sanity of the
+  // OWASP recommended response headers.
+  const securityHeaders: Record<string, { present: boolean; value?: string; note?: string }> = {};
+  const expect = (h: string, note: string): void => {
+    const v = r.headers[h];
+    securityHeaders[h] = v ? { present: true, value: v.slice(0, 200) } : { present: false, note };
+  };
+  expect("strict-transport-security", "missing HSTS — protocol downgrade space");
+  expect("x-frame-options", "missing XFO — clickjacking space (or use CSP frame-ancestors)");
+  expect("x-content-type-options", "missing nosniff — MIME confusion space");
+  expect("referrer-policy", "missing referrer policy — URL leakage via Referer");
+  expect("content-security-policy", "missing CSP — injection containment absent");
+  expect("permissions-policy", "missing permissions policy — powerful features ungated");
+  const missingHeaders = Object.entries(securityHeaders).filter(([, v]) => !v.present).map(([k]) => k);
+
+  // CSP mini-evaluator: parse the policy and flag weak directives.
+  const csp = r.headers["content-security-policy"];
+  const cspFindings: string[] = [];
+  if (csp) {
+    const policies = csp.split(";");
+    for (const pol of policies) {
+      const [dir, ...vals] = pol.trim().split(/\s+/);
+      const d = (dir ?? "").toLowerCase();
+      if (d === "default-src" || d === "script-src") {
+        if (vals.includes("*")) cspFindings.push(`${d} includes wildcard *`);
+        if (vals.some((v) => /(?:^|\.)example(?:d)?omain/i.test(v))) cspFindings.push(`${d} references example domain (template leftover)`);
+      }
+      if (d === "script-src" && vals.includes("'unsafe-inline'")) cspFindings.push("script-src allows 'unsafe-inline'");
+      if (d === "script-src" && vals.includes("'unsafe-eval'")) cspFindings.push("script-src allows 'unsafe-eval'");
+      if (d === "object-src" && vals.includes("'none'")) cspFindings.push("object-src 'none' (good)"); // positive marker
+      if (d === "upgrade-insecure-requests") cspFindings.push("upgrade-insecure-requests present (good)");
+    }
+    if (!policies.some((p) => /^default-src/i.test(p.trim()))) cspFindings.push("no default-src fallback directive");
+  }
+
+  // TLS config audit: protocol versions + cert validity + weak ciphers via
+  // node:tls (sslscan-lite). Only for https targets.
+  let tls: FingerprintResult["tls"] = null;
+  if (base.startsWith("https://")) {
+    const { connectTlsAudit } = await import("./tlsAudit.js");
+    tls = await connectTlsAudit(new URL(base));
+  }
+
+  const result = { baseUrl: base, waf: [...new Set(waf)], methods: { allowed, putWorks, traceWorks }, cookies, techHeaders, securityHeaders, missingHeaders, cspFindings, tls };
   const path = join(input.outputRoot, "fingerprint.json");
   const body = JSON.stringify(result, null, 2);
   await writeFile(path, body);

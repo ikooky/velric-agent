@@ -1,4 +1,5 @@
 import { fetchUrl } from "../adapters/http.js";
+import { resolveWith } from "./dnsResolve.js";
 
 /** Subdomain enumeration: certificate transparency (crt.sh) + CNAME chain
  *  walking + small high-frequency wordlist brute force. All deterministic,
@@ -111,29 +112,8 @@ const crtShQuery = async (domain: string, timeoutMs?: number, proxy?: string): P
 
 interface DnsAnswer { type: string; value: string }
 
-const resolve = async (
-  host: string,
-  resolvers?: string[],
-): Promise<{ a: string[]; cname: string[] }> => {
-  const { resolve4, resolveCname, Resolver } = await import("node:dns").then((m) => m.promises);
-  try {
-    const a = await resolve4(host);
-    return { a, cname: [] };
-  } catch { /* next */ }
-  try {
-    const cname = await resolveCname(host);
-    return { a: [], cname };
-  } catch { /* next */ }
-  if (resolvers && resolvers.length > 0) {
-    try {
-      const r = new Resolver();
-      r.setServers(resolvers);
-      const a: string[] = await r.resolve4(host);
-      return { a, cname: [] };
-    } catch { /* give up */ }
-  }
-  return { a: [], cname: [] };
-};
+const resolve = (host: string, resolvers?: string[]): Promise<{ a: string[]; cname: string[] }> =>
+  resolveWith(host, resolvers);
 
 export const discoverSubdomains = async (
   input: SubdomainInput,

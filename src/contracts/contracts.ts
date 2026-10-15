@@ -437,9 +437,9 @@ export const corsContract: ToolContract = {
 
 export const fingerprintContract: ToolContract = {
   name: "fingerprint",
-  title: "WAF/CDN + methods + cookies",
+  title: "WAF/CDN + methods + cookies + security headers + TLS",
   description:
-    "WAF/CDN identification from header signatures (cloudflare/aliyun/qcloud/safedog/baota...), HTTP method enumeration (OPTIONS Allow + PUT/TRACE), Set-Cookie security audit (Secure/HttpOnly/SameSite). Writes fingerprint.json.",
+    "WAF/CDN identification from header signatures, HTTP method enumeration (OPTIONS Allow + PUT/TRACE), Set-Cookie security audit, security-header audit (HSTS/XFO/nosniff/Referrer-Policy/CSP + CSP weak-directive evaluation), and TLS config audit (negotiated protocol/cipher, cert expiry, legacy TLS1.0/1.1 acceptance). Writes fingerprint.json.",
   kind: "runtime",
   inputSchema: z.object({
       proxy: z.string().optional().describe("egress proxy URI"), baseUrl: z.string(), outputRoot, cookie: z.string().optional(), observationLedgerRoot: LEDGER }),
@@ -1017,6 +1017,54 @@ export const massAssignContract: ToolContract = {
   examples: [{ title: "radar", input: { recordRoot: "/tmp/recon", outputRoot: "/tmp/recon", apply: true, credential: "Cookie: lowuser=…" } }],
 };
 
+export const piiScanContract: ToolContract = {
+  name: "pii_scan",
+  title: "Sensitive-data exposure over recorded traffic",
+  description:
+    "Scans every response blob in a traffic recording for PII movement (email/phone/card/national-ID/JWT) and credential PAIRS (jsluice pairing: key id + secret co-occurring), attributing each hit to the exact method+URL. Local batch — no re-firing. Writes pii_exposure.json.",
+  kind: "runtime",
+  inputSchema: z.object({ recordRoot: z.string(), outputRoot, skipBinary: z.boolean().optional(), maxBlobs: z.number().optional() }),
+  outputSchema: z.object({ blobsScanned: z.number(), exposures: z.array(z.object({ method: z.string(), url: z.string(), kinds: z.record(z.string(), z.number()) })), credentialPairs: z.array(z.object({ name: z.string(), url: z.string() })) }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "scan", input: { recordRoot: "/tmp/recon", outputRoot: "/tmp/recon" } }],
+};
+
+export const hiddenParamsContract: ToolContract = {
+  name: "mine_hidden_params",
+  title: "Hidden-parameter miner (paired differential)",
+  description:
+    "Guesses parameter NAMES the app never advertised: fires each candidate with/without (both cache-busted), flags pairs where responses differ, confirms twice. Wordlist + vocabulary learned from response content (Param-Miner style). Writes hidden_params.json.",
+  kind: "runtime",
+  inputSchema: z.object({ url: z.string(), outputRoot, in: z.enum(["query", "cookie", "header"]).optional(), words: z.array(z.string()).optional(), learn: z.boolean().optional(), method: z.string().optional(), body: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), cookie: z.string().optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxWords: z.number().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ probed: z.number(), found: z.array(z.object({ param: z.string(), in: z.string(), evidence: z.string() })) }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "mine", input: { url: "https://target/api/profile", outputRoot: "/tmp/recon" } }],
+};
+
+export const subdomainAlterContract: ToolContract = {
+  name: "subdomain_alter",
+  title: "Subdomain alteration engine",
+  description:
+    "Amass/gotator-style permutation of KNOWN subdomains (dev -> dev2/dev-qa/pre.dev..., ops-vocabulary cross products, digit increments, label splits) then DNS resolution. Finds hosts no wordlist or CT log contains. Writes subdomain_alterations.json.",
+  kind: "runtime",
+  inputSchema: z.object({ hosts: z.array(z.string()), domain: z.string(), outputRoot, resolve: z.boolean().optional(), maxCandidates: z.number().optional(), nameservers: z.array(z.string()).optional(), concurrency: z.number().optional() }),
+  outputSchema: z.object({ generated: z.number(), resolved: z.array(z.object({ host: z.string(), ips: z.array(z.string()) })) }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "alter", input: { hosts: ["api.example.com", "dev.example.com"], domain: "example.com", outputRoot: "/tmp/recon" } }],
+};
+
+export const backupFindContract: ToolContract = {
+  name: "find_backups",
+  title: "Backup-file discovery",
+  description:
+    "Probes backup suffixes (.bak/.old/.swp/~/.tar.gz/.zip/.sql...) and root dump names (www.tar.gz, dump.sql) for known live paths, with soft-404 calibration. Feeds backup-unpack. Writes backup_candidates.json.",
+  kind: "runtime",
+  inputSchema: z.object({ baseUrl: z.string(), outputRoot, targets: z.array(z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxCandidates: z.number().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ probed: z.number(), found: z.array(z.object({ url: z.string(), status: z.number(), bytes: z.number() })) }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "find", input: { baseUrl: "https://target/", outputRoot: "/tmp/recon" } }],
+};
+
 export const ALL_CONTRACTS: readonly ToolContract[] = [
   dnsResolveContract,
   httpProbeContract,
@@ -1078,6 +1126,10 @@ export const ALL_CONTRACTS: readonly ToolContract[] = [
   roleMatrixContract,
   authzReplayContract,
   massAssignContract,
+  piiScanContract,
+  hiddenParamsContract,
+  subdomainAlterContract,
+  backupFindContract,
   jwtAttackContract,
   idorDeepContract,
   headerBypassContract,

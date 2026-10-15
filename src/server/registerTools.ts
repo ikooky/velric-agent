@@ -672,6 +672,38 @@ export const handlers: Readonly<Record<string, Handler>> = {
     const r = await probeMassAssign(p);
     return { probed: r.probed, sinks: r.sinks.map((o) => ({ url: o.url, field: o.field, verdict: o.verdict, note: o.note })), outcomes: r.outcomes, artifacts: r.artifacts };
   },
+  pii_scan: async (raw) => {
+    const p = z.object({ recordRoot: z.string(), outputRoot: z.string(), skipBinary: z.boolean().optional(), maxBlobs: z.number().optional() }).parse(raw);
+    const { scanTrafficPii } = await import("../domain/piiScan.js");
+    const r = await scanTrafficPii(p);
+    return {
+      blobsScanned: r.blobsScanned,
+      exposures: r.exposures.map((e) => ({ method: e.method, url: e.url, kinds: e.kinds })),
+      credentialPairs: r.credentialPairs.map((c) => ({ name: c.name, url: c.url, method: c.method })),
+      artifacts: r.artifacts,
+    };
+  },
+  mine_hidden_params: async (raw) => {
+    const p = z.object({ url: z.string(), outputRoot: z.string(), in: z.enum(["query", "cookie", "header"]).optional(), words: z.array(z.string()).optional(), learn: z.boolean().optional(), method: z.string().optional(), body: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), cookie: z.string().optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxWords: z.number().optional() }).parse(raw);
+    const { mineHiddenParams } = await import("../domain/hiddenParams.js");
+    return mineHiddenParams(p);
+  },
+  subdomain_alter: async (raw) => {
+    const p = z.object({ hosts: z.array(z.string()), domain: z.string(), outputRoot: z.string(), resolve: z.boolean().optional(), maxCandidates: z.number().optional(), nameservers: z.array(z.string()).optional(), concurrency: z.number().optional() }).parse(raw);
+    const { alterSubdomains } = await import("../domain/subdomainAlter.js");
+    const r = await alterSubdomains(p);
+    const { writeFile: wf, mkdir: mk } = await import("node:fs/promises");
+    await mk(p.outputRoot, { recursive: true });
+    const bodyStr = JSON.stringify({ generated: r.generated, resolved: r.resolved, samples: r.samples }, null, 2);
+    const path = (await import("node:path")).join(p.outputRoot, "subdomain_alterations.json");
+    await wf(path, bodyStr, "utf8");
+    return { generated: r.generated, resolved: r.resolved, artifacts: [{ path, bytes: Buffer.byteLength(bodyStr) }] };
+  },
+  find_backups: async (raw) => {
+    const p = z.object({ baseUrl: z.string(), outputRoot: z.string(), targets: z.array(z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxCandidates: z.number().optional() }).parse(raw);
+    const { findBackups } = await import("../domain/backupFind.js");
+    return findBackups(p);
+  },
   jwt_attack: async (raw) => {
     const p = z.object({ token: z.string(), endpoint: z.string(), outputRoot: z.string(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), secretCandidates: z.array(z.string()).optional() }).parse(raw);
     const { probeJwtAttack } = await import("../domain/jwtAttack.js");

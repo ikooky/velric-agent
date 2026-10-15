@@ -8,8 +8,9 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 
 **资产与指纹**
 - `subdomains` — 证书透明(ct.sh + CertSpotter 兜底) + CNAME 链 + 词表 DNS 爆破
+- `subdomain-alter` — 子域排列变形引擎(dev→dev2/dev-qa/pre.dev…，ops 词表交叉+数字递增)，DNS 解析验证，发现 CT/词表都覆盖不到的资产
 - `port-scan` — TCP connect top 67 端口，非 Web 开放端口直出 finding
-- `fingerprint` — WAF/CDN 识别、HTTP 方法枚举、Cookie 安全审计、技术栈 header
+- `fingerprint` — WAF/CDN 识别、HTTP 方法枚举、Cookie 安全审计、技术栈 header、安全 header 审计(HSTS/XFO/nosniff/Referrer-Policy/CSP 弱指令评估)、TLS 配置审计(协议/套件/证书过期/旧协议接受)
 - `dns_resolve` / `http_probe` / `enrich_assets` — 解析/单点探测/资产图
 
 **静态侦察**
@@ -50,6 +51,7 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `nuclei-lite` — 模板匹配(暴露面板/泄漏特征)
 - `login-replay` — 登录自动重放,导出会话 cookie
 - `backup-unpack` — 备份/转储解包+秘密扫描
+- `find-backups` — 备份文件发现器(.bak/.old/.swp/tar.gz/sql 后缀+根转储名，soft-404 校准)，衔接 backup-unpack 成完整链
 - `sqlite-read` — SQLite 泄漏文件解析
 - `idor-prescreen` — id 类参数数值邻域差分预筛(只读)
 - `git-restore` — 泄漏 .git 源码树还原
@@ -59,6 +61,8 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `probe-params` — 参数差分(必填/开关参数识别)
 - `authz-replay` — 录制流量按低权凭据逐条重放,Autorize 式三态判定(enforced/bypassed/unknown),覆盖 GET-only 矩阵看不到的 POST/PUT/PATCH/DELETE 越权
 - `mass-assign` — 向录制变更请求注入客户端从未发送的特权/归属字段(role/isAdmin/user_id/tenant_id/plan…),响应绑定即 CWE-915 sink,默认 dry-run
+- `pii-scan` — 录制流量响应体敏感数据运动分析(邮箱/手机号/银行卡/身份证/JWT),按端点归因;凭据配对验证(AWS key+secret 共现才告警)
+- `mine-hidden-params` — 隐藏参数挖掘(成对差分+cache-buster+响应词汇自学习),发现应用从未暴露的参数名
 
 **编排与交付**
 - `auto` — 一键管道 18 阶段(指纹→子域→静态→运行时→验证→报告)，stage 级 checkpoint 断点续跑
