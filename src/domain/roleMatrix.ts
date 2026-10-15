@@ -110,7 +110,11 @@ export const probeRoleMatrix = async (input: RoleMatrixInput): Promise<RoleMatri
       // JSON access-denied body. Downgrade to ambiguous when the body smells
       // like a denial (differential discipline: content, not bare status).
       const deniedish = r.status >= 200 && r.status < 300 && /access[- ]?denied|forbidden|unauthori[sz]ed|permission denied/i.test(r.body.slice(0, 2048));
-      const access = redirectedAway ? "denied" : deniedish ? "ambiguous" : accessOf(r.status);
+      // Empty-shell rejection: phpIPAM-style apps render a 200 shell page
+      // (menus only, zero data rows) to unauthorized roles. An HTML listing
+      // page with ~no table cells is a soft denial, not access.
+      const shellDenied = r.status === 200 && r.contentType.includes("html") && (r.body.match(/<td/g) ?? []).length <= 2 && r.body.length > 3000;
+      const access = redirectedAway ? "denied" : (deniedish || shellDenied) ? "ambiguous" : accessOf(r.status);
       matrix.push({ role, endpoint: url, status: r.status, access });
     }
   }
