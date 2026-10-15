@@ -96,10 +96,16 @@ export const probePaths = async (input: PathProbeInput): Promise<PathProbeResult
   }
   // Direct home-page shape: fetch "/" once — a probe path whose body title
   // equals the HOME title (and is HTML) is a home-rewrite catch-all too.
+  let siteBrand = "";
   try {
     const home = await fetchUrl(base + "/", opts);
     const ht = titleOf(home.body);
     if (home.status > 0 && ht !== "") baselineTitles.add(ht);
+    // Brand suffix from the home title ("GitLab", "Allbirds: ..."): probe
+    // paths whose page titles end in "· <brand>" are /{user} profile
+    // renderings (gitlab.com/.env → Dmitry Mityanin · GitLab).
+    const m = ht.match(/([a-z0-9][a-z0-9 .&'-]{1,40})$/i);
+    if (m) siteBrand = m[1]!.trim().toLowerCase();
   } catch { /* home fetch failure: title channel simply stays smaller */ }
   const soft404Signature = baselineSigs.size > 0 ? [...baselineSigs] : null;
   const soft404Bytes = baselineN > 0 ? Math.round(baselineBytes / baselineN) : null;
@@ -166,7 +172,15 @@ export const probePaths = async (input: PathProbeInput): Promise<PathProbeResult
       // endpoint we probed for. Flag for review instead of dropping.
       let flag = "";
       const seg = p.replace(/\/$/, "").split("/").pop() ?? p;
-      const title = r.body.match(/<title[^>]*>([^<]{0,120})<\/title>/i)?.[1] ?? "";
+      const title = titleOf(r.body);
+      // Profile-page catch-all: title ends with the site brand ("· GitLab")
+      // but the title itself is NOT one of the baseline pages — this is the
+      // /{username} route rendering probe segments as user pages.
+      if (siteBrand !== "" && r.status >= 200 && r.status < 300
+        && r.contentType.includes("html") && !baselineTitles.has(title.toLowerCase())
+        && new RegExp(`·\\s*${siteBrand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`, "i").test(title)) {
+        flag = "  [profile-route: user page for probe segment]";
+      }
       if (title.toLowerCase().includes(seg.toLowerCase())) {
         flag = `  [wildcard-suspect: title echoes "${seg}" — likely /{param} route]`;
       }

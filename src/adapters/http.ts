@@ -139,7 +139,10 @@ const fetchOnce = async (
     } satisfies Parameters<typeof undiciFetch>[1] & {
       dispatcher?: Dispatcher;
     });
-    const finalRedirect = res.headers.get("location");
+    // Final landing URL after following redirects. res.url is undici's
+    // post-redirect URL; the Location header of the FINAL response is null
+    // once redirects are followed, so it alone can never signal a rewrite.
+    const finalRedirect = res.url && res.url !== "" ? res.url : res.headers.get("location");
     // Skip oversized bodies early (declared size) instead of buffering them.
     const declared = Number(res.headers.get("content-length") ?? 0);
     if (declared > maxBytes * 4) {
