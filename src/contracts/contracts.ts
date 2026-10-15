@@ -236,8 +236,8 @@ export const huntContract = {
   description:
     "Initialize the hunt workspace: creates/resets graph.json for the goal and returns the DRIVER PLAYBOOK (planner/worker disciplines: goal decomposition rules, hard-floor planning, quantified acceptance, evidence gates, worker red lines). The HOST agent is the brain — read the playbook, then drive tools + hunt_record/hunt_overview in a loop.",
   kind: "runtime",
-  inputSchema: z.object({ goal: z.string(), outputRoot: z.string() }),
-  outputSchema: z.object({ goal: z.string() }),
+  inputSchema: z.object({ goal: z.string(), outputRoot: z.string(), maxRounds: z.number().optional().describe("hard stop: hunt_record refuses beyond this many rounds"), maxCost: z.number().optional().describe("hard stop: host-declared cost budget"), maxDurationMin: z.number().optional().describe("hard stop: wall-clock minutes") }),
+  outputSchema: z.object({ goal: z.string() }).passthrough(),
   annotations: writingAnnotations(),
   examples: [{ title: "begin", input: { goal: "对 example.com 做 API 面侦察", outputRoot: "/tmp/recon" } }],
 } satisfies ToolContract;
@@ -391,7 +391,7 @@ export const subdomainsContract: ToolContract = {
   inputSchema: z.object({
       proxy: z.string().optional().describe("egress proxy URI"),
       timeoutMs: z.number().optional().describe("per-request timeout"), domain: z.string(), outputRoot, observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({ total: z.array(z.string()), crtSh: z.array(z.string()), bruteFound: z.array(z.object({ host: z.string(), ips: z.array(z.string()) })), wildcardDns: z.boolean() }),
+  outputSchema: z.object({ total: z.array(z.string()), crtSh: z.array(z.string()), bruteFound: z.array(z.object({ host: z.string(), ips: z.array(z.string()) })), wildcardDns: z.boolean(), takeovers: z.array(z.object({ host: z.string(), service: z.string() })).optional() }),
   annotations: writingAnnotations(),
   examples: [{ title: "enum", input: { domain: "example.com", outputRoot: "/tmp/recon" } }],
 };
@@ -814,11 +814,11 @@ export const trafficQueryContract: ToolContract = {
 
 export const reportExportContract: ToolContract = {
   name: "export_findings",
-  title: "Findings export (csv/json/md)",
+  title: "Findings export (csv/json/md/sarif)",
   description:
-    "Export a findings batch as CSV, per-finding Markdown, or JSON from report json. Writes findings.csv / findings.json / finding_<id>.md.",
+    "Export a findings batch as CSV, per-finding Markdown, JSON, or SARIF 2.1.0 (GitHub code scanning compatible) from report json. Writes findings.csv / findings.json / finding_<id>.md / findings.sarif.",
   kind: "runtime",
-  inputSchema: z.object({ reportJsonFile: z.string(), outputRoot, format: z.enum(["csv", "json", "md-all"]), observationLedgerRoot: LEDGER }),
+  inputSchema: z.object({ reportJsonFile: z.string(), outputRoot, format: z.enum(["csv", "json", "md-all", "sarif"]), observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ files: z.number() }),
   annotations: writingAnnotations(),
   examples: [{ title: "csv", input: { reportJsonFile: "/tmp/recon/report.json", outputRoot: "/tmp/recon", format: "csv" } }],
@@ -867,7 +867,7 @@ export const sessionCrawlContract: ToolContract = {
   description:
     "Authenticated crawler with live session maintenance: re-login on 401/login-redirect expiry, token refresh tracking, BFS over the endpoint surface (merged.json or explicit list) with same-origin link extraction. Keeps crawling where the anonymous spider stops. Writes session_crawl.json.",
   kind: "runtime",
-  inputSchema: z.object({ baseUrl: z.string(), outputRoot, loginUrl: z.string(), username: z.string(), password: z.string(), loginMode: z.enum(["form", "json"]).optional(), usernameField: z.string().optional(), passwordField: z.string().optional(), endpoints: z.array(z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxPages: z.number().optional(), maxRelogins: z.number().optional(), headers: z.record(z.string(), z.string()).optional(), observationLedgerRoot: LEDGER }),
+  inputSchema: z.object({ baseUrl: z.string(), outputRoot, loginUrl: z.string(), username: z.string(), password: z.string(), loginMode: z.enum(["form", "json"]).optional(), usernameField: z.string().optional(), passwordField: z.string().optional(), endpoints: z.array(z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxPages: z.number().optional(), maxRelogins: z.number().optional(), headers: z.record(z.string(), z.string()).optional(), loggedInRegex: z.string().optional().describe("content signature meaning session alive (overrides 401/redirect heuristics)"), loggedOutRegex: z.string().optional().describe("content signature meaning session dead — re-login"), observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ crawled: z.number(), relogins: z.number() }),
   annotations: writingAnnotations(),
   examples: [{ title: "crawl", input: { baseUrl: "https://target", outputRoot: "/tmp/recon", loginUrl: "https://target/login", username: "u", password: "p" } }],
@@ -1065,6 +1065,54 @@ export const backupFindContract: ToolContract = {
   examples: [{ title: "find", input: { baseUrl: "https://target/", outputRoot: "/tmp/recon" } }],
 };
 
+export const urlRefineContract1: ToolContract = {
+  name: "dedupe_urls",
+  title: "URL-pool decluttering (zero-request)",
+  description:
+    "uro-style URL list refinement without any requests: incremental-path folding (/page/1/ == /page/2/), same-path-different-value folding (?id=1 == ?id=2), static-extension drop, tracking-param strip, fuzzy ID normalization (numeric/uuid/hash -> {id}, dupdurl style). Feeds cleaner input to every downstream probe. Writes deduped_urls.txt.",
+  kind: "runtime",
+  inputSchema: z.object({ urls: z.array(z.string()), outputRoot, keepStatic: z.boolean().optional(), keepContent: z.boolean().optional(), fuzzy: z.boolean().optional(), whitelist: z.array(z.string()).optional(), params: z.enum(["has", "none"]).optional() }),
+  outputSchema: z.object({ input: z.number(), kept: z.number() }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "declutter", input: { urls: ["https://t/a?id=1", "https://t/a?id=2"], outputRoot: "/tmp/recon" } }],
+};
+
+export const urlRefineContract2: ToolContract = {
+  name: "classify_urls",
+  title: "Vulnerability-pattern URL classifier",
+  description:
+    "gf-style classification: tags URLs by param-name/path patterns into xss/ssrf/redirect/lfi/sqli/idor/debug candidate classes so downstream probes take targeted feeds. Zero requests. Writes classified_urls.json.",
+  kind: "runtime",
+  inputSchema: z.object({ urls: z.array(z.string()), outputRoot }),
+  outputSchema: z.object({ classified: z.number(), byClass: z.record(z.string(), z.array(z.string())) }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "classify", input: { urls: ["https://t/fetch?url=x"], outputRoot: "/tmp/recon" } }],
+};
+
+export const dirFuzzContract: ToolContract = {
+  name: "dir_fuzz",
+  title: "Wordlist-driven content discovery",
+  description:
+    "ffuf-style fuzzer: FUZZ keyword substitution, auto-calibration against soft-404s (random-probe baseline), extension mutation, optional recursion into discovered dirs, status/size filtering. Generalizes probe_paths to any wordlist. Writes dir_fuzz.json.",
+  kind: "runtime",
+  inputSchema: z.object({ url: z.string().describe("template containing FUZZ, e.g. https://target/FUZZ"), outputRoot, wordlistFile: z.string().optional(), words: z.array(z.string()).optional(), extensions: z.array(z.string()).optional(), recursion: z.boolean().optional(), recursionDepth: z.number().optional(), calibration: z.number().optional(), matchStatus: z.array(z.number()).optional(), filterSize: z.array(z.number()).optional(), cookie: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxWords: z.number().optional(), delayMs: z.number().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({ probed: z.number(), hits: z.array(z.object({ url: z.string(), status: z.number(), size: z.number() })) }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "fuzz", input: { url: "https://target/FUZZ", outputRoot: "/tmp/recon", words: ["admin", "backup"] } }],
+};
+
+export const screenshotContract: ToolContract = {
+  name: "screenshot",
+  title: "Screenshot evidence + template clustering",
+  description:
+    "gowitness-style capture: headless Chromium visits each URL, saves PNG + page fingerprint, clusters visually-identical pages (template detection — same CMS/error/login page across hosts), records everything into evidence manifests. Requires system Chromium. Writes screenshots/ + screenshots.json.",
+  kind: "runtime",
+  inputSchema: z.object({ urls: z.array(z.string()), outputRoot, chromiumPath: z.string().optional(), concurrency: z.number().optional(), timeoutMs: z.number().optional(), cluster: z.boolean().optional(), proxy: z.string().optional() }),
+  outputSchema: z.object({ captured: z.number(), failed: z.number(), clusters: z.record(z.string(), z.array(z.string())) }),
+  annotations: writingAnnotations(),
+  examples: [{ title: "shoot", input: { urls: ["https://target/"], outputRoot: "/tmp/recon" } }],
+};
+
 export const ALL_CONTRACTS: readonly ToolContract[] = [
   dnsResolveContract,
   httpProbeContract,
@@ -1130,6 +1178,10 @@ export const ALL_CONTRACTS: readonly ToolContract[] = [
   hiddenParamsContract,
   subdomainAlterContract,
   backupFindContract,
+  urlRefineContract1,
+  urlRefineContract2,
+  dirFuzzContract,
+  screenshotContract,
   jwtAttackContract,
   idorDeepContract,
   headerBypassContract,

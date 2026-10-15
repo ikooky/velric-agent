@@ -21,6 +21,8 @@ export interface SubdomainResult {
   readonly bruteFound: { host: string; ips: string[] }[];
   /** True when a random label resolved — wildcard DNS; brute results dropped. */
   readonly wildcardDns: boolean;
+  /** dangling-CNAME takeover candidates (service fingerprint matches). */
+  readonly takeovers?: { host: string; cname: string; service: string; note: string }[];
   readonly total: string[];
   readonly artifacts: { path: string; bytes: number }[];
 }
@@ -165,6 +167,11 @@ export const discoverSubdomains = async (
 
   const total = [...new Set([...crtSh, ...bruteFound.map((b) => b.host)])].sort();
 
+  // 4) Subdomain-takeover fingerprints (takeovers.edgewecurity-style): CNAME
+  //    chains already collected — match dangling targets against known
+  //    service fingerprint table + NXDOMAIN-friendly indicators.
+  const takeovers = detectTakeovers(cnameChain, total);
+
   const path = join(input.outputRoot, "subdomains.txt");
   const body = total.join("\n");
   await writeFile(path, body);
@@ -174,7 +181,59 @@ export const discoverSubdomains = async (
     cnameChain,
     bruteFound: bruteFound.sort((x, y) => x.host.localeCompare(y.host)),
     wildcardDns: wildcardHit,
+    takeovers,
     total,
     artifacts: [{ path, bytes: Buffer.byteLength(body) }],
   };
+};
+
+/** Dangling-service fingerprints: CNAME target pattern -> service. A hit is a
+ *  TAKEOVER CANDIDATE (verify the service response body for the canonical
+ *  "nobody has claimed this site" string before reporting). */
+const TAKEOVER_FINGERPRINTS: ReadonlyArray<readonly [string, RegExp]> = [
+  ["github_pages", /\.github\.io$/i],
+  ["heroku", /\.herokuapp\.com$/i],
+  ["heroku_dns", /\.herokudns\.com$/i],
+  ["aws_s3", /(?:^|\.)s3[.-](?:amazonaws|external-1\.amazonaws)\.com$/i],
+  ["aws_s3_website", /\.s3-website[-.][a-z0-9-]*\.amazonaws\.com$/i],
+  ["cloudfront", /\.cloudfront\.net$/i],
+  ["fastly", /\.fastly\.net$/i],
+  ["azure_cloud", /\.cloudapp\.(?:net|azure\.com)$/i],
+  ["azure_websites", /\.azurewebsites\.net$/i],
+  ["azure_trafficmanager", /\.trafficmanager\.net$/i],
+  ["pantheon", /\.pantheonsite\.io$/i],
+  ["readme", /\.readme\.io$/i],
+  ["helpjuice", /\.helpjuice\.com$/i],
+  ["helpscout", /\.helpscoutdocs\.com$/i],
+  ["bitbucket", /\.bitbucket\.io$/i],
+  ["ghost", /\.ghost\.io$/i],
+  ["tumblr", /\.tumblr\.com$/i],
+  ["wordpress", /\.wordpress\.com$/i],
+  ["unbounce", /\.unbouncepages\.com$/i],
+  ["cargocollective", /\.cargocollective\.com$/i],
+  ["statuspage", /\.statuspage\.io$/i],
+  ["surge", /\.surge\.sh$/i],
+  ["netlify", /\.netlify\.app$/i],
+  ["vercel", /\.vercel\.app$/i],
+  ["firebaseio", /\.firebaseio\.com$/i],
+  ["webflow", /\.webflow\.io$/i],
+];
+
+/** Match collected CNAME chains against the fingerprint table. Only chains
+ *  whose target matches a takeover-capable service are listed; confirmation
+ *  (service body check) stays with the host — this is a candidate list. */
+export const detectTakeovers = (
+  cnameChain: readonly { from: string; to: string }[],
+  _allHosts: readonly string[],
+): { host: string; cname: string; service: string; note: string }[] => {
+  const out: { host: string; cname: string; service: string; note: string }[] = [];
+  for (const { from, to } of cnameChain) {
+    for (const [service, re] of TAKEOVER_FINGERPRINTS) {
+      if (re.test(to)) {
+        out.push({ host: from, cname: to, service, note: "dangling-service candidate — fetch and verify the claim page body" });
+        break;
+      }
+    }
+  }
+  return out;
 };

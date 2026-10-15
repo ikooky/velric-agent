@@ -10,7 +10,7 @@
  *   hunt_record(intents/facts/findings) → gated write-back into the graph
  *   hunt_overview()                     → situation for the host's next decision
  */
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   loadGraph, saveGraph, graphOverview,
@@ -20,7 +20,52 @@ import {
 export interface HuntBeginInput {
   readonly goal: string;
   readonly outputRoot: string;
+  /** Budget caps (HackingBuddyGPT-style run limits). The hunt HARD-STOPS when
+   *  any cap is exceeded; hunt_record refuses to advance and returns the
+   *  exceeded limit. All optional — no caps means unbounded (legacy). */
+  readonly maxRounds?: number;
+  /** cost budget in currency units (host's accounting, e.g. USD). */
+  readonly maxCost?: number;
+  /** wall-clock budget in minutes. */
+  readonly maxDurationMin?: number;
 }
+
+/** Persisted hunt state beyond the graph: round counter + budget bookkeeping. */
+interface HuntBudget {
+  readonly startedAt: string;
+  rounds: number;
+  cost: number;
+  readonly caps?: { maxRounds?: number; maxCost?: number; maxDurationMin?: number };
+}
+
+const BUDGET_FILE = "hunt_budget.json";
+
+export const budgetPath = (root: string): string => join(root, BUDGET_FILE);
+
+const loadBudget = async (root: string): Promise<HuntBudget> => {
+  try {
+    return JSON.parse(await readFile(budgetPath(root), "utf8")) as HuntBudget;
+  } catch {
+    return { startedAt: new Date().toISOString(), rounds: 0, cost: 0 };
+  }
+};
+
+const saveBudget = async (root: string, b: HuntBudget): Promise<void> => {
+  await writeFile(budgetPath(root), JSON.stringify(b, null, 2), "utf8");
+};
+
+/** Check the caps; returns the exceeded limit name, or null when within budget. */
+export const budgetExceeded = (b: HuntBudget): string | null => {
+  const caps = b.caps;
+  if (!caps) return null;
+  if (caps.maxRounds != null && b.rounds > caps.maxRounds) return `maxRounds(${caps.maxRounds})`;
+  if (caps.maxCost != null && b.cost > caps.maxCost) return `maxCost(${caps.maxCost})`;
+  if (caps.maxDurationMin != null) {
+    const elapsedMin = (Date.now() - new Date(b.startedAt).getTime()) / 60000;
+    if (elapsedMin > caps.maxDurationMin) return `maxDurationMin(${caps.maxDurationMin})`;
+  }
+  return null;
+};
 
 export interface HuntRecordInput {
   readonly outputRoot: string;
@@ -32,6 +77,10 @@ export interface HuntRecordInput {
   readonly findings?: { name?: string; vulnclass?: string; severity?: string; summary?: string; poc?: string }[];
   readonly assets?: { type?: string; key?: string; props?: Record<string, unknown> }[];
   readonly goalsMet?: { id: number; reason?: string }[];
+  /** host-declared round increment (one hunt_record per round convention). */
+  readonly round?: number;
+  /** host-declared cost delta for this round (its own LLM accounting). */
+  readonly costDelta?: number;
 }
 
 /** Ledger entry — system-written record of what a tool ACTUALLY observed. */
@@ -128,7 +177,7 @@ export const DRIVER_PLAYBOOK = `# 自主侦察驱动手册(宿主 agent 执行)
 ## 收尾
 所有目标 met 或收益递减时:hunt_record(goalsMet)→ gen_report + save_evidence 交付`;
 
-export const huntBegin = async (input: HuntBeginInput): Promise<{ outputRoot: string; goal: string; driverPlaybook: string; next: string }> => {
+export const huntBegin = async (input: HuntBeginInput): Promise<{ outputRoot: string; goal: string; driverPlaybook: string; next: string; budget?: { rounds: number; cost: number; caps?: { maxRounds?: number; maxCost?: number; maxDurationMin?: number } } }> => {
   const root = input.outputRoot;
   await mkdir(root, { recursive: true });
   let g = await loadGraph(root);
@@ -139,6 +188,16 @@ export const huntBegin = async (input: HuntBeginInput): Promise<{ outputRoot: st
     // fabricated URLs — reset it with the graph.
     try { await (await import("node:fs/promises")).rm(join(root, LEDGER_FILE), { force: true }); } catch { /* absent */ }
   }
+  // budget state: fresh on new goal, preserved on re-begin of the same goal
+  let budget = await loadBudget(root);
+  const caps = { maxRounds: input.maxRounds, maxCost: input.maxCost, maxDurationMin: input.maxDurationMin };
+  const hasCaps = input.maxRounds != null || input.maxCost != null || input.maxDurationMin != null;
+  if (g.goal !== input.goal || budget.rounds === 0) {
+    budget = { startedAt: new Date().toISOString(), rounds: 0, cost: 0, ...(hasCaps ? { caps } : {}) };
+  } else if (hasCaps) {
+    budget = { ...budget, caps };
+  }
+  await saveBudget(root, budget);
   // goals stay host-managed: the host decomposes via hunt_record(intents...)
   await saveGraph(root, g);
   return {
@@ -146,6 +205,7 @@ export const huntBegin = async (input: HuntBeginInput): Promise<{ outputRoot: st
     goal: input.goal,
     driverPlaybook: DRIVER_PLAYBOOK,
     next: "调 hunt_overview 读态势;用 hunt_record 派 goals/intents;侦察工具带 observationLedgerRoot",
+    ...(budget.caps ? { budget: { rounds: budget.rounds, cost: budget.cost, caps: budget.caps } } : {}),
   };
 };
 
@@ -158,8 +218,15 @@ const norm = (u: string): string => {
   }
 };
 
-export const huntRecord = async (input: HuntRecordInput): Promise<{ graph: Graph; accepted: number; dropped: number; dropReasons: string[] }> => {
+export const huntRecord = async (input: HuntRecordInput): Promise<{ graph: Graph; accepted: number; dropped: number; dropReasons: string[]; budgetExceeded?: string }> => {
   const root = input.outputRoot;
+  // Budget gate: once any cap is exceeded the hunt is OVER — refuse writes.
+  const budget = await loadBudget(root);
+  const exceeded = budgetExceeded(budget);
+  if (exceeded != null) {
+    const g0 = await loadGraph(root);
+    return { graph: g0, accepted: 0, dropped: 0, dropReasons: [`budget exceeded: ${exceeded} — hunt hard-stopped; deliver findings now`], budgetExceeded: exceeded };
+  }
   const g = await loadGraph(root);
   const ledger = await readLedger(root);
   const requested = new Set(ledger.map((e) => norm(e.url)));
@@ -335,6 +402,15 @@ export const huntRecord = async (input: HuntRecordInput): Promise<{ graph: Graph
   }
 
   await saveGraph(root, g);
+  // budget bookkeeping: consume the host-declared round/cost, persist, and
+  // annotate the response when the caps flip past their limits THIS round.
+  budget.rounds += input.round ?? 1;
+  budget.cost += input.costDelta ?? 0;
+  await saveBudget(root, budget);
+  const nowExceeded = budgetExceeded(budget);
+  if (nowExceeded != null) {
+    return { graph: g, accepted, dropped, dropReasons, budgetExceeded: nowExceeded };
+  }
   return { graph: g, accepted, dropped, dropReasons };
 };
 

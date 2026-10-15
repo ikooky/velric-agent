@@ -32,6 +32,12 @@ export interface SessionCrawlInput {
   /** max re-login attempts over the whole crawl (default 5) */
   readonly maxRelogins?: number;
   readonly headers?: Record<string, string>;
+  /** ZAP-style content-signature liveness: when set, a response matching
+   *  loggedOutRegex means the session died (re-login), loggedInRegex means
+   *  alive. Overrides the 401/redirect heuristics for apps that answer 200
+   *  with a login page on expiry. */
+  readonly loggedInRegex?: string;
+  readonly loggedOutRegex?: string;
 }
 
 export interface SessionCrawlResult {
@@ -127,6 +133,17 @@ export const crawlSession = async (input: SessionCrawlInput): Promise<SessionCra
     (status >= 300 && status < 400 && /login|signin|auth/i.test(location)) ||
     (status === 200 && /login|session expired|please sign in/i.test(body.slice(0, 2048)) && session!.bearer === null && session!.cookie.length > 0 && /<html/i.test(body.slice(0, 200)));
 
+  // ZAP-style liveness probing: when loggedInRegex/loggedOutRegex are given,
+  // they OVERRIDE the heuristics — some apps answer 200 with a login page on
+  // expiry (no 401, no redirect); only the content signature tells truth.
+  const loggedInRe = input.loggedInRegex ? new RegExp(input.loggedInRegex) : null;
+  const loggedOutRe = input.loggedOutRegex ? new RegExp(input.loggedOutRegex) : null;
+  const sessionAlive = (status: number, location: string, body: string): boolean => {
+    if (loggedOutRe && loggedOutRe.test(body.slice(0, 4096))) return false;
+    if (loggedInRe) return loggedInRe.test(body.slice(0, 4096));
+    return !looksExpired(status, location, body);
+  };
+
   const pages: SessionCrawlResult["pages"] = [];
   const blocked: string[] = [];
   const seen = new Set<string>();
@@ -141,7 +158,7 @@ export const crawlSession = async (input: SessionCrawlInput): Promise<SessionCra
 
     const location = r.headers?.location ?? "";
     let authState: "anonymous" | "authenticated" | "expired" = "authenticated";
-    if (looksExpired(r.status, location, r.body)) {
+    if (!sessionAlive(r.status, location, r.body)) {
       authState = "expired";
       // --- re-login & retry once ----------------------------------------
       if (relogins < (input.maxRelogins ?? 5)) {

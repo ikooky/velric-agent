@@ -7,7 +7,7 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 ## 功能
 
 **资产与指纹**
-- `subdomains` — 证书透明(ct.sh + CertSpotter 兜底) + CNAME 链 + 词表 DNS 爆破
+- `subdomains` — 证书透明(ct.sh + CertSpotter 兜底) + CNAME 链 + 词表 DNS 爆破 + 26 服务子域接管指纹(github/heroku/s3/cloudfront/azure…)
 - `subdomain-alter` — 子域排列变形引擎(dev→dev2/dev-qa/pre.dev…，ops 词表交叉+数字递增)，DNS 解析验证，发现 CT/词表都覆盖不到的资产
 - `port-scan` — TCP connect top 67 端口，非 Web 开放端口直出 finding
 - `fingerprint` — WAF/CDN 识别、HTTP 方法枚举、Cookie 安全审计、技术栈 header、安全 header 审计(HSTS/XFO/nosniff/Referrer-Policy/CSP 弱指令评估)、TLS 配置审计(协议/套件/证书过期/旧协议接受)
@@ -19,6 +19,10 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `paths` — 68 条敏感路径字典，soft-404 校准 + 通配路由识别 + catch-all 聚簇
 - `sourcemaps` — 生产 .map 泄漏检测
 - `wayback` — 历史端点回收
+- `dedupe-urls` — URL 池零请求清洗(增量折叠/同路径参数值折叠/静态剔除/追踪参数剥离/模糊 ID 归一)
+- `classify-urls` — gf 式六类攻击候选分流(xss/ssrf/redirect/lfi/sqli/idor/debug)
+- `dir-fuzz` — ffuf 式词表内容发现(FUZZ 关键字+soft-404 自动校准+扩展名变异+递归)
+- `screenshot` — gowitness 式截图取证(PNG+sha256+同模板聚类)
 
 **运行时捕获**
 - `runtime` — 无头 Chromium 注入 hook(fetch/XHR/WS 全录制)，遍历路由记录真实 METHOD/URL/body
@@ -31,6 +35,7 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `coverage` — 交互枚举:菜单/Tab/表格/工具栏点击+参数触发矩阵
 - `site-map` — 结构化站点地图(API/参数/功能点/局限)
 **平台层**
+- `session-crawl` 会话活性正则探测(loggedIn/OutRegex，200-登录页失效场景)
 - `traffic-recorder` — 流量录制代理(全交换记录+sha256 blob;--mitm HTTPS 解密:内置 CA 签发+明文镜像录制)
 - `asset-graph` — 资产图(六型资产+host 链+去重)
 - `exploration-graph` — 探索图(goal→intent→fact→finding 血缘)
@@ -68,8 +73,8 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `auto` — 一键管道 18 阶段(指纹→子域→静态→运行时→验证→报告)，stage 级 checkpoint 断点续跑
 - `auto-batch` — 多目标批量 + 汇总对比 + webhook 通知
 - `run-diff` — 两次 run 的攻击面变更对比(可配 cron 做监控)
-- `gen-report` / `save-evidence` — 报告渲染 + sha256 证据存储
-- `hunt_begin` / `hunt_record` / `hunt_overview` — 宿主 agent 驱动的 hunt 循环，观察台账反幻觉闸门
+- `gen-report` / `save-evidence` — 报告渲染 + sha256 证据存储；findings 导出含 SARIF 2.1.0(GitHub code scanning 兼容)
+- `hunt_begin` / `hunt_record` / `hunt_overview` — 宿主 agent 驱动的 hunt 循环，观察台账反幻觉闸门，maxRounds/maxCost/maxDurationMin 预算硬停
 
 **网络设施**
 - `--proxy`(http/socks5)/ `--proxy-pool FILE`(轮换+失败剔除)/ `--rps N`(全局限速)

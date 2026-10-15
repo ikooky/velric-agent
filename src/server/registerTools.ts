@@ -231,7 +231,7 @@ export const handlers: Readonly<Record<string, Handler>> = {
   },
   hunt_begin: async (raw) => {
     const { huntBegin } = await import("../application/huntDriver.js");
-    const p = z.object({ goal: z.string(), outputRoot: z.string() }).parse(raw);
+    const p = z.object({ goal: z.string(), outputRoot: z.string(), maxRounds: z.number().optional(), maxCost: z.number().optional(), maxDurationMin: z.number().optional() }).parse(raw);
     return huntBegin(p);
   },
   hunt_record: async (raw) => {
@@ -261,7 +261,7 @@ export const handlers: Readonly<Record<string, Handler>> = {
           key: z.string().optional(),
           props: z.record(z.string(), z.unknown()).optional(),
         })).optional(),
-        goalsMet: z.array(z.object({ id: z.number(), reason: z.string().optional() })).optional(),
+        goalsMet: z.array(z.object({ id: z.number(), reason: z.string().optional() })).optional(), round: z.number().optional(), costDelta: z.number().optional(),
       })
       .parse(raw);
     const r = await huntRecord(p);
@@ -595,7 +595,7 @@ export const handlers: Readonly<Record<string, Handler>> = {
     return { exchange: r.exchange, requestBytes: r.bodies?.request?.length ?? 0, responseBytes: r.bodies?.response?.length ?? 0 };
   },
   export_findings: async (raw) => {
-    const p = z.object({ reportJsonFile: z.string(), outputRoot: z.string(), format: z.enum(["csv", "json", "md-all"]) }).parse(raw);
+    const p = z.object({ reportJsonFile: z.string(), outputRoot: z.string(), format: z.enum(["csv", "json", "md-all", "sarif"]) }).parse(raw);
     const { readFile } = await import("node:fs/promises");
     const { generateReportExports } = await import("../application/report.js");
     const rep = JSON.parse(await readFile(p.reportJsonFile, "utf8")) as { findings?: unknown[] };
@@ -641,7 +641,7 @@ export const handlers: Readonly<Record<string, Handler>> = {
     return probeWafAdapt(p);
   },
   session_crawl: async (raw) => {
-    const p = z.object({ baseUrl: z.string(), outputRoot: z.string(), loginUrl: z.string(), username: z.string(), password: z.string(), loginMode: z.enum(["form", "json"]).optional(), usernameField: z.string().optional(), passwordField: z.string().optional(), endpoints: z.array(z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxPages: z.number().optional(), maxRelogins: z.number().optional(), headers: z.record(z.string(), z.string()).optional() }).parse(raw);
+    const p = z.object({ baseUrl: z.string(), outputRoot: z.string(), loginUrl: z.string(), username: z.string(), password: z.string(), loginMode: z.enum(["form", "json"]).optional(), usernameField: z.string().optional(), passwordField: z.string().optional(), endpoints: z.array(z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxPages: z.number().optional(), maxRelogins: z.number().optional(), headers: z.record(z.string(), z.string()).optional(), loggedInRegex: z.string().optional(), loggedOutRegex: z.string().optional() }).parse(raw);
     const { crawlSession } = await import("../domain/sessionCrawl.js");
     return crawlSession(p);
   },
@@ -703,6 +703,38 @@ export const handlers: Readonly<Record<string, Handler>> = {
     const p = z.object({ baseUrl: z.string(), outputRoot: z.string(), targets: z.array(z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxCandidates: z.number().optional() }).parse(raw);
     const { findBackups } = await import("../domain/backupFind.js");
     return findBackups(p);
+  },
+  dedupe_urls: async (raw) => {
+    const p = z.object({ urls: z.array(z.string()), outputRoot: z.string(), keepStatic: z.boolean().optional(), keepContent: z.boolean().optional(), fuzzy: z.boolean().optional(), whitelist: z.array(z.string()).optional(), params: z.enum(["has", "none"]).optional() }).parse(raw);
+    const { dedupeUrls } = await import("../domain/urlRefine.js");
+    const r = dedupeUrls(p);
+    const { writeFile: wf, mkdir: mk } = await import("node:fs/promises");
+    await mk(p.outputRoot, { recursive: true });
+    const bodyStr = r.urls.join("\n");
+    const path = (await import("node:path")).join(p.outputRoot, "deduped_urls.txt");
+    await wf(path, bodyStr, "utf8");
+    return { ...r, artifacts: [{ path, bytes: Buffer.byteLength(bodyStr) }] };
+  },
+  classify_urls: async (raw) => {
+    const p = z.object({ urls: z.array(z.string()), outputRoot: z.string() }).parse(raw);
+    const { classifyUrls } = await import("../domain/urlRefine.js");
+    const r = classifyUrls(p.urls);
+    const { writeFile: wf, mkdir: mk } = await import("node:fs/promises");
+    await mk(p.outputRoot, { recursive: true });
+    const bodyStr = JSON.stringify(r, null, 2);
+    const path = (await import("node:path")).join(p.outputRoot, "classified_urls.json");
+    await wf(path, bodyStr, "utf8");
+    return { ...r, artifacts: [{ path, bytes: Buffer.byteLength(bodyStr) }] };
+  },
+  dir_fuzz: async (raw) => {
+    const p = z.object({ url: z.string(), outputRoot: z.string(), wordlistFile: z.string().optional(), words: z.array(z.string()).optional(), extensions: z.array(z.string()).optional(), recursion: z.boolean().optional(), recursionDepth: z.number().optional(), calibration: z.number().optional(), matchStatus: z.array(z.number()).optional(), filterSize: z.array(z.number()).optional(), cookie: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxWords: z.number().optional(), delayMs: z.number().optional() }).parse(raw);
+    const { dirFuzz } = await import("../domain/dirFuzz.js");
+    return dirFuzz(p);
+  },
+  screenshot: async (raw) => {
+    const p = z.object({ urls: z.array(z.string()), outputRoot: z.string(), chromiumPath: z.string().optional(), concurrency: z.number().optional(), timeoutMs: z.number().optional(), cluster: z.boolean().optional(), proxy: z.string().optional() }).parse(raw);
+    const { captureScreenshots } = await import("../domain/screenshot.js");
+    return captureScreenshots(p);
   },
   jwt_attack: async (raw) => {
     const p = z.object({ token: z.string(), endpoint: z.string(), outputRoot: z.string(), headers: z.record(z.string(), z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), secretCandidates: z.array(z.string()).optional() }).parse(raw);

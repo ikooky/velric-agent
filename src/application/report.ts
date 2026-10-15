@@ -162,11 +162,69 @@ export const findingsJson = (findings: readonly FindingView[]): string =>
     2,
   );
 
+/** SARIF 2.1.0 export (GitHub code scanning compatible): each finding becomes
+ *  a result with a security-severity level (CVSS placeholder by rank) on a
+ *  synthetic rule per vuln class. */
+const sarifLevel = (sev: string | undefined): "none" | "note" | "warning" | "error" => {
+  switch (sev) {
+    case "critical": case "high": return "error";
+    case "medium": case "low": return "warning";
+    default: return "note";
+  }
+};
+const sarifRank = (sev: string | undefined): number => {
+  switch (sev) {
+    case "critical": return 9.0;
+    case "high": return 7.5;
+    case "medium": return 5.0;
+    case "low": return 3.0;
+    default: return 1.0;
+  }
+};
 
-/** Write findings exports to disk (csv / json / per-finding md). */
+export const findingsSarif = (findings: readonly FindingView[]): string => {
+  const rules = new Map<string, { id: string; name: string; shortDescription: { text: string } }>();
+  for (const f of findings) {
+    const id = `VELRIC-${(f.vulnClass ?? f.name ?? "unknown").replace(/[^a-z0-9]+/gi, "_").toUpperCase().slice(0, 40)}`;
+    if (!rules.has(id)) rules.set(id, { id, name: f.vulnClass ?? f.name ?? "unknown", shortDescription: { text: f.name ?? f.vulnClass ?? "finding" } });
+  }
+  const results = [...findings]
+    .sort((a, b) => (sevRank[a.severity ?? ""] ?? 9) - (sevRank[b.severity ?? ""] ?? 9))
+    .map((f) => {
+      const id = `VELRIC-${(f.vulnClass ?? f.name ?? "unknown").replace(/[^a-z0-9]+/gi, "_").toUpperCase().slice(0, 40)}`;
+      const url = (f as { url?: string }).url;
+      return {
+        ruleId: id,
+        level: sarifLevel(f.severity),
+        message: { text: f.summary ?? f.name ?? "" },
+        locations: url
+          ? [{ physicalLocation: { locationDisplayString: url } }]
+          : undefined,
+        properties: {
+          "security-severity": String(sarifRank(f.severity)),
+          disposition: (f as { disposition?: string }).disposition ?? "pending",
+        },
+      };
+    });
+  return JSON.stringify(
+    {
+      $schema: "https://json.schemastore.org/sarif-2.1.0.json",
+      version: "2.1.0",
+      runs: [{
+        tool: { driver: { name: "velric-agent", informationUri: "https://github.com/ikooky/velric-agent", rules: [...rules.values()] } },
+        results,
+      }],
+    },
+    null,
+    2,
+  );
+};
+
+
+/** Write findings exports to disk (csv / json / per-finding md / sarif). */
 export const generateReportExports = async (input: {
   outputRoot: string;
-  format: "csv" | "json" | "md-all";
+  format: "csv" | "json" | "md-all" | "sarif";
   findings: readonly FindingView[];
 }): Promise<string[]> => {
   const { writeFile, mkdir } = await import("node:fs/promises");
@@ -180,6 +238,10 @@ export const generateReportExports = async (input: {
   } else if (input.format === "json") {
     const p = join(input.outputRoot, "findings.json");
     await writeFile(p, findingsJson(input.findings), "utf8");
+    out.push(p);
+  } else if (input.format === "sarif") {
+    const p = join(input.outputRoot, "findings.sarif");
+    await writeFile(p, findingsSarif(input.findings), "utf8");
     out.push(p);
   } else {
     for (const f of input.findings) {
