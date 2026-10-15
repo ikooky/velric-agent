@@ -406,7 +406,7 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
           poc: wallCluster,
         });
       }
-      const protectedPaths = lines.filter((l) => /^40[13]|^302/.test(l) && !l.includes("[catch-all") && !l.includes("[redirectrw"));
+      const protectedPaths = lines.filter((l) => (/^40[13]|^302/.test(l) || l.includes("[authwall")) && !l.includes("[catch-all") && !l.includes("[redirectrw"));
       if (protectedPaths.length > 0) {
         fList.push({
           name: `受保护路径存在 ${protectedPaths.length} 个`,
