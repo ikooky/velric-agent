@@ -1,5 +1,6 @@
 import { fetchUrl } from "../adapters/http.js";
 import { ensureDir, writeArtifact } from "../adapters/artifacts.js";
+import { join } from "node:path";
 import { parseMpaPage } from "../domain/mpa.js";
 import { pooled } from "./harvest.js";
 
@@ -23,6 +24,7 @@ export interface SpiderSummary {
   readonly forms: number;
   readonly inlineApiUrls: number;
   readonly links: number;
+  readonly scriptsDownloaded: number;
   readonly artifacts: { path: string; bytes: number }[];
 }
 
@@ -57,6 +59,7 @@ export const spiderMpa = async (input: SpiderInput): Promise<SpiderSummary> => {
   const forms = new Map<string, Set<string>>();
   const inline = new Set<string>();
   const links = new Set<string>();
+  const scriptsSeen = new Set<string>();
   let crawled = 0;
 
   while (queue.length > 0 && crawled < maxPages) {
@@ -73,6 +76,7 @@ export const spiderMpa = async (input: SpiderInput): Promise<SpiderSummary> => {
     }
     const page = parseMpaPage(res.body);
     links.add(url.replace(origin, "") || "/");
+    for (const sc of page.scripts) scriptsSeen.add(sc);
     for (const f of page.forms) {
       let act: string;
       try { act = new URL(f.action || url, url).href; } catch { continue; }
@@ -100,6 +104,13 @@ export const spiderMpa = async (input: SpiderInput): Promise<SpiderSummary> => {
     }
   }
 
+  // External scripts seen while crawling are attack surface too: without
+  // them dom_sinks has no corpus on MPA targets (js/ was SPA-harvest-only).
+  const scriptUrls = new Set<string>();
+  for (const u of [...scriptsSeen]) {
+    try { scriptUrls.add(new URL(u, base).href); } catch { /* skip malformed */ }
+  }
+
   const artifacts: { path: string; bytes: number }[] = [];
   const formsBody = [...forms.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
@@ -108,11 +119,36 @@ export const spiderMpa = async (input: SpiderInput): Promise<SpiderSummary> => {
   artifacts.push(await writeArtifact(root, "forms.txt", formsBody));
   artifacts.push(await writeArtifact(root, "links.txt", [...links].sort().join("\n")));
   artifacts.push(await writeArtifact(root, "api_inline.txt", [...inline].sort().join("\n")));
+  artifacts.push(await writeArtifact(root, "js_manifest.txt", [...scriptUrls].sort().join("\n")));
+
+  // Download a bounded JS corpus so dom_sinks/perm-tree have material on MPAs.
+  const jsDir = await ensureDir(join(root, "js"));
+  let jsDownloaded = 0;
+  {
+    const { basename } = await import("node:path");
+    const names = new Map<string, number>();
+    for (const u of [...scriptUrls].slice(0, 25)) {
+      let name: string;
+      try { name = basename(new URL(u).pathname); } catch { continue; }
+      if (!name.endsWith(".js")) continue;
+      const n = (names.get(name) ?? 0) + 1;
+      names.set(name, n);
+      const fname = n === 1 ? name : `${name.replace(/\.js$/, "")}-${n}.js`;
+      try {
+        const res = await fetchUrl(u, { proxy: input.proxy, cookie: input.cookie, timeoutMs: 15000, maxBytes: 32 * 1024 * 1024 });
+        if (res.status !== 200 || res.bytes === 0 || res.body.trimStart().startsWith("<")) continue;
+        await writeArtifact(root, `js/${fname}`, res.body);
+        jsDownloaded++;
+      } catch { /* one bad script must not kill the corpus */ }
+    }
+  }
+  void jsDir;
 
   return {
     crawled,
     forms: forms.size,
     inlineApiUrls: inline.size,
+    scriptsDownloaded: jsDownloaded,
     links: links.size,
     artifacts,
   };

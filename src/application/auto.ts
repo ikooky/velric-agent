@@ -176,7 +176,7 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
   } else {
     try {
       const r = await spiderMpa({ baseUrl: base, outputRoot: root, proxy: input.proxy, cookie: input.cookie, maxPages: input.maxPages ?? 30, depth: 2, delayMs: 500 });
-      stages.push({ stage: "spider_mpa", status: "ok", detail: `crawled=${r.crawled} forms=${r.forms}` });
+      stages.push({ stage: "spider_mpa", status: "ok", detail: `crawled=${r.crawled} forms=${r.forms} js=${r.scriptsDownloaded}` });
     } catch (e) {
       stages.push({ stage: "spider_mpa", status: "fail", detail: String((e as Error).message ?? e).slice(0, 120) });
     }
