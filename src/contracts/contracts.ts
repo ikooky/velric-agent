@@ -260,17 +260,6 @@ export const huntOverviewContract = {
   examples: [{ title: "overview", input: { outputRoot: "/tmp/recon" } }],
 } satisfies ToolContract;
 
-export const workflowGuideContract: ToolContract = {
-  name: "workflow_guide",
-  title: "Recon workflow guide",
-  description:
-    "Returns the full recon methodology (Phase 0-5: classify → static → auth gates → runtime → perm tree → merge/report) plus execution disciplines (observed/inferred, no-CVE-matching-as-finding, serial chains step-by-step, route diversity). READ THIS FIRST before calling other tools.",
-  kind: "policy",
-  inputSchema: z.object({}),
-  outputSchema: z.string(),
-  annotations: readOnlyAnnotations(),
-  examples: [{ title: "read guide", input: {} }],
-};
 
 export const saveEvidenceContract: ToolContract = {
   name: "save_evidence",
@@ -662,6 +651,7 @@ export const trafficRecContract: ToolContract = {
 export const assetGraphContract: ToolContract = {
   name: "asset_graph",
   title: "Asset graph store",
+  audience: "internal",
   description:
     "velric dual-graph (asset side): global shared asset truth store — upsert root_domain/subdomain/ip/service/endpoint with computed dedup keys and host-chain linking; URL upsert auto-creates the chain; action=enrich auto-completes seeds (A/AAAA/CNAME resolve, HTTP status+title probe). Persists asset_graph.json + assets.json.",
   kind: "runtime",
@@ -674,6 +664,7 @@ export const assetGraphContract: ToolContract = {
 export const expGraphContract: ToolContract = {
   name: "exploration_graph",
   title: "Exploration lineage graph",
+  audience: "internal",
   description:
     "velric dual-graph (exploration side): per-run goal→intent→fact→finding lineage with spawns/derived_from/yields/proves edges and asset anchors; lineage/overview queries; compact/expand fold cold regions (untouched N rounds) into content-hashed digest nodes. Persists exploration_graph.json + cold_stamps.json.",
   kind: "runtime",
@@ -689,6 +680,7 @@ export const expGraphContract: ToolContract = {
 export const retestContract: ToolContract = {
   name: "finding_retest",
   title: "Finding retest",
+  audience: "internal",
   description:
     "Register findings with PoC + status/body predicates; replay PoC and classify reproduced/fixed/inconclusive; disposition flips on verdicts. Persists retest_store.json.",
   kind: "runtime",
@@ -701,6 +693,7 @@ export const retestContract: ToolContract = {
 export const trafficQueryContract: ToolContract = {
   name: "traffic_query",
   title: "Traffic search/get",
+  audience: "internal",
   description:
     "Query the recorded traffic log (host/status/method/text filters, paginated) and fetch one exchange with its stored bodies.",
   kind: "runtime",
@@ -1057,5 +1050,4 @@ export const ALL_CONTRACTS: readonly ToolContract[] = [
   huntContract,
   huntRecordContract,
   huntOverviewContract,
-  workflowGuideContract,
 ];

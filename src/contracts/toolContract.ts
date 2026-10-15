@@ -48,6 +48,11 @@ export interface ToolContract<
   readonly outputSchema: Output;
   readonly annotations: ToolAnnotations;
   readonly examples: readonly ToolExample[];
+  /** Who should call this tool. "host" = caller-facing (default);
+   *  "internal" = pipeline bookkeeping — registered only in the full
+   *  profile (REA-style capability gating keeps the catalog complete while
+   *  letting lean hosts see just the recon surface). */
+  readonly audience?: "host" | "internal";
 }
 
 /** Read-only, non-destructive, closure-safe defaults for a pure probe. */

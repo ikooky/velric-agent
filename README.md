@@ -79,6 +79,17 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `--proxy`(http/socks5)/ `--proxy-pool FILE`(轮换+失败剔除)/ `--rps N`(全局限速)
 - 外部请求默认 3 次重试
 
+## 工具面分层 (REA 式能力门控)
+
+目录完整、注册按条件 —— 67 个契约始终在 `ALL_CONTRACTS`，按环境变量裁剪注册面：
+
+- **默认 full**：全部 67 个注册（catalog complete）
+- **`VELRIC_PROFILE=lean`**：63 个 —— 隐藏 4 个内部簿记工具(`asset_graph`/`exploration_graph`/`traffic_query`/`finding_retest`，audience=internal，由 auto 管道与 hunt 循环在进程内消费)
+- **`VELRIC_TOOLS=a,b,c`**：显式白名单，覆盖两档 profile
+
+方法论引导不占工具位：workflow 全文在 MCP resource `velric://workflow-guide` 与 prompt `hunt-driver`（`workflow_guide` 工具已退位）。
+
+
 ## 安装
 
 要求 Node ≥ 22;`runtime` 需要系统 Chromium(`--chromium` 或 `VELRIC_CHROMIUM`)。

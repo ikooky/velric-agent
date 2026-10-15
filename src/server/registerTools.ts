@@ -729,10 +729,6 @@ export const handlers: Readonly<Record<string, Handler>> = {
     if (!p.query) return await mod.countAssets(p.outputRoot, {}); // empty query = total count, not an error
     return await mod.countAssets(p.outputRoot, p.query);
   },
-  workflow_guide: async () => {
-    const { WORKFLOW_GUIDE } = await import("./workflow.js");
-    return WORKFLOW_GUIDE;
-  },
   save_evidence: async (raw) => {
     const p = z
       .object({ action: z.enum(["save", "put", "get", "list"]).default("save"), itemsFile: z.string().optional(), file: z.string().optional(), hash: z.string().optional(), tag: z.string().optional(), outputRoot: z.string() })
@@ -821,8 +817,23 @@ const extractTouchedUrls = (
   return urls;
 };
 
+/** Capability gating (REA-style: catalog complete, registration conditional).
+ *  VELRIC_PROFILE=lean hides audience:"internal" bookkeeping tools;
+ *  VELRIC_PROFILE=full (default) registers everything. VELRIC_TOOLS=a,b,c
+ *  is an explicit allowlist overriding both profiles. */
+const visibleContracts = (): readonly ToolContract[] => {
+  const allow = process.env.VELRIC_TOOLS?.split(",").map((x) => x.trim()).filter(Boolean);
+  if (allow && allow.length > 0) {
+    const set = new Set(allow);
+    return ALL_CONTRACTS.filter((c) => set.has(c.name));
+  }
+  const profile = process.env.VELRIC_PROFILE ?? "full";
+  if (profile === "lean") return ALL_CONTRACTS.filter((c) => c.audience !== "internal");
+  return ALL_CONTRACTS;
+};
+
 export const registerAllTools = (server: McpServer): void => {
-  for (const contract of ALL_CONTRACTS) {
+  for (const contract of visibleContracts()) {
     const handler = handlers[contract.name];
     // Fail loud at startup: a contract without a handler once shipped silently
     // (workflow_guide) and masked the regression for days.

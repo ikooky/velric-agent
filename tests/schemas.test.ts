@@ -13,7 +13,6 @@ describe("output schema shape guards", () => {
     { tool: "wayback_urls", sample: { urls: ["https://x/a"] } },
     { tool: "nuclei_lite", sample: { matched: [{ id: "e", severity: "high" }] } },
     { tool: "probe_oidc", sample: { found: [{ kind: "oidc", url: "https://x/.well-known/openid-configuration" }] } },
-    { tool: "workflow_guide", sample: "guide text" },
     { tool: "probe_smuggle", sample: { differentials: [{ dimension: "dot", variantStatus: 200 }], probed: 6 } },
     // Previously-drifted shapes (declared numbers where handlers return arrays):
     { tool: "subdomain_enum", sample: { domain: "x.com", crtSh: ["a.x.com"], bruteFound: [{ host: "b.x.com", ips: ["1.2.3.4"] }], wildcardDns: false, total: ["a.x.com"], artifacts: [] } },
