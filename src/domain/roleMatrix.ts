@@ -97,11 +97,21 @@ export const probeRoleMatrix = async (input: RoleMatrixInput): Promise<RoleMatri
         ? { authorization: header.replace(/^authorization\s*:\s*/i, "") }
         : { cookie: isCookieHeader ? header.replace(/^cookie\s*:\s*/i, "") : header };
       const r = await fetchUrl(url, { ...opts, method: "GET", headers });
+      // Redirect-followed responses landing on a DIFFERENT path (typically
+      // the login page) are auth redirects, not access: a 302→/login chain
+      // ending in 200 must never score as "allowed" for that role.
+      let landed = "";
+      try { landed = new URL(r.finalUrl ?? url).pathname.replace(/\/$/, ""); } catch { landed = ""; }
+      const probed = new URL(url).pathname.replace(/\/$/, "");
+      // landed=="" means the root "/" — still a different page than the
+      // protected one when the probe was NOT for "/" itself.
+      const redirectedAway = r.finalUrl != null && landed !== probed;
       // 2xx is not "allowed" on its own: many gateways answer 200 with a
       // JSON access-denied body. Downgrade to ambiguous when the body smells
       // like a denial (differential discipline: content, not bare status).
       const deniedish = r.status >= 200 && r.status < 300 && /access[- ]?denied|forbidden|unauthori[sz]ed|permission denied/i.test(r.body.slice(0, 2048));
-      matrix.push({ role, endpoint: url, status: r.status, access: deniedish ? "ambiguous" : accessOf(r.status) });
+      const access = redirectedAway ? "denied" : deniedish ? "ambiguous" : accessOf(r.status);
+      matrix.push({ role, endpoint: url, status: r.status, access });
     }
   }
 
