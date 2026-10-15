@@ -1,6 +1,5 @@
 import { promises as dns } from "node:dns";
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { httpProbe } from "./probe.js";
 
 /** velric asset-graph node kinds (db/assets.go). */
@@ -45,16 +44,10 @@ export interface EnrichResult {
   readonly artifacts: { path: string; bytes: number }[];
 }
 
-export const writeArtifact = async (
-  root: string,
-  rel: string,
-  data: string,
-): Promise<{ path: string; bytes: number }> => {
-  const full = join(root, rel);
-  await mkdir(dirname(full), { recursive: true });
-  await writeFile(full, data, "utf8");
-  return { path: full, bytes: Buffer.byteLength(data) };
-};
+// The guarded writer (absolute-root assertion + path-escape refusal) —
+// a local join()+writeFile copy silently lost that protection.
+import { writeArtifact as guardedWriteArtifact } from "../adapters/artifacts.js";
+export const writeArtifact = guardedWriteArtifact;
 
 const rootOf = (host: string): string => {
   // Same algorithm as graphs.ts MULTI_SUFFIX: two-label suffixes that are

@@ -106,7 +106,7 @@ describe("smuggle", () => {
       let buf = "";
       s.on("data", (d: Buffer) => {
         buf += d.toString("latin1");
-        if (/content-length: 6\r\ntransfer-encoding: chunked\r\n\r\n0\r\n\r\n/.test(buf)) {
+        if (/content-length: 5\r\ntransfer-encoding: chunked\r\n\r\n0\r\n\r\n/.test(buf)) {
           wireSawConflict = true;
           s.end("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
         } else if (/^GET /.test(buf) || /^POST /.test(buf)) {

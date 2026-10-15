@@ -38,7 +38,14 @@ export class AssetStore {
 
   async load(): Promise<void> {
     try { this.graph = JSON.parse(await readFile(this.file, "utf8")) as AssetGraph; }
-    catch { this.graph = { assets: {} }; }
+    catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        // Quarantine a corrupt file instead of fail-open-reset: the next
+        // save() would otherwise overwrite and lose the whole asset graph.
+        try { await rename(this.file, this.file + ".corrupt"); } catch { /* gone */ }
+      }
+      this.graph = { assets: {} };
+    }
   }
 
   async save(): Promise<void> {
@@ -70,7 +77,9 @@ export class AssetStore {
   /** Host-chain normalization: a URL yields service+endpoint and is linked
    *  to its host domain chain (velric linkHostAssets). */
   upsertUrl(rawUrl: string, taskTag?: string): { service: AssetNode; endpoint: AssetNode } {
-    const u = new URL(rawUrl);
+    // Dirty URL inputs must not abort the whole asset-chain write.
+    let u: URL;
+    try { u = new URL(rawUrl); } catch { throw new Error(`invalid url: ${JSON.stringify(rawUrl.slice(0, 60))}`); }
     const host = u.hostname.toLowerCase();
     const service = this.upsert({ type: "service", value: `${u.protocol}//${host}${u.port ? ":" + u.port : ""}`, taskTag });
     const endpoint = this.upsert({ type: "endpoint", value: `${service.value}${u.pathname}`, parent: service.key, taskTag });
@@ -157,7 +166,12 @@ export class ExplorationGraph {
       this.edges = raw.edges ?? [];
       this.anchors = raw.anchors ?? [];
       this.counter = raw.nodes.reduce((mx, n) => Math.max(mx, Number(n.id.replace(/^n/, "")) || 0), 0);
-    } catch { /* fresh */ }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        try { await rename(this.file, this.file + ".corrupt"); } catch { /* gone */ }
+      }
+      /* fresh */
+    }
   }
 
   async save(): Promise<void> {
@@ -239,7 +253,12 @@ export class EvidenceStore {
 
   async load(): Promise<void> {
     try { this.index = JSON.parse(await readFile(join(this.root, "evidence_index.json"), "utf8")); }
-    catch { this.index = {}; }
+    catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        try { await rename(join(this.root, "evidence_index.json"), join(this.root, "evidence_index.json.corrupt")); } catch { /* gone */ }
+      }
+      this.index = {};
+    }
   }
 
   async save(): Promise<void> {

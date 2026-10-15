@@ -74,10 +74,13 @@ const listTarGz = async (buf: Buffer): Promise<{ names: string[]; read: (name: s
   // the decompressed size — refuse anything implausibly large BEFORE
   // inflating (fflate gunzipSync grows its output buffer unboundedly).
   if (buf.length < 18) throw new Error("not a gzip stream");
+  // ISIZE is one member's declared size — multi-member gzip stores the LAST
+  // member's (often 0), so a bare 0 must not reject the whole archive. The
+  // real bound is gunzipCapped's maxOutputLength + per-entry caps below.
   const isize = buf.readUInt32LE(buf.length - 4);
-  if (isize === 0 || isize > MAX_DECOMPRESSED) {
-    // ISIZE is mod 2^32 — a >4GiB payload wraps; 0 is also suspicious for a
-    // tarball. Stream-decompress with a byte counter instead of trusting it.
+  if (isize > MAX_DECOMPRESSED) {
+    // ISIZE is mod 2^32 — a declared size over the cap refuses BEFORE
+    // inflating.
     throw new Error("gzip declared size implausible — refusing");
   }
   const plain = gunzipCapped(buf);

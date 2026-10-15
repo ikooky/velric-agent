@@ -34,14 +34,22 @@ export const spiderMpa = async (input: SpiderInput): Promise<SpiderSummary> => {
   const base = input.baseUrl.startsWith("http")
     ? input.baseUrl
     : `https://${input.baseUrl}`;
-  const origin = new URL(base).origin;
+  // Malformed baseUrl must surface as a structured error, not a bare TypeError.
+  let origin: string;
+  try { origin = new URL(base).origin; } catch { throw new Error(`invalid baseUrl: ${JSON.stringify(input.baseUrl.slice(0, 60))}`); }
   const root = await ensureDir(input.outputRoot);
   const maxPages = input.maxPages ?? 200;
   const depth = input.depth ?? 4;
   const delayMs = input.delayMs ?? 100;
-  const inc = input.include ? new RegExp(input.include) : null;
+  // Caller-supplied patterns: compile defensively (bad syntax used to throw
+  // raw) and cap length against catastrophic backtracking.
+  const compile = (src: string, flags?: string): RegExp => {
+    if (src.length > 512) throw new Error(`regex too long (max 512 chars)`);
+    try { return new RegExp(src, flags); } catch (err) { throw new Error(`invalid regex: ${(err as Error).message}`); }
+  };
+  const inc = input.include ? compile(input.include) : null;
   const exc = input.exclude
-    ? new RegExp(input.exclude, "i")
+    ? compile(input.exclude, "i")
     : /logout|signout|delete|remove|destroy/i;
 
   const seen = new Set<string>([base.split("#")[0]!]);

@@ -122,8 +122,11 @@ export const httpProbe = async (input: {
   }
 
   let tlsSans: string[] = [];
-  const u = new URL(input.url);
-  if (u.protocol === "https:") {
+  // A malformed URL must degrade to "no TLS info", not throw past the
+  // never-throw fetch contract.
+  let u: URL | null = null;
+  try { u = new URL(input.url); } catch { u = null; }
+  if (u && u.protocol === "https:") {
     const cert = await tlsPeek(u.hostname, Number(u.port) || 443);
     if (cert?.subject?.CN) tlsSans.push(`CN:${cert.subject.CN}`);
     const sans = (cert as unknown as { subjectaltname?: string })?.subjectaltname;

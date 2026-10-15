@@ -193,7 +193,15 @@ export const huntRecord = async (input: HuntRecordInput): Promise<{ graph: Graph
             const u = new URL(k);
             if (u.pathname === "/" || u.pathname === "") continue; // root vouches for nothing
             const stArr = [...st];
-            if (cu.includes(u.pathname) || (new URL(cu, "http://l.invalid").pathname === u.pathname)) { matched = stArr.length === 0 || stArr.some((sv) => txt.includes(String(sv))); break; }
+            // Segment-exact match, not substring: a cited "/a" must not
+            // vouch for "/api/secret" (includes() let any short path
+            // guarantee any longer one — the anti-hallucination gate itself).
+            const cite = new URL(cu, "http://l.invalid").pathname;
+            const seg = cite.split("/").filter(Boolean);
+            const tgt = u.pathname.split("/").filter(Boolean);
+            const segMatch = cite === u.pathname ||
+              (tgt.length > 0 && seg.length >= tgt.length && tgt.every((t, i) => seg[i] === t));
+            if (segMatch) { matched = stArr.length === 0 || stArr.some((sv) => txt.includes(String(sv))); break; }
           } catch { /* malformed */ }
         }
         if (!matched) return false;

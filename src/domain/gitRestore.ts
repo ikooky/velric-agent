@@ -120,7 +120,7 @@ export const restoreGit = async (input: GitRestoreInput): Promise<GitRestoreResu
       // Tree entry names come from the hostile target's git objects — reject
       // traversal (../, absolute, drive letters, NUL) and assert containment
       // before any filesystem write.
-      if (/(^|\/)\.\. (\/.|$)/.test(name) || name.includes("..") || name.startsWith("/") || /^[a-zA-Z]:/.test(name) || name.includes("\0")) continue;
+      if (name.includes("..") || name.startsWith("/") || /^[a-zA-Z]:/.test(name) || name.includes("\0")) continue;
       if (entry.mode === "40000" || entry.mode === "040000") {
         await walkTree(entry.sha, name, depth + 1);
       } else {

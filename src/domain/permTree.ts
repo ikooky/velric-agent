@@ -142,25 +142,21 @@ export const buildPermTree = (
     const p = parentOf(code, h);
     if (p) (childrenOf[p] ??= []).push(code);
   }
-  const makeNode = (code: string): PermTreeNode => {
-    const kids = (childrenOf[code] ?? []).slice().sort();
-    if (kids.length === 0) {
-      return {
-        code,
-        position: h.roots.includes(code) ? "top" : "left",
-        name: code,
-      };
-    }
-    return {
+  // Caller-supplied extraParent can form cycles (A→B→A); makeNode must
+  // never revisit a node or untrusted heuristics blow the stack.
+  const makeNode = (code: string, seen: ReadonlySet<string> = new Set()): PermTreeNode => {
+    const kids = (childrenOf[code] ?? []).slice().sort().filter((k) => !seen.has(k));
+    const leaf: PermTreeNode = {
       code,
       position: h.roots.includes(code) ? "top" : "left",
       name: code,
-      children: kids.map(makeNode),
     };
+    if (kids.length === 0) return leaf;
+    return { ...leaf, children: kids.map((k: string) => makeNode(k, new Set([...seen, code]))) };
   };
   const tree: PermTreeNode[] = h.roots
     .filter((r) => r in entries || (childrenOf[r]?.length ?? 0) > 0)
-    .map(makeNode);
+    .map((r: string) => makeNode(r));
   const orphans = Object.keys(entries)
     .filter((c) => parentOf(c, h) === null && !h.roots.includes(c))
     .sort();

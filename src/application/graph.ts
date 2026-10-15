@@ -82,7 +82,12 @@ const PATH = (root: string) => join(root, "graph.json");
 export const loadGraph = async (root: string): Promise<Graph> => {
   try {
     return JSON.parse(await readFile(PATH(root), "utf8")) as Graph;
-  } catch {
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      // Corrupt graph.json must not fail-open: the next saveGraph() would
+      // overwrite it and silently destroy every recorded finding. Quarantine.
+      try { const { rename } = await import("node:fs/promises"); await rename(PATH(root), PATH(root) + ".corrupt"); } catch { /* gone */ }
+    }
     return emptyGraph("");
   }
 };

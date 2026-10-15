@@ -68,12 +68,22 @@ async function withLock<T>(root: string, fn: () => Promise<T>): Promise<T> {
 
 const load = async (root: string): Promise<PlatformStore> => {
   try { return JSON.parse(await readFile(join(root, STORE), "utf8")) as PlatformStore; }
-  catch { return { projects: {}, tasks: {} }; }
+  catch (err) {
+    const notFound = (err as NodeJS.ErrnoException).code === "ENOENT";
+    if (notFound) return { projects: {}, tasks: {} };
+    // A corrupt store must NEVER fail-open into an empty object: the next
+    // persist() would overwrite and silently destroy every project/task.
+    // Quarantine the bad file and surface the loss.
+    try { await rename(join(root, STORE), join(root, STORE + ".corrupt")); } catch { /* nothing to quarantine */ }
+    return { projects: {}, tasks: {} };
+  }
 };
 
 const persist = async (root: string, st: PlatformStore): Promise<void> => {
   await mkdir(root, { recursive: true });
-  const tmp = join(root, STORE + ".tmp");
+  // tmp name carries pid+random: two concurrent process instances writing a
+  // fixed .tmp name clobber each other mid-write.
+  const tmp = join(root, `${STORE}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`);
   await writeFile(tmp, JSON.stringify(st, null, 2));
   await rename(tmp, join(root, STORE));
 };
@@ -294,12 +304,13 @@ export const runTask = async (root: string, input: { taskId: string; proxy?: str
   } catch (err) {
     task.status = "failed";
     task.stageLog.push({ module: "_runner", status: "fail", detail: String((err as Error).message ?? err).slice(0, 200) });
-    throw err;
-  } finally {
     task.finishedAt = new Date().toISOString();
     await persist(root, st).catch(() => {});
-    return task;
+    throw err;
   }
+  task.finishedAt = new Date().toISOString();
+  await persist(root, st).catch(() => {});
+  return task;
   });
 
 // ---------------- local retrieval (ScopeSentry list/count parity) ----------------
@@ -318,7 +329,14 @@ export const listAssets = async (root: string, q: AssetQuery, page = 1, pageSize
   if (q.type) items = items.filter((a) => a.type === q.type);
   if (q.taskTag) items = items.filter((a) => a.taskTag === q.taskTag);
   if (q.valuePrefix) items = items.filter((a) => a.value.toLowerCase().startsWith(q.valuePrefix!.toLowerCase()));
-  if (q.valueRegex) { const re = new RegExp(q.valueRegex, "i"); items = items.filter((a) => re.test(a.value)); }
+  if (q.valueRegex) {
+    // Caller-supplied pattern: cap length and compile defensively — an
+    // unbounded catastrophic-backtracking regex turns this into a CPU DoS.
+    if (q.valueRegex.length > 256) throw new Error("valueRegex too long (max 256 chars)");
+    let re: RegExp;
+    try { re = new RegExp(q.valueRegex, "i"); } catch (err) { throw new Error(`invalid valueRegex: ${(err as Error).message}`); }
+    items = items.filter((a) => re.test(a.value));
+  }
   items = items.sort((a, b) => a.firstSeen.localeCompare(b.firstSeen));
   const total = items.length;
   const start = (page - 1) * pageSize;

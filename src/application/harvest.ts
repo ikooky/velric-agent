@@ -102,7 +102,8 @@ export const harvestStatic = async (
   for (const re of [SCRIPT_SRC_RE, LINK_JS_RE]) {
     for (const m of entry.body.matchAll(re)) {
       const src = m[2] ?? m[3] ?? m[1]!;
-      seeds.add(src.startsWith("http") ? src : new URL(src, base).href);
+      try { seeds.add(src.startsWith("http") ? src : new URL(src, base).href); }
+      catch { /* one malformed src must not kill the whole harvest */ }
     }
   }
 

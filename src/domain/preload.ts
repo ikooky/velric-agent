@@ -332,6 +332,16 @@ const PARTS: readonly string[] = [
 
 const PRELOAD_BODY = PARTS.join("\n");
 
+/** JSON string with JS-context hazards escaped: U+2028/2029 are line
+ *  terminators in JS string literals (SyntaxError when injected), and
+ *  "</script" would close a script tag if the output is ever embedded in
+ *  HTML — both handled here so the render is safe in either context. */
+const safeJsonForScript = (value: unknown): string =>
+  JSON.stringify(value)
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029")
+    .replace(/<\/script/gi, "<\\/script");
+
 /** Render the document-start preload script for one config. */
 export const buildPreloadScript = (config: HookConfig): string =>
-  `window.__VELRIC_RECON_CONFIG__ = ${JSON.stringify(config)};\n${PRELOAD_BODY}`;
+  `window.__VELRIC_RECON_CONFIG__ = ${safeJsonForScript(config)};\n${PRELOAD_BODY}`;

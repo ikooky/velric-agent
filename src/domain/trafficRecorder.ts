@@ -108,13 +108,15 @@ export class TrafficRecorder {
   /** Replay: fetch stored full bodies for one exchange (HTTP-captured only). */
   async exchangeBodies(id: string): Promise<{ request?: Buffer; response?: Buffer } | null> {
     const rec = this.exchanges.find((e) => e.id === id);
-    if (!rec || !rec.reqBodyHash) return null;
+    if (!rec) return null;
     const load = async (hash: string | null): Promise<Buffer | undefined> => {
       if (!hash) return undefined;
       try { return await import("node:fs/promises").then((fs) => fs.readFile(join(this.blobDir, hash.slice(0, 2), hash + ".bin"))); }
       catch { return undefined; }
     };
-    return { request: await load(rec.reqBodyHash), response: await load(rec.respBodyHash) };
+    // reqBodyHash is null for body-less requests (GET/CONNECT) — that must
+    // not block reading the RESPONSE body.
+    return { request: rec.reqBodyHash ? await load(rec.reqBodyHash) : undefined, response: await load(rec.respBodyHash) };
   };
 
   private readonly spill = async (body: Buffer): Promise<string> => {
@@ -334,6 +336,11 @@ export class TrafficRecorder {
         const originTls = tlsConnect({ host, port, rejectUnauthorized: false, ...(isIp ? {} : { servername: host }) });
         const tlsPair = { c: clientTls, s: originTls as unknown as import("node:net").Socket };
         this.tunnels.add(tlsPair);
+        // Tunnel set must shrink when the pair dies, or every MITM connection
+        // leaks a dead socket pair until stop() (getTunnels() grows unbounded).
+        const reapPair = (): void => { this.tunnels.delete(tlsPair); };
+        clientTls.on("close", reapPair);
+        originTls.on("close", reapPair);
         // Recording hop: decrypted client requests are replayed (absolute-
         // form) into the internal HTTP server, which records the exchange
         // and fetches the real response via its own upstream path; its
@@ -359,11 +366,20 @@ export class TrafficRecorder {
               // Chunked framing: mirror only headers when no body, else wait for the
               // terminating 0\r\n\r\n frame; unbounded chunked bodies fall back to
               // header-only mirroring (hop records the exchange with empty body).
-              const term = mirrorBuf.indexOf("0\r\n\r\n");
-              const anyTerm = term >= 0 ? term : mirrorBuf.indexOf("\r\n0\r\n\r\n");
+              // Standard terminator is "\r\n0\r\n\r\n" (last-chunk CRLF);
+              // a bare leading "0\r\n\r\n" occurs on body-less chunked. Slice
+              // at the ACTUAL end of the matched terminator — a fixed +7
+              // over-consumes 2 bytes when the CRLF prefix is present and
+              // permanently skews the mirror stream.
+              const bare = mirrorBuf.indexOf("0\r\n\r\n");
+              const crlfTerm = mirrorBuf.indexOf("\r\n0\r\n\r\n");
+              let anyTerm = -1;
+              let termEnd = -1;
+              if (crlfTerm >= 0 && (bare < 0 || crlfTerm + 2 <= bare)) { anyTerm = crlfTerm; termEnd = crlfTerm + 7; }
+              else if (bare >= 0) { anyTerm = bare; termEnd = bare + 5; }
               if (anyTerm < 0) break;
-              const reqBytes = mirrorBuf.subarray(0, anyTerm + 7);
-              mirrorBuf = mirrorBuf.subarray(anyTerm + 7);
+              const reqBytes = mirrorBuf.subarray(0, termEnd);
+              mirrorBuf = mirrorBuf.subarray(termEnd);
               this.mirrorToHop(`${host}:${port}`, hopPort, reqBytes);
               continue;
             }
@@ -435,7 +451,12 @@ export const searchTraffic = async (input: {
   for (const l of lines) {
     try { all.push(JSON.parse(l) as RecordedExchange); } catch { /* torn tail line */ }
   }
-  if (input.host) all = all.filter((e) => new URL(e.url).hostname === input.host);
+  // CONNECT records store "host:443" (no scheme) — a bare new URL() throws
+  // and kills the whole query; skip unparseable rows instead.
+  if (input.host) all = all.filter((e) => {
+    try { return new URL(e.url.startsWith("https://") || e.url.startsWith("http://") || e.url.includes("://") ? e.url : `https://${e.url}`).hostname === input.host; }
+    catch { return false; }
+  });
   if (input.status != null) all = all.filter((e) => e.status === input.status);
   if (input.method) all = all.filter((e) => e.method.toUpperCase() === input.method!.toUpperCase());
   if (input.text) all = all.filter((e) => e.url.includes(input.text!));

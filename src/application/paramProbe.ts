@@ -66,20 +66,29 @@ export const probeParams = async (input: ParamProbeInput): Promise<ParamProbeRes
     // Baseline: sample values from the recorded traffic are not stored per-field
     // in merged output; use "1" placeholders where absent — the DIFFERENTIAL is
     // what matters (same placeholder both sides), not absolute correctness.
+    let relSkipped = false; // once per endpoint, not once per buildUrl call
     const buildUrl = (skip?: string): string => {
-      const u = parseExistingQuery(ep.path);
+      // Relative paths must keep their path under the resolved base — the old
+      // placeholder-replace lost the path segment entirely and probed the root.
+      let u: URL;
+      try {
+        u = ep.path.startsWith("http") ? new URL(ep.path) : new URL(ep.path, input.baseUrl ?? "http://placeholder.local");
+      } catch { skippedCount++; return ""; }
       u.search = "";
       for (const f of ep.fields) {
         if (f.in !== "query" || f.name === skip) continue;
         // strip array brackets for a valid placeholder value
         u.searchParams.set(f.name.replace(/\[\]$/, ""), "1");
       }
-      const abs = ep.path.startsWith("http") ? new URL(ep.path).origin : (input.baseUrl ?? "");
-      if (!abs) { skippedCount++; return ""; } // relative path, no baseUrl — recorded, not silent
-      return u.toString().replace("http://placeholder.local", abs);
+      if (ep.path.startsWith("http")) return u.toString(); // absolute: origin already correct
+      if (!input.baseUrl) { relSkipped = true; return ""; } // relative path, no baseUrl — recorded, not silent
+      try {
+        const resolved = new URL(u.toString().replace("http://placeholder.local", new URL(input.baseUrl).origin));
+        return resolved.toString();
+      } catch { relSkipped = true; return ""; }
     };
     const built = buildUrl();
-    if (built === "") continue;
+    if (built === "") { if (relSkipped) skippedCount++; continue; }
     const base = await fetchUrl(built, { ...opts });
     if (base.status === 0) continue; // endpoint unreachable — not probeable
     const baseline = { status: base.status, bytes: base.bytes, sha256: base.sha256 };
