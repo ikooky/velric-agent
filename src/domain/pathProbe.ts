@@ -154,8 +154,13 @@ export const probePaths = async (input: PathProbeInput): Promise<PathProbeResult
       }
       // Auth-walled variant: the fetch followed a redirect to a sign-in
       // landing — the probed path exists but is access-controlled. Tag the
-      // row so report generation can count it as protected.
-      if (r.finalUrl && /sign[_-]?in|login|auth|sso/i.test(r.finalUrl) && r.status >= 200 && r.status < 400) {
+      // row so report generation can count it as protected. Only when the
+      // landing path DIFFERS from the probe (a no-hop fetch whose URL merely
+      // contains "auth"/"oauth" is an ordinary 200, e.g. OIDC discovery).
+      let authFinalPath = "";
+      try { authFinalPath = new URL(r.finalUrl ?? "").pathname.replace(/\/$/, ""); } catch { /* not a URL */ }
+      const probedNorm = p.replace(/\/$/, "");
+      if (authFinalPath !== "" && authFinalPath !== probedNorm && /sign[_-]?in\b|\blogin\b|signin|sso/i.test(r.finalUrl ?? "") && r.status >= 200 && r.status < 400) {
         const flagged = `${p}  [authwall: → ${r.finalUrl.slice(0, 90)}]`;
         sigCounts.set(respSig, (sigCounts.get(respSig) ?? 0) + 1);
         found.push({ path: flagged, status: 302, bytes: r.bytes, contentType: r.contentType.slice(0, 60), signature: respSig });
