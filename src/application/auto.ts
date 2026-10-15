@@ -379,12 +379,12 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
     const sensFile = join(root, "sensitive_paths.txt");
     if (await fresh(sensFile)) {
       const lines = (await readFile(sensFile, "utf8")).split("\n").filter(Boolean);
-      const high = lines.filter((l) => /^200/.test(l) && /\.git|\.env|swagger|api-docs|actuator\/env|heapdump|druid|pprof|backup|dump\.sql|WEB-INF/.test(l));
+      const high = lines.filter((l) => /^200/.test(l) && /\.git|\.env|swagger|api-docs|actuator\/env|heapdump|druid|pprof|backup|dump\.sql|WEB-INF|\.well-known\/openid-configuration|\.well-known\/oauth-authorization-server/.test(l));
       if (high.length > 0) {
         fList.push({
           name: `敏感路径命中 ${high.length} 个`,
           severity: "high",
-          summary: "soft-404 校准后仍 200 的高价值路径(.git/.env/swagger/actuator/druid 等)",
+          summary: "soft-404 校准后仍 200 的高价值路径(.git/.env/swagger/actuator/druid/oidc-discovery 等)",
           poc: high.join("\n"),
         });
       }
