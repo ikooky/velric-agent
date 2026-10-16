@@ -296,7 +296,7 @@ export const handlers: Readonly<Record<string, Handler>> = {
     return fetchWayback({ target: p.target, outputRoot: p.outputRoot, maxUrls: p.maxUrls, proxy: p.proxy });
   },
   detect_sourcemaps: async (raw) => {
-    const p = z.object({ outputRoot: z.string(), jsDir: z.string().optional(), baseUrl: z.string().optional(), proxy: z.string().optional() }).parse(raw);
+    const p = z.object({ outputRoot: z.string(), jsDir: z.string().optional(), baseUrl: z.string().optional(), proxy: z.string().optional(), recover: z.boolean().optional() }).parse(raw);
     const { detectSourceMaps } = await import("../domain/sourcemap.js");
     return detectSourceMaps(p);
   },

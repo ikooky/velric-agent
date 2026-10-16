@@ -403,7 +403,7 @@ export const sourcemapsContract: ToolContract = {
     "Checks every harvested JS for sourceMappingURL + probes <file>.map (local then remote via baseUrl). Leaked maps = recoverable original sources. Writes sourcemaps.txt.",
   kind: "runtime",
   inputSchema: z.object({
-      proxy: z.string().optional().describe("egress proxy URI"), outputRoot, jsDir: z.string().optional(), baseUrl: z.string().optional(), observationLedgerRoot: LEDGER }),
+      proxy: z.string().optional().describe("egress proxy URI"), outputRoot, jsDir: z.string().optional(), baseUrl: z.string().optional(), recover: z.boolean().optional().describe("recover original sources from sourcesContent into outputRoot/sourcemap-recovered/ (per-source degradation, missing listed in manifest)"), observationLedgerRoot: LEDGER }),
   outputSchema: z.object({ leaked: z.array(z.unknown()) }),
   annotations: writingAnnotations(),
   examples: [{ title: "sm", input: { outputRoot: "/tmp/recon" } }],

@@ -5,7 +5,7 @@ import { createServer, type Server } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { writeFile, mkdir } from "node:fs/promises";
+import { writeFile, mkdir, readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 
 const B = (s: string) => Buffer.from(s);
@@ -121,6 +121,55 @@ describe("review fixes: behavioral both-polarity fixtures", () => {
     // The wire truth: /api/orders sees cookie sid=low ONLY — verify no admin leak
     // by checking the mock's denial: injected role=admin with sid=low → 403 rejected.
     expect(out.sinks.every((s: { verdict: string }) => s.verdict !== "accepted-changed")).toBe(true);
+  });
+
+  it("P0: normalization makes timestamp-noise bodies compare equal", async () => {
+    const { normalizeBody, tokenSimilarity } = await import("../src/domain/normalize.js");
+    const a = '{"ts":"2026-10-16T08:00:00.123Z","reqId":"a1b2c3d4e5f6a7b8","rows":[1,2,3]}';
+    const b = '{"ts":"2026-10-16T09:11:22.456Z","reqId":"f6e5d4c3b2a19870","rows":[1,2,3]}';
+    expect(normalizeBody(a)).toBe(normalizeBody(b)); // volatile stripped
+    const c = '{"rows":[1,2,3,4]}';
+    expect(normalizeBody(a)).not.toBe(normalizeBody(c)); // real diff survives
+    expect(tokenSimilarity(normalizeBody(a), normalizeBody(b))).toBeGreaterThan(0.9);
+    expect(tokenSimilarity(normalizeBody(a), normalizeBody(c))).toBeLessThan(0.9);
+  });
+
+  it("P0: headerBypass SPA shell 2xx is NOT a bypass", async () => {
+    // mock: /admin 401 for baseline; WITH X-Original-URL header returns 200 SPA index (tiny html)
+    const srv2 = createServer((req, res) => {
+      if (req.url === "/admin" && req.headers["x-original-url"]) {
+        res.writeHead(200, { "content-type": "text/html" });
+        res.end("<html><body>app</body></html>"); // tiny shell
+        return;
+      }
+      res.writeHead(401); res.end("no auth");
+    });
+    await new Promise<void>((r) => srv2.listen(0, "127.0.0.1", r));
+    const b2 = `http://127.0.0.1:${(srv2.address() as { port: number }).port}/admin`;
+    const root2 = mkdtempSync(join(tmpdir(), "p0-hb-"));
+    const { probeHeaderBypass } = await import("../src/domain/headerBypass.js");
+    const out = await probeHeaderBypass({ urls: [b2], outputRoot: root2 } as never);
+    expect(out.bypasses).toHaveLength(0); // shell excluded
+    expect(out.attempts.some((a: { verdict: string }) => a.verdict === "shell-suspect")).toBe(true);
+    srv2.close();
+  });
+
+  it("P0: sourcemap data-URI inline map detected", async () => {
+    const { createHash } = await import("node:crypto");
+    const root2 = mkdtempSync(join(tmpdir(), "p0-sm-"));
+    const { mkdir: mk, writeFile: wf } = await import("node:fs/promises");
+    await mk(join(root2, "js"), { recursive: true });
+    const map = JSON.stringify({ version: 3, sources: ["src/app.ts", "src/util.ts"], sourcesContent: ["const a=1;", "const b=2;"] });
+    const inline = `//# sourceMappingURL=data:application/json;base64,${Buffer.from(map).toString("base64")}`;
+    await wf(join(root2, "js", "app.js"), `console.log(1);\n${inline}`);
+    const { detectSourceMaps } = await import("../src/domain/sourcemap.js");
+    const out = await detectSourceMaps({ jsDir: join(root2, "js"), outputRoot: root2, recover: true });
+    expect(out.leaked.some((l: { mapUrl: string }) => l.mapUrl === "data:inline")).toBe(true);
+    // recovery: 2 sources recovered
+    expect(out.recovered?.recovered).toBe(2);
+    // recovered file content check
+    const rec = await readFile(join(root2, "sourcemap-recovered", "src", "app.ts"), "utf8");
+    expect(rec).toBe("const a=1;");
   });
 
   it("E1: paramProbe aborts endpoint on unstable baseline", async () => {

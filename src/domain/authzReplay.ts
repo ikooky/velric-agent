@@ -1,5 +1,6 @@
 import { fetchUrl } from "../adapters/http.js";
 import { writeFile, mkdir, readFile } from "node:fs/promises";
+import { normalizeBody, tokenSimilarity } from "./normalize.js";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 
@@ -74,7 +75,14 @@ export interface AuthzReplayResult {
  *  (replaced per-role), hop-by-hop, and length/identity headers tied to the
  *  original request bytes. */
 const CREDENTIAL_HEADER_RE = /^(cookie|authorization|x-api-key|x-auth-token|x-csrf-token|x-xsrf-token|api-key)$/i;
-const HOP_HEADERS = new Set(["host", "content-length", "connection", "transfer-encoding", "keep-alive", "upgrade", "proxy-authorization", "proxy-connection", "te", "trailer"]);
+const HOP_HEADERS = new Set([
+  "host", "content-length", "connection", "transfer-encoding", "keep-alive", "upgrade",
+  "proxy-authorization", "proxy-connection", "te", "trailer",
+  // Conditional validators: replaying a recorded If-None-Match yields 304 empty
+  // bodies that mismatch every fingerprint and drown the diff in unknown
+  // (Autorize's handle_304_status_code_prevention).
+  "if-none-match", "if-modified-since",
+]);
 
 const credentialHeaders = (roleHeader: string): Record<string, string> => {
   const isAuthHeader = /^authorization\s*:/i.test(roleHeader);
@@ -88,6 +96,17 @@ const credentialHeaders = (roleHeader: string): Record<string, string> => {
 
 /** A 2xx that is actually a denial in disguise — same discipline as
  *  roleMatrix (content, not bare status). */
+const hashOf = (s: string): string => createHash("sha256").update(s).digest("hex").slice(0, 12);
+
+/** Normalized recorded body text, or null when the blob is absent. */
+const readNormalizedBlob = async (recordRoot: string, hash: string | null): Promise<string | null> => {
+  if (!hash) return null;
+  try {
+    const raw = await readFile(join(recordRoot, "blobs", hash.slice(0, 2), `${hash}.bin`), "utf8");
+    return normalizeBody(raw);
+  } catch { return null; }
+};
+
 const DENIAL_BODY_RE = /access[- ]?denied|forbidden|unauthori[sz]ed|permission denied|not allowed|insufficient|you don't have|login required|请登录|无权|没有权限/i;
 
 const fingerprint = (status: number, bodyHash: string, hasBody: boolean): string =>
@@ -139,6 +158,12 @@ export const replayAuthz = async (input: AuthzReplayInput): Promise<AuthzReplayR
     }
   } else {
     for (const e of exchanges) {
+      // Conditional/No-Content baselines carry no diffable body — skip rather
+      // than pollute the matrix (Autorize ignore304).
+      if (e.status === 304 || e.status === 204) {
+        cells.push({ exchangeId: e.id, method: e.method, url: e.url, role: "-", baselineStatus: e.status ?? 0, replayStatus: 0, redirectedAway: false, verdict: "unknown", note: "skip: conditional/no-content baseline" });
+        continue;
+      }
       const body = await loadBlob(input.recordRoot, e.reqBodyHash);
       if (e.reqBodyHash && body == null) {
         // Missing request blob: replaying bodyless would draw a 400/422 that
@@ -172,22 +197,37 @@ export const replayAuthz = async (input: AuthzReplayInput): Promise<AuthzReplayR
 
         let verdict: EnforcementCell["verdict"];
         let note: string;
-        if (redirectedAway) {
+        if (r.status === 429 || (r.status >= 500 && r.status < 600)) {
+          // Infrastructure noise ≠ application authz verdict (Authz-ExeC WAF tier):
+          // rate limiting / WAF / origin errors are not authorization evidence.
+          verdict = "unknown"; note = `infra-blocked (status ${r.status}) — not an authz signal`;
+        } else if (redirectedAway) {
           verdict = "enforced"; note = "redirected away (auth wall)";
         } else if (r.status === 401 || r.status === 403) {
           verdict = "enforced"; note = `denied with ${r.status}`;
         } else if (deniedish || shellDenied) {
           verdict = "enforced"; note = "2xx denial-shaped body";
+        } else if ((r.status >= 200 && r.status < 300) && ["[]", "{}", ""].includes(r.body.trim()) && baseSuccess && (e.respBodyHash ?? "") !== "") {
+          // Empty success on a baseline that HAD content = row-level filtering,
+          // a soft denial (Authz-ExeC "empty success" tier).
+          verdict = "enforced"; note = "2xx empty body (row-level filtered) while baseline had content";
         } else if ((r.status >= 200 && r.status < 300) && baseSuccess) {
           // Low-priv got a SUCCESS-shaped response for a resource the baseline
           // (high-priv) accessed. Same fingerprint = same content = bypass;
           // different fingerprint but still 2xx = needs eyes.
           const baseFp = await blobFingerprint(input.recordRoot, e.respBodyHash);
           const replayFp = fingerprint(r.status, r.sha256, r.bytes > 0);
+          // Volatile-normalized second opinion (Authz-ExeC): identical after
+          // stripping timestamps/request-ids/nonces → same content.
+          const nReplay = normalizeBody(r.body);
+          const nBase = await readNormalizedBlob(input.recordRoot, e.respBodyHash);
+          const sim = nBase === null ? 0 : tokenSimilarity(nReplay, nBase);
           if (baseFp === replayFp) {
             verdict = "bypassed"; note = `same response fingerprint as baseline (${replayFp})`;
+          } else if (nBase !== null && sim >= 0.9) {
+            verdict = "bypassed"; note = `normalized bodies match (token similarity ${sim.toFixed(2)} — volatile noise stripped)`;
           } else {
-            verdict = "unknown"; note = `2xx but body differs from baseline (${replayFp} vs ${baseFp}) — manual check`;
+            verdict = "unknown"; note = `2xx but body differs from baseline (${replayFp} vs ${baseFp}, sim ${sim.toFixed(2)}) — manual check`;
           }
         } else if (r.status === 404) {
           // ACL-based invisibility: 404 for a resource the baseline reached
@@ -215,7 +255,15 @@ export const replayAuthz = async (input: AuthzReplayInput): Promise<AuthzReplayR
 /** Baseline body fingerprint from the stored blob. Only invoked for
  *  successful (2xx) baselines — the caller gates on baseSuccess — so the
  *  status class prefix is pinned to 2. */
-const blobFingerprint = async (_recordRoot: string, hash: string | null): Promise<string> => {
+const blobFingerprint = async (recordRoot: string, hash: string | null): Promise<string> => {
   if (!hash) return "nobody";
-  return `2:${hash.slice(0, 12)}`;
+  // Normalized fingerprint: read the recorded body and strip volatile tokens
+  // (timestamps/request-ids/nonces) BEFORE hashing, symmetric with the live
+  // replay side — raw-hash comparisons drown in per-request noise.
+  try {
+    const raw = await readFile(join(recordRoot, "blobs", hash.slice(0, 2), `${hash}.bin`), "utf8");
+    return `2n:${normalizeBody(raw).length}:${hashOf(normalizeBody(raw))}`;
+  } catch {
+    return `2:${hash.slice(0, 12)}`;
+  }
 };

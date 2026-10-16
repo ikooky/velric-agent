@@ -28,7 +28,7 @@ export interface HeaderBypassResult {
     headerName: string;
     baseline: number;
     tampered: number;
-    verdict: "bypassed" | "no-change" | "softer-error";
+    verdict: "bypassed" | "no-change" | "softer-error" | "shell-suspect";
     note?: string;
   }[];
   readonly bypasses: { url: string; technique: string; headerName: string; baseline: number; tampered: number; note?: string }[];
@@ -83,8 +83,13 @@ export const probeHeaderBypass = async (input: HeaderBypassInput): Promise<Heade
       // Differential: a redirect that lands on a login page (200) is the
       // same wall, not a bypass; only a 2xx whose BODY differs from the
       // denied baseline counts. 3xx never counts as bypassed.
-      const verdict: "bypassed" | "no-change" | "softer-error" =
+      // SPA shell exclusion (pentest-ai _is_shell_or_empty): a 2xx whose body
+      // is the SPA index (tiny or markup-skeleton) is NOT evidence the route
+      // was reached — client-side routing answers 200 for every path.
+      const shellBody = r.status >= 200 && r.status < 300 && (r.body.length < 800 || r.body.trimStart().startsWith("<"));
+      const verdict: "bypassed" | "no-change" | "softer-error" | "shell-suspect" =
         r.status >= 300 && r.status < 400 ? "no-change" :
+        r.status >= 200 && r.status < 300 && shellBody && r.sha256.slice(0, 16) !== baseFp.split(":")[1] ? "shell-suspect" :
         r.status >= 200 && r.status < 300 && r.sha256.slice(0, 16) !== baseFp.split(":")[1] ? "bypassed" :
         baseFp === `${r.status}:${r.sha256.slice(0, 16)}` ? "no-change" :
         (r.status === 401 || r.status === 403) ? "no-change" : "softer-error";

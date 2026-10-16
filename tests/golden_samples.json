@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-15T18:03:37.732Z",
+  "generatedAt": "2026-10-16T01:06:13.983Z",
   "excluded": {
     "subdomain_enum": "external corpora (crt.sh dns brute) — needs real DNS",
     "subdomain_alter": "needs real DNS resolution of public names",
@@ -12,7 +12,7 @@
   },
   "samples": {
     "http_probe": {
-      "url": "http://127.0.0.1:41265/",
+      "url": "http://127.0.0.1:36771/",
       "finalUrl": null,
       "status": 200,
       "ok": true,
@@ -27,11 +27,11 @@
       "techStack": []
     },
     "harvest_static": {
-      "entryUrl": "http://127.0.0.1:41265",
+      "entryUrl": "http://127.0.0.1:36771",
       "robotsRoutes": 0,
       "scriptsInHtml": 0,
       "touchedUrls": [
-        "http://127.0.0.1:41265"
+        "http://127.0.0.1:36771"
       ],
       "jsDownloaded": 0,
       "manifestUrls": 0,
@@ -110,7 +110,7 @@
     },
     "capture_runtime": {
       "shell": {
-        "url": "http://127.0.0.1:41265/",
+        "url": "http://127.0.0.1:36771/",
         "loginForm": false,
         "links": [
           "/api/v1/users"
@@ -236,7 +236,7 @@
       ]
     },
     "probe_cors": {
-      "baseUrl": "http://127.0.0.1:41265",
+      "baseUrl": "http://127.0.0.1:36771",
       "results": [
         {
           "origin": "https://evil-velric.example.com",
@@ -272,7 +272,7 @@
       ]
     },
     "fingerprint": {
-      "baseUrl": "http://127.0.0.1:41265",
+      "baseUrl": "http://127.0.0.1:36771",
       "waf": [],
       "methods": {
         "allowed": [],
@@ -358,7 +358,7 @@
       ]
     },
     "git_restore": {
-      "baseUrl": "http://127.0.0.1:41265",
+      "baseUrl": "http://127.0.0.1:36771",
       "gitFound": false,
       "objectsRecovered": 0,
       "commits": [],
@@ -389,11 +389,11 @@
       ]
     },
     "probe_oidc": {
-      "baseUrl": "http://127.0.0.1:41265",
+      "baseUrl": "http://127.0.0.1:36771",
       "found": [
         {
           "kind": "oidc",
-          "url": "http://127.0.0.1:41265/.well-known/openid-configuration",
+          "url": "http://127.0.0.1:36771/.well-known/openid-configuration",
           "config": {
             "issuer": "http://127.0.0.1",
             "jwks_uri": "http://127.0.0.1/jwks"
@@ -409,7 +409,7 @@
       ]
     },
     "probe_smuggle": {
-      "baseUrl": "http://127.0.0.1:41265",
+      "baseUrl": "http://127.0.0.1:36771",
       "probed": 8,
       "differentials": [
         {
@@ -430,7 +430,7 @@
       ]
     },
     "ws_origin_check": {
-      "url": "ws://127.0.0.1:41265",
+      "url": "ws://127.0.0.1:36771",
       "vulnerable": false,
       "authCarried": "none-visible",
       "variants": [
@@ -486,7 +486,7 @@
       ]
     },
     "nuclei_lite": {
-      "baseUrl": "http://127.0.0.1:41265",
+      "baseUrl": "http://127.0.0.1:36771",
       "scanned": 14,
       "matched": [],
       "artifacts": [
@@ -497,11 +497,11 @@
       ]
     },
     "login_replay": {
-      "baseUrl": "http://127.0.0.1:41265/login",
+      "baseUrl": "http://127.0.0.1:36771/login",
       "formFound": false,
       "submitted": false,
       "cookieHeader": null,
-      "landedUrl": "http://127.0.0.1:41265/login",
+      "landedUrl": "http://127.0.0.1:36771/login",
       "artifacts": []
     },
     "backup_unpack": {
@@ -560,7 +560,7 @@
       }
     },
     "run_coverage": {
-      "baseUrl": "http://127.0.0.1:41265",
+      "baseUrl": "http://127.0.0.1:36771",
       "routesVisited": [
         "/"
       ],
@@ -575,7 +575,7 @@
       ]
     },
     "build_site_map": {
-      "site": "http://127.0.0.1:41265",
+      "site": "http://127.0.0.1:36771",
       "runtimeMode": "static-only",
       "appType": "unknown",
       "routeGuardStrategy": [],
@@ -589,7 +589,7 @@
       "limitations": "static harvest only; runtime/coverage stages not run"
     },
     "traffic_record": {
-      "port": 37681,
+      "port": 39965,
       "note": "recorder bound; call again with stop:true to release"
     },
     "asset_graph": {
@@ -597,13 +597,13 @@
       "counts": {
         "subdomain": 1,
         "root_domain": 1,
-        "service": 6
+        "service": 8
       }
     },
     "exploration_graph": {
       "ok": true,
       "node": {
-        "id": "n8",
+        "id": "n10",
         "kind": "goal",
         "summary": "map target"
       }
@@ -650,7 +650,7 @@
       "attempts": [
         {
           "mutation": "raw",
-          "url": "http://127.0.0.1:41265/?q=1%27+UNION+SELECT--",
+          "url": "http://127.0.0.1:36771/?q=1%27+UNION+SELECT--",
           "status": 200,
           "wafSignature": null,
           "delivered": true
@@ -741,7 +741,7 @@
       "input": 2,
       "kept": 1,
       "urls": [
-        "http://127.0.0.1:41265/a?id=1"
+        "http://127.0.0.1:36771/a?id=1"
       ],
       "artifacts": [
         {
@@ -754,7 +754,7 @@
       "probed": 2,
       "hits": [
         {
-          "url": "http://127.0.0.1:41265/admin",
+          "url": "http://127.0.0.1:36771/admin",
           "status": 200,
           "size": 31,
           "words": 1,
@@ -765,8 +765,8 @@
       ],
       "calibration": {
         "words": [
-          "87yd28tc47",
-          "p804cdv96f"
+          "p8mmgmo651",
+          "31o6ciuq0a"
         ],
         "softStatus": 404,
         "softSizes": [
@@ -786,8 +786,8 @@
       "failed": 0,
       "entries": [
         {
-          "url": "http://127.0.0.1:41265/",
-          "finalUrl": "http://127.0.0.1:41265/",
+          "url": "http://127.0.0.1:36771/",
+          "finalUrl": "http://127.0.0.1:36771/",
           "title": "",
           "status": 200,
           "screenshotHash": "0245b1c53119f8c4178c62a0a8b29b8342f17e537635fe2fc08be8b5951a7e83",
@@ -797,7 +797,7 @@
       ],
       "clusters": {
         "0245b1c53119f8c4": [
-          "http://127.0.0.1:41265/"
+          "http://127.0.0.1:36771/"
         ]
       },
       "artifacts": [
@@ -902,7 +902,7 @@
       "probed": 23,
       "found": [
         {
-          "url": "http://127.0.0.1:41265/admin",
+          "url": "http://127.0.0.1:36771/admin",
           "kind": "admin-generic",
           "status": 200,
           "bytes": 31
