@@ -597,7 +597,11 @@ export const handlers: Readonly<Record<string, Handler>> = {
     return crawlSession(p);
   },
   deobfuscate_js: async (raw) => {
-    const p = z.object({ jsDir: z.string(), outputRoot: z.string(), maxFiles: z.number().optional(), maxFileBytes: z.number().optional() }).parse(raw);
+    const p = z.object({ jsDir: z.string(), outputRoot: z.string(), action: z.enum(["deobf", "analyze"]).optional(), maxFiles: z.number().optional(), maxFileBytes: z.number().optional() }).parse(raw);
+    if (p.action === "analyze") {
+      const { analyzeCorpus } = await import("../domain/jsAnalyze.js");
+      return analyzeCorpus({ jsDir: p.jsDir, outputRoot: p.outputRoot, maxFiles: p.maxFiles, maxFileBytes: p.maxFileBytes });
+    }
     const { deobfuscateCorpus } = await import("../domain/deobf.js");
     return deobfuscateCorpus(p);
   },

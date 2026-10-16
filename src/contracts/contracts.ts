@@ -773,8 +773,8 @@ export const deobfContract: ToolContract = {
   description:
     "String-array unpacking (obfuscator.io style: hex-escaped arrays + decoder inlining + direct indexing) and control-flow-flattening simplification over the harvested JS corpus. Restores the literals the route/gate/permTree extractors need. Writes js-deobf/ + deobf_summary.json.",
   kind: "runtime",
-  inputSchema: z.object({ jsDir: z.string(), outputRoot, maxFiles: z.number().optional(), maxFileBytes: z.number().optional(), observationLedgerRoot: LEDGER }),
-  outputSchema: z.object({ files: z.number(), restored: z.array(z.object({ file: z.string(), stringsRestored: z.number() })) }),
+  inputSchema: z.object({ jsDir: z.string(), outputRoot, action: z.enum(["deobf", "analyze"]).optional().describe("deobf (default): string-array unpacking + control-flow simplification. analyze: deterministic identifier renaming (scope-aware, source-hash seeded) + webpack module graph (entry/edges/missing boundaries) — per-file report, no execution"), maxFiles: z.number().optional(), maxFileBytes: z.number().optional(), observationLedgerRoot: LEDGER }),
+  outputSchema: z.object({}).passthrough(), // deobf:{files,restored[]} analyze:{files,renamed,graphs}
   annotations: writingAnnotations(),
   examples: [{ title: "deobf", input: { jsDir: "/tmp/recon/js", outputRoot: "/tmp/recon" } }],
 };

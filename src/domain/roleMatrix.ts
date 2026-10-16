@@ -20,6 +20,15 @@ export interface RoleMatrixInput {
   readonly timeoutMs?: number;
   readonly maxEndpoints?: number;
   readonly maxCodes?: number;
+  /** Privilege levels (Hadrian roles.yaml level): role -> numeric level.
+   *  Used with expectations to tell "expected deny" from "violation" — the
+   *  matrix then reports DEVIATIONS from the declared model, not every
+   *  difference (AuthMatrix expected-matrix semantics). */
+  readonly roleLevels?: Record<string, number>;
+  /** Expected access: "allow:/admin/*" / "deny:/admin/*" patterns per role.
+   *  A cell matching the expectation is coverage (expected); a cell
+   *  contradicting it is the finding. */
+  readonly expectations?: Record<string, readonly string[]>;
 }
 
 export interface MatrixCell {
@@ -37,6 +46,9 @@ export interface RoleMatrixResult {
    *  frontend model says it should not have the code = escalation surface. */
   readonly accessByEndpoint: { endpoint: string; allowedRoles: string[]; deniedRoles: string[] }[];
   readonly escalations: { endpoint: string; role: string; note: string }[];
+  /** Cells contradicting the DECLARED expectation matrix (AuthMatrix
+   *  semantics): report deviations, not every difference. */
+  readonly violations: { endpoint: string; role: string; note: string }[];
   readonly artifacts: { path: string; bytes: number }[];
 }
 
@@ -136,6 +148,32 @@ export const probeRoleMatrix = async (input: RoleMatrixInput): Promise<RoleMatri
   // the declared model often lacks role bindings, the primary signal is the
   // DIFFERENTIAL itself: low-priv role allowed + high-priv semantics.
   const escalations: RoleMatrixResult["escalations"] = [];
+  // Expected-matrix reconciliation (AuthMatrix/Hadrian): with expectations
+  // declared, a low-priv ALLOW that the model expects to deny is a VIOLATION;
+  // an expected deny that holds is coverage, not a finding.
+  const expectsAllow = (role: string, endpoint: string): boolean | null => {
+    const pats = input.expectations?.[role];
+    if (!pats) return null;
+    let out: boolean | null = null;
+    for (const p of pats) {
+      const [verb, pat] = p.split(":");
+      if (!verb || !pat) continue;
+      const re = new RegExp("^" + pat.replace(/[.+?^${}()|[\]\\]/g, (c) => (c === "*" ? ".*" : `\\${c}`)) + "$");
+      if (re.test(endpoint)) out = verb === "allow";
+    }
+    return out;
+  };
+  const violations: { endpoint: string; role: string; note: string }[] = [];
+  for (const a of accessByEndpoint) {
+    for (const role of a.allowedRoles) {
+      const want = expectsAllow(role, a.endpoint);
+      if (want === false) violations.push({ endpoint: a.endpoint, role, note: "expected DENY per declared matrix — access granted is a violation" });
+    }
+    for (const role of a.deniedRoles) {
+      const want = expectsAllow(role, a.endpoint);
+      if (want === true) violations.push({ endpoint: a.endpoint, role, note: "expected ALLOW per declared matrix — denial may break functionality or hint at hidden gate" });
+    }
+  }
   const roleRank = (n: string): number => n.toLowerCase().indexOf("admin") >= 0 || n.toLowerCase().indexOf("root") >= 0 ? 1 : 0;
   // A denied role's verdict only counts when its credential WORKS somewhere
   // (allowed on >=1 other endpoint) — otherwise "denied everywhere" is just
@@ -150,8 +188,8 @@ export const probeRoleMatrix = async (input: RoleMatrixInput): Promise<RoleMatri
     }
   }
 
-  const body = JSON.stringify({ probed: endpoints.length, matrix, accessByEndpoint, escalations }, null, 2);
+  const body = JSON.stringify({ probed: endpoints.length, matrix, accessByEndpoint, escalations, violations: [...violations, ...escalations] }, null, 2);
   const path = join(input.outputRoot, "role_matrix.json");
   await writeFile(path, body);
-  return { probed: endpoints.length, matrix, accessByEndpoint, escalations, artifacts: [{ path, bytes: Buffer.byteLength(body) }] };
+  return { probed: endpoints.length, matrix, accessByEndpoint, escalations, violations: [...violations, ...escalations], artifacts: [{ path, bytes: Buffer.byteLength(body) }] };
 };

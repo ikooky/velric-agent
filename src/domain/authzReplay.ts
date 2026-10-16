@@ -209,6 +209,13 @@ export const replayAuthz = async (input: AuthzReplayInput): Promise<AuthzReplayR
   const extraDeny = (input.denyFingerprints ?? []).map((f) => f.replace(/[/\\^$*+?.()|[\]{}]/g, (c) => `\\${c}`));
   const opts = { proxy: input.proxy, timeoutMs: input.timeoutMs ?? 10000 };
   const cells: EnforcementCell[] = [];
+  // Credential-expiry circuit breaker (Akto authStatus): a role whose replays
+  // ALL come back 401 with login-ish shape has an expired session — continuing
+  // manufactures a page of false "enforced" verdicts. After 5 consecutive
+  // denials the role is marked session-expired and its remaining exchanges are
+  // skipped with an explicit marker (never silently recorded as enforced).
+  const denialStreak: Record<string, number> = {};
+  const expiredRoles = new Set<string>();
 
   if (input.apply === false) {
     // Dry inventory: what would be replayed per role.
@@ -239,6 +246,10 @@ export const replayAuthz = async (input: AuthzReplayInput): Promise<AuthzReplayR
         baseHeaders[lk] = v;
       }
       for (const role of replayRoles) {
+        if (expiredRoles.has(role)) {
+          cells.push({ exchangeId: e.id, method: e.method, url: e.url, role, baselineStatus: e.status ?? 0, replayStatus: -1, redirectedAway: false, verdict: "unknown", note: "skip: session-expired (circuit breaker)" });
+          continue;
+        }
         // Anonymous: no injected credentials AND strip any residual credential
         // carriers from the recorded baseline headers.
         const headers = role === "__anonymous__"
@@ -282,6 +293,14 @@ export const replayAuthz = async (input: AuthzReplayInput): Promise<AuthzReplayR
           verdict = "enforced"; note = "redirected away (auth wall)";
         } else if (r.status === 401 || r.status === 403) {
           verdict = "enforced"; note = `denied with ${r.status}`;
+          if (role !== "__anonymous__") {
+            denialStreak[role] = (denialStreak[role] ?? 0) + 1;
+            const loginWall = DENIAL_BODY_RE.test(r.body.slice(0, 2048)) || (r.headers?.["www-authenticate"] ?? "") !== "";
+            if (r.status === 401 && denialStreak[role]! >= 5 && loginWall) {
+              expiredRoles.add(role);
+              note = "denied with 401 — session-expired suspected, role circuit-broken (remaining exchanges skipped)";
+            }
+          }
         } else if (deniedish || shellDenied) {
           verdict = "enforced"; note = "2xx denial-shaped body";
         } else if ((r.status >= 200 && r.status < 300) && ["[]", "{}", ""].includes(r.body.trim()) && baseSuccess && (e.respBodyHash ?? "") !== "") {
@@ -325,6 +344,7 @@ export const replayAuthz = async (input: AuthzReplayInput): Promise<AuthzReplayR
         } else {
           verdict = "unknown"; note = `status ${r.status} — inconclusive`;
         }
+        if (verdict !== "enforced") denialStreak[role] = 0; // live evidence the session works
         cells.push({ exchangeId: e.id, method: e.method, url: e.url, role, baselineStatus: e.status ?? 0, replayStatus: r.status, redirectedAway, verdict, note });
         if (role === "__anonymous__" && verdict === "bypassed") {
           // Anonymous got the SAME content as the recorded baseline → the
