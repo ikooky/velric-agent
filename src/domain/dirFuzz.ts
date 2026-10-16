@@ -1,11 +1,12 @@
-import { fetchUrl } from "../adapters/http.js";
+import { fetchUrl, type FetchResult } from "../adapters/http.js";
+import { discoveryOrigin, discoveryUrl, discoverySignature, stableDiscoverySignatures } from "./pathProbe.js";
 import { readFile } from "node:fs/promises";
 import { ensureDir, writeArtifact } from "../adapters/artifacts.js";
 import { join } from "node:path";
 
-/** Wordlist-driven content discovery (ffuf/feroxbuster design): FUZZ keyword
+/** Wordlist-driven content discovery: FUZZ keyword
  *  substitution in path/param positions, auto-calibration against soft-404s
- *  (random-probe baseline, ffuf -ac), optional recursion into discovered
+ *  (random-probe baseline), optional recursion into discovered
  *  directories, extension mutation, and multi-dimensional filtering
  *  (status/size/words/lines). Deterministic, single-threaded by default
  *  (rps-limited via the global throttle), no LLM. */
@@ -86,22 +87,24 @@ export const dirFuzz = async (input: DirFuzzInput): Promise<DirFuzzResult> => {
     for (const e of exts) candidates.add(`${w}${e}`);
   }
 
-  const opts = { cookie: input.cookie, headers: input.headers, proxy: input.proxy, timeoutMs: input.timeoutMs ?? 8000 };
+  const opts = { cookie: input.cookie, headers: input.headers, proxy: input.proxy, timeoutMs: input.timeoutMs ?? 8000, redirect: "manual" as const };
   const base = input.url.includes("FUZZ")
     ? input.url
     : input.url.replace(/\/$/, "") + "/FUZZ";
   const mk = (word: string): string => base.replace(/FUZZ/g, encodeURIComponent(word));
 
-  // --- auto-calibration (ffuf -ac): random probes learn the soft-404 shape.
+  // --- auto-calibration: random probes learn the soft-404 shape.
   const calWords = Array.from({ length: input.calibration ?? 2 }, () => Math.random().toString(36).slice(2, 12));
-  const calResponses: { status: number; size: number }[] = [];
+  const calResponses: FetchResult[] = [];
+  const origin = discoveryOrigin(base);
   for (const w of calWords) {
-    const r = await fetchUrl(mk(w), opts);
-    if (r.status !== 0) calResponses.push({ status: r.status, size: r.bytes });
+    const url = discoveryUrl(origin, mk(w));
+    if (url) calResponses.push(await fetchUrl(url, opts));
   }
-  const softStatus = calResponses.length >= 2 && calResponses[0]!.status === calResponses[1]!.status ? calResponses[0]!.status : null;
-  const softSizes = calResponses.map((c) => c.size).filter((s) => s > 0);
-  const filterSizes = new Set<number>([...(input.filterSize ?? []), ...softSizes]);
+  const stable = stableDiscoverySignatures(calResponses);
+  const softStatus = stable.size === 1 ? calResponses[0]!.status : null;
+  const softSizes = [...new Set(calResponses.filter(r => stable.has(discoverySignature(r))).map(r => r.bytes))];
+  const filterSizes = new Set<number>(input.filterSize ?? []);
 
   const maxDepth = input.recursion ? (input.recursionDepth ?? 1) : 0;
   const hits: FuzzHit[] = [];
@@ -111,14 +114,15 @@ export const dirFuzz = async (input: DirFuzzInput): Promise<DirFuzzResult> => {
     const queue: string[] = [...candidates];
     const foundDirs: string[] = [];
     for (const w of queue) {
-      const url = tpl.replace(/FUZZ/g, encodeURIComponent(w));
+      const url = discoveryUrl(origin, tpl.replace(/FUZZ/g, encodeURIComponent(w)));
+      if (!url) continue;
       const r = await fetchUrl(url, opts);
       probed++;
       if (input.delayMs && input.delayMs > 0) await new Promise((res) => setTimeout(res, input.delayMs));
-      if (r.status === 0) continue;
+      if (r.status === 0 || r.complete === false || r.truncated || r.error) continue;
       if (!shouldMatch(r.status, input.matchStatus ?? [])) continue;
       if (filterSizes.has(r.bytes)) continue; // soft-404 size (calibrated)
-      if (softStatus !== null && r.status === softStatus && softSizes.includes(r.bytes)) continue;
+      if (stable.has(discoverySignature(r))) continue;
       hits.push({
         url, status: r.status, size: r.bytes, words: words_of(r.body), lines: lines_of(r.body),
         contentType: r.contentType, depth,

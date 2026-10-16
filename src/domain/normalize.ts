@@ -1,128 +1,142 @@
-/**
- * Volatile-content normalization for differential verdicts (Authz-ExeC
- * EnforcementDetector discipline): before hashing/comparing two response
- * bodies, rewrite volatile token classes to fixed placeholders so that
- * per-request noise (timestamps, request-ids, nonces, CSRF values, HTML
- * comments) cannot make "same content" look "different".
+/** Identity-preserving comparison helpers for authorization differentials.
  *
- * Every pattern here is deterministic; the module is pure. Applied on BOTH
- * sides of every body comparison (recorded blob fingerprints and live replay
- * fingerprints) — normalizing only one side makes diffs strictly worse.
+ * Normalization is deliberately opt-in for volatility: without repeated
+ * same-context samples no field is assumed to be noise. Identity-bearing
+ * fields are never masked by the learned profile.
  */
+export interface NormalizationProfile { readonly volatilePaths: readonly string[] }
 
-const RULES: readonly { readonly re: RegExp; readonly sub: string }[] = [
-  // UUIDs (v4-ish, any variant nibble)
-  { re: /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, sub: "<uuid>" },
-  // ISO-8601 timestamps (with/without ms, Z or offset)
-  { re: /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:?\d{2})?\b/g, sub: "<iso-ts>" },
-  // Chinese-style dates 2026年10月16日 / 2026/10/16 / 2026-10-16
-  { re: /\b\d{4}[-/年]\d{1,2}[-/月]\d{1,2}日?\b/g, sub: "<date>" },
-  // Unix epoch seconds (10) / millis (13)
-  { re: /\b1[0-9]{9}\b/g, sub: "<unix-s>" },
-  { re: /\b1[0-9]{12}\b/g, sub: "<unix-ms>" },
-  // CSRF / nonce / viewstate / anti-forgery values
-  { re: /(csrf[^"'=]{0,20}|nonce[^"'=]{0,20}|viewstate[^"'=]{0,20}|antiforgery[^"'=]{0,20}|synchronizer[^"'=]{0,20})["'=:\s]+[A-Za-z0-9+/_=-]{16,}/gi, sub: "$1<token>" },
-  // request-id / trace-id / correlation-id header-ish values — key-adjacent
-  // random strings of ANY length (JSON values are quote-delimited, so match
-  // inside quotes or after = : separators)
-  { re: /((?:request|trace|correlation|x-request|req)[-_]?id"?)[:=]\s*"?[A-Za-z0-9-]{6,}"?/gi, sub: "$1:<reqid>" },
-  // camelCase variants: reqId/traceId/requestId/correlationId
-  { re: /((?:request|trace|correlation|req)Id"?)[:=]\s*"?[A-Za-z0-9-]{6,}"?/g, sub: "$1:<reqid>" },
-  // bare short random hex/alnum ids (16+ chars) used as opaque identifiers
-  { re: /\b[0-9a-f]{12,}\b/gi, sub: "<hexid>" },
-  // opaque 32+ hex (hash digests) and 20+ base64url (opaque tokens)
-  { re: /\b[0-9a-f]{32,}\b/gi, sub: "<hash>" },
-  { re: /["'](?=[A-Za-z0-9_-]{24,})(?=[^"']*\d)(?=[^"']*[A-Z])(?=[^"']*[a-z])[A-Za-z0-9_-]{24,}={0,2}["']/g, sub: '"<b64>"' },
-  // HTML comments (build banners, timestamps in comment markers)
-  { re: /<!--[\s\S]*?-->/g, sub: "<!--comment-->" },
-  // whitespace folding + lowercase for stable ordering
-];
+const VOLATILE_KEY = /^(?:ts|time|timestamp|timeStamp|serverTime|updatedAt|updatedAtIso|requestId|request_id|reqId|req_id|traceId|trace_id|traceIdStr|correlationId|correlation_id|xRequestId|nonce|csrfToken|csrf|xsrfToken)$/;
+const IDENTITY_KEY = /(?:owner|object|tenant|user|account|identity|uuid|guid|principal|subject|session|token|^id$)/i;
 
-/** Normalize a response body for comparison. Cheap single pass; safe on any text. */
-export const normalizeBody = (body: string): string => {
-  let out = body;
-  for (const { re, sub } of RULES) out = out.replace(re, sub);
-  return out.toLowerCase().replace(/\s+/g, " ");
+const parse = (s: string): unknown => JSON.parse(s);
+const escapePath = (key: string): string => key.replace(/~/g, "~0").replace(/\//g, "~1");
+const leaves = (v: unknown, path = "", out = new Map<string, unknown>()): Map<string, unknown> => {
+  if (v !== null && typeof v === "object") {
+    if (Array.isArray(v)) {
+      v.forEach((x, i) => leaves(x, `${path}/${i}`, out));
+    } else {
+      for (const [k, x] of Object.entries(v as Record<string, unknown>)) leaves(x, `${path}/${escapePath(k)}`, out);
+    }
+  } else out.set(path, v);
+  return out;
 };
 
-/**
- * Token-overlap similarity (0..1) for the SIMILAR tier: weighted Jaccard over
- * normalized token multisets, capacity-capped (Authz-ExeC similarity()). Used
- * when normalized hashes differ — content may still be effectively the same.
- */
+const pathSegments = (path: string): string[] => path.split("/").slice(1).map((x) => x.replace(/~1/g, "/").replace(/~0/g, "~"));
+const isIdentityPath = (path: string): boolean => pathSegments(path).some((segment) => IDENTITY_KEY.test(segment));
+const opaqueIdentity = (value: unknown): boolean => typeof value === "string"
+  && (/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i.test(value) || /^[\da-f]{16,}$/i.test(value));
+
+export const learnNormalization = (samples: readonly string[]): NormalizationProfile => {
+  if (samples.length < 2) return { volatilePaths: [] };
+  try {
+    const maps = samples.map((s) => leaves(parse(s)));
+    const volatilePaths: string[] = [];
+    for (const [path, value] of maps[0]!) {
+      const key = pathSegments(path).at(-1) ?? "";
+      if (!VOLATILE_KEY.test(key) || isIdentityPath(path) || maps.some((m) => opaqueIdentity(m.get(path)))) continue;
+      if (maps.every((m) => m.has(path) && typeof m.get(path) === typeof value)
+        && maps.some((m) => m.get(path) !== value)) volatilePaths.push(path);
+    }
+    return { volatilePaths };
+  } catch {
+    return { volatilePaths: [] };
+  }
+};
+
+export const normalizeBody = (body: string, profile?: NormalizationProfile): string => {
+  try {
+    const masked = new Set(profile?.volatilePaths ?? []);
+    const walk = (v: unknown, path: string): unknown => {
+      // Default volatility: well-known volatile keys (timestamps, request ids,
+      // nonces, csrf) are masked WITHOUT a learned profile — a single-sample
+      // context still converges. Identity-bearing paths and opaque identity
+      // values (uuid/long-hex) are never masked: owner data must survive.
+      const key = pathSegments(path).at(-1) ?? "";
+      const volatileByDefault = VOLATILE_KEY.test(key)
+        && !isIdentityPath(path)
+        && !(typeof v === "string" && v.length > 96);
+      if (volatileByDefault || (masked.has(path) && !isIdentityPath(path) && !opaqueIdentity(v) && VOLATILE_KEY.test(key))) return "<volatile>";
+      if (Array.isArray(v)) return v.map((x, i) => walk(x, `${path}/${i}`));
+      if (v !== null && typeof v === "object") {
+        return Object.fromEntries(Object.entries(v as Record<string, unknown>)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([k, x]) => [k, walk(x, `${path}/${escapePath(k)}`)]));
+      }
+      return v;
+    };
+    return JSON.stringify(walk(parse(body), ""));
+  } catch {
+    return body;
+  }
+};
+
+interface TokenBag { map: Map<string, number>; count: number; truncated: boolean }
+const tokens = (s: string, limit = 8000): TokenBag => {
+  const map = new Map<string, number>();
+  const all = s.match(/[\p{L}\p{N}_.-]+/gu) ?? [];
+  const chosen = all.slice(0, limit);
+  for (const token of chosen) map.set(token, (map.get(token) ?? 0) + 1);
+  return { map, count: chosen.length, truncated: all.length > limit };
+};
+
+/** Multiset Jaccard. A capped comparison is intentionally never perfect: the
+ * omitted suffix is unknown, not equal. */
 export const tokenSimilarity = (a: string, b: string): number => {
-  const CAP = 8000; // token capacity — same clamp as Authz-ExeC
-  const toks = (s: string): Map<string, number> => {
-    const m = new Map<string, number>();
-    for (const t of s.split(/[^a-z0-9<>.-]+/).slice(0, CAP)) {
-      if (t.length < 2) continue;
-      m.set(t, (m.get(t) ?? 0) + 1);
-    }
-    return m;
-  };
-  const ma = toks(a);
-  const mb = toks(b);
-  if (ma.size === 0 && mb.size === 0) return 1;
-  let inter = 0;
-  let union = 0;
-  for (const [t, c] of ma) {
-    const d = mb.get(t) ?? 0;
-    inter += Math.min(c, d);
-    union += Math.max(c, d);
+  const ta = tokens(a), tb = tokens(b);
+  if (ta.count === 0 || tb.count === 0) return 0;
+  let intersection = 0, union = 0;
+  for (const [token, count] of ta.map) {
+    intersection += Math.min(count, tb.map.get(token) ?? 0);
+    union += Math.max(count, tb.map.get(token) ?? 0);
   }
-  for (const [t, d] of mb) if (!ma.has(t)) union += d;
-  return union === 0 ? 1 : inter / union;
+  for (const [token, count] of tb.map) if (!ta.map.has(token)) union += count;
+  if (union === 0) return 0;
+  const similarity = intersection / union;
+  return ta.truncated || tb.truncated ? Math.min(similarity, 0.999999) : similarity;
 };
 
-/** Character-sequence similarity (python SequenceMatcher语义, deterministic
- *  LCS-ratio approximation): right metric for small JSON bodies where a
- *  couple of owner-field tokens dominate the token space. Capped inputs. */
+/** Bounded character similarity. Exact LCS is used only for small inputs;
+ * larger inputs use bounded n-gram overlap plus length agreement, avoiding a
+ * synchronous O(n*m) event-loop stall and never claiming sampled equality. */
 export const charSimilarity = (a: string, b: string): number => {
-  const CAP = 20000;
-  const x = a.slice(0, CAP);
-  const y = b.slice(0, CAP);
-  if (x === y) return 1;
-  // LCS length via space-rolled DP on capped inputs
-  const n = x.length;
-  const m = y.length;
-  if (n === 0 || m === 0) return 0;
-  let prev = new Uint16Array(m + 1);
-  let cur = new Uint16Array(m + 1);
-  for (let i = 1; i <= n; i++) {
-    const xi = x.charCodeAt(i - 1);
-    for (let j = 1; j <= m; j++) {
-      const diag = prev[j - 1] ?? 0;
-      const up = prev[j] ?? 0;
-      const left = cur[j - 1] ?? 0;
-      cur[j] = xi === y.charCodeAt(j - 1) ? diag + 1 : Math.max(up, left);
-    }
-    const t = prev; prev = cur; cur = t;
+  if (!a.length || !b.length) return 0;
+  if (a === b) return 1;
+  const cells = a.length * b.length;
+  if (cells > 250_000) {
+    const grams = (s: string): Set<string> => {
+      const out = new Set<string>();
+      const step = Math.max(1, Math.ceil(s.length / 8000));
+      for (let i = 0; i + 3 <= s.length; i += step) out.add(s.slice(i, i + 3));
+      if (s.length >= 3) out.add(s.slice(-3));
+      return out;
+    };
+    const x = grams(a), y = grams(b);
+    if (!x.size || !y.size) return 0;
+    let n = 0;
+    for (const gram of x) if (y.has(gram)) n++;
+    const overlap = (2 * n) / (x.size + y.size);
+    const lengthAgreement = Math.min(a.length, b.length) / Math.max(a.length, b.length);
+    return Math.min(0.999999, overlap * lengthAgreement);
   }
-  return (2 * (prev[m] ?? 0)) / (n + m);
+  let prev = new Uint32Array(b.length + 1);
+  let cur = new Uint32Array(b.length + 1);
+  for (let i = 1; i <= a.length; i++) {
+    cur.fill(0);
+    for (let j = 1; j <= b.length; j++) cur[j] = a[i - 1] === b[j - 1] ? prev[j - 1]! + 1 : Math.max(prev[j]!, cur[j - 1]!);
+    [prev, cur] = [cur, prev];
+  }
+  return 2 * prev[b.length]! / (a.length + b.length);
 };
 
-/** Structural (schema) similarity for JSON bodies: key-set Jaccard, ignoring
- *  values — detects "same object type, different owner" (rescoped candidates). */
 export const schemaSimilarity = (a: string, b: string): number => {
-  const keys = (s: string): Set<string> => {
-    const out = new Set<string>();
-    try {
-      const walk = (o: unknown, prefix: string): void => {
-        if (o && typeof o === "object") {
-          for (const [k, v] of Object.entries(o as Record<string, unknown>)) {
-            out.add(`${prefix}.${k}`);
-            walk(v, `${prefix}.${k}`);
-          }
-        }
-      };
-      walk(JSON.parse(s), "");
-    } catch { /* non-JSON → empty keyset, similarity degrades */ }
-    return out;
-  };
-  const ka = keys(a);
-  const kb = keys(b);
-  if (ka.size === 0 && kb.size === 0) return tokenSimilarity(a, b);
-  let inter = 0;
-  for (const k of ka) if (kb.has(k)) inter++;
-  return (ka.size + kb.size - inter) === 0 ? 1 : inter / (ka.size + kb.size - inter);
+  try {
+    const x = new Set(leaves(parse(a)).keys()), y = new Set(leaves(parse(b)).keys());
+    if (x.size === 0 || y.size === 0) return 0;
+    let common = 0;
+    for (const p of x) if (y.has(p)) common++;
+    return common / (x.size + y.size - common);
+  } catch {
+    return tokenSimilarity(a, b);
+  }
 };

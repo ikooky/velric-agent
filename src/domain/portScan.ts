@@ -1,6 +1,6 @@
-import { connect } from "node:net";
-import { writeFile, mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { openTunnel } from "../adapters/rawTunnel.js";
+import { writeArtifact } from "../adapters/artifacts.js";
+import { executionSignal } from "../core/execution.js";
 
 /** TCP connect port scan (top-ports list, no SYN). Deterministic, bounded. */
 
@@ -10,11 +10,15 @@ export interface PortScanInput {
   readonly ports?: number[];
   readonly timeoutMs?: number;
   readonly concurrency?: number;
+  readonly proxy?: string;
+  readonly signal?: AbortSignal;
 }
 
 export interface PortScanResult {
   readonly host: string;
   readonly scanned: number;
+  readonly transport?: "proxy" | "direct";
+  readonly outcomes?: { port: number; outcome: "open" | "closed" | "inconclusive"; error?: string }[];
   readonly open: { port: number; service: string }[];
   readonly artifacts: { path: string; bytes: number }[];
 }
@@ -39,43 +43,30 @@ export const TOP_PORTS: ReadonlyArray<readonly [number, string]> = [
   [27017, "mongodb"], [28017, "mongodb-web"], [50000, "sap"], [55555, "meshcentral"],
 ];
 
-const scanOne = async (host: string, port: number, timeoutMs: number): Promise<boolean> =>
-  new Promise((resolveOpen) => {
-    const sock = connect({ host, port });
-    const done = (v: boolean): void => {
-      sock.removeAllListeners();
-      sock.destroy();
-      resolveOpen(v);
-    };
-    sock.setTimeout(timeoutMs);
-    sock.once("connect", () => done(true));
-    sock.once("timeout", () => done(false));
-    sock.once("error", () => done(false));
-  });
-
 export const scanPorts = async (input: PortScanInput): Promise<PortScanResult> => {
-  const ports = input.ports ?? TOP_PORTS.map(([p]) => p);
+  const ports = [...new Set(input.ports ?? TOP_PORTS.map(([p]) => p))];
+  if (ports.some(p => !Number.isInteger(p) || p < 1 || p > 65535)) throw new Error("invalid TCP port");
   const timeoutMs = input.timeoutMs ?? 2500;
   const concurrency = input.concurrency ?? 64;
-  await mkdir(input.outputRoot, { recursive: true });
-
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 1024) throw new Error("invalid port-scan concurrency");
+  const signal = input.signal ?? executionSignal();
   const open: { port: number; service: string }[] = [];
-  const serviceByPort = new Map(TOP_PORTS);
-  let cursor = 0;
+  const outcomes: NonNullable<PortScanResult["outcomes"]> = [];
+  const serviceByPort = new Map(TOP_PORTS); let cursor = 0;
   const worker = async (): Promise<void> => {
-    while (cursor < ports.length) {
-      const p = ports[cursor++];
-      if (p === undefined) continue;
-      if (await scanOne(input.host, p, timeoutMs)) {
-        open.push({ port: p, service: serviceByPort.get(p) ?? "?" });
+    while (cursor < ports.length && !signal?.aborted) {
+      const port = ports[cursor++]!;
+      try {
+        const socket = await openTunnel({ host: input.host, port, proxy: input.proxy, timeoutMs, signal }); socket.destroy();
+        open.push({ port, service: serviceByPort.get(port) ?? "?" }); outcomes.push({ port, outcome: "open" });
+      } catch (e) {
+        const error = e instanceof Error ? e.message : String(e);
+        outcomes.push({ port, outcome: !input.proxy && (e as NodeJS.ErrnoException).code === "ECONNREFUSED" ? "closed" : "inconclusive", error });
       }
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, ports.length) }, worker));
-  open.sort((a, b) => a.port - b.port);
-
-  const path = join(input.outputRoot, "ports_open.txt");
-  const body = open.map((o) => `${o.port}\t${o.service}`).join("\n");
-  await writeFile(path, body);
-  return { host: input.host, scanned: ports.length, open, artifacts: [{ path, bytes: Buffer.byteLength(body) }] };
+  open.sort((a, b) => a.port - b.port); outcomes.sort((a, b) => a.port - b.port);
+  const body = open.map(o => `${o.port}\t${o.service}`).join("\n");
+  return { host: input.host, scanned: outcomes.length, transport: input.proxy ? "proxy" : "direct", outcomes, open, artifacts: [await writeArtifact(input.outputRoot, "ports_open.txt", body)] };
 };

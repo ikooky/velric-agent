@@ -2,13 +2,12 @@
  *  response bodies, and unpacked dumps.
  *
  *  Three layers:
- *  - SECRET_PATTERNS: credential regexes (superset of the old 9 — now top
- *    providers with structural prefixes, ported from SecretFinder/trufflehog
- *    high-signal subset)
+ *  - SECRET_PATTERNS: credential regexes (top providers with structural
+ *    prefixes, high-signal subset)
  *  - PAIRED_SECRETS: jsluice-style pairing — an AWS access key id alone may be
  *    a false positive, but key id + base64 secret co-occurring in the same
  *    object/region is a confirmed credential pair
- *  - PII_PATTERNS: personally identifiable data movement (Akto-style API
+ *  - PII_PATTERNS: personally identifiable data movement (API
  *    response analysis): emails, phones, national IDs, cards, JWTs
  *
  *  All deterministic, no LLM. */
@@ -81,7 +80,7 @@ export const PAIRED_SECRETS: readonly PairedSecretPattern[] = [
   },
 ];
 
-/** PII movement patterns (Akto-style sensitive-data-exposure detection over
+/** PII movement patterns (sensitive-data-exposure detection over
  *  recorded API responses). Structurally validated, not bare regex spam. */
 export const PII_PATTERNS: readonly SecretPattern[] = [
   { name: "email", re: /\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b/ },

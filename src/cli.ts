@@ -646,8 +646,8 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
         const rec = new TrafficRecorder({ outputRoot: dir, port: num(flags.port), upstreamProxy: typeof flags.upstream === "string" ? flags.upstream : undefined, maxExchanges: num(flags.max), mitm: flags.mitm === true });
         const port = await rec.start(num(flags.port) || 0);
         console.error(`recorder listening on 127.0.0.1:${port}`);
-        // Ctrl-C must flush and release the port — the old bare hang had no
-        // signal handling and rec.stop() was unreachable.
+        // Ctrl-C must flush and release the port so rec.stop() stays
+        // reachable.
         const stopped = new Promise<void>((resolve) => {
           const stop = (): void => { void rec.stop().finally(resolve); };
           process.once("SIGINT", stop);

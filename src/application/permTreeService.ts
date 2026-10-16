@@ -1,5 +1,6 @@
 import { writeArtifact } from "../adapters/artifacts.js";
 import { readJsCorpus } from "./harvest.js";
+import { executionRunId } from "../core/execution.js";
 import {
   DEFAULT_PERM_HEURISTICS,
   buildGenericPermTree,
@@ -28,6 +29,7 @@ export interface PermTreeResult {
   readonly tree: PermTreeNode[];
   readonly artifacts: { path: string; bytes: number }[];
   readonly mode?: "generic-rbac";
+  readonly limitations?: string[];
 }
 
 /**
@@ -39,12 +41,18 @@ export const buildPermissionTree = async (
   input: PermTreeInput,
 ): Promise<PermTreeResult> => {
   const corpus = await readJsCorpus(input.jsDir);
+  const empty = async (reason: string): Promise<PermTreeResult> => {
+    const artifacts: {path:string;bytes:number}[] = [];
+    for (const [name, value] of Object.entries({ 'permissions_tree.json': [], 'userRouteAuth.json': {}, 'route_map.json': {}, 'route_roles.json': [],
+      'permissions_all_stub.json': {response_code:0,data:[]}, 'role_permissions_stub.json': {response_code:0,data:{role_type:input.role ?? 'SUPER_ADMIN',permissions:[]}} })) {
+      artifacts.push(await writeArtifact(input.outputRoot, name, JSON.stringify(value, null, 2)));
+    }
+    for (const name of ['perm_codes_all.txt','perm_codes_generic.txt']) artifacts.push(await writeArtifact(input.outputRoot, name, ''));
+    artifacts.push(await writeArtifact(input.outputRoot, 'permission_manifest.json', JSON.stringify({ producer:'permission-tree',runId:executionRunId(),jsDir:input.jsDir,count:0,reason,artifacts },null,2)));
+    return {authSourceFile:null,entries:0,codes:0,treeRoots:0,tree:[],artifacts,limitations:[reason,'client-side permission metadata is not authorization evidence']};
+  };
   if (corpus.length === 0) {
-    throw {
-      code: "no_js_corpus",
-      message: `no .js files found under ${input.jsDir}`,
-      remediation: "run harvest_static first and pass its js/ directory",
-    };
+    return empty('no_js_corpus');
   }
   const { routeMap, source: routeMapSource } = extractRouteMap(corpus);
 
@@ -60,12 +68,7 @@ export const buildPermissionTree = async (
   if (authFile === null) {
     const rbac = extractGenericRbac(corpus);
     if (rbac.permissionCodes.length === 0 && rbac.routeRoles.length === 0) {
-      throw {
-        code: "auth_module_not_found",
-        message:
-          "neither userRouteAuth nor generic RBAC markers (hasPermi/hasRole/permission) found in the JS corpus",
-        remediation: "run harvest_static first; the target may not embed auth metadata client-side",
-      };
+      return empty('auth_module_not_found');
     }
     const tree = buildGenericPermTree(rbac.permissionCodes);
     const role = input.role ?? "SUPER_ADMIN";
@@ -79,11 +82,10 @@ export const buildPermissionTree = async (
     artifacts.push(
       await writeArtifact(input.outputRoot, "perm_codes_generic.txt", rbac.permissionCodes.join("\n")),
     );
-    if (rbac.routeRoles.length > 0) {
-      artifacts.push(
-        await writeArtifact(input.outputRoot, "route_roles.json", JSON.stringify(rbac.routeRoles, null, 2)),
-      );
-    }
+    artifacts.push(await writeArtifact(input.outputRoot, "route_roles.json", JSON.stringify(rbac.routeRoles, null, 2)));
+    artifacts.push(await writeArtifact(input.outputRoot, "perm_codes_all.txt", rbac.permissionCodes.join('\n')));
+    artifacts.push(await writeArtifact(input.outputRoot, "userRouteAuth.json", '{}'));
+    artifacts.push(await writeArtifact(input.outputRoot, "route_map.json", JSON.stringify(routeMap, null, 2)));
     artifacts.push(
       await writeArtifact(input.outputRoot, "permissions_tree.json", JSON.stringify(tree, null, 2)),
     );
@@ -93,6 +95,7 @@ export const buildPermissionTree = async (
     artifacts.push(
       await writeArtifact(input.outputRoot, "role_permissions_stub.json", JSON.stringify(rolePerm, null, 2)),
     );
+    artifacts.push(await writeArtifact(input.outputRoot, 'permission_manifest.json', JSON.stringify({producer:'permission-tree',runId:executionRunId(),jsDir:input.jsDir,count:rbac.permissionCodes.length,mode:'generic-rbac',artifacts},null,2)));
     return {
       authSourceFile: rbac.source,
       entries: rbac.permissionCodes.length,
@@ -105,11 +108,7 @@ export const buildPermissionTree = async (
   }
   const entries = parseUserRouteAuth(authFile.text, routeMap);
   if (Object.keys(entries).length === 0) {
-    throw {
-      code: "auth_parse_failed",
-      message: `userRouteAuth present in ${authFile.path} but no entries parsed`,
-      remediation: "adjust heuristics (roots/prefixParent) or inspect the chunk",
-    };
+    return empty('auth_parse_failed');
   }
 
   const heuristics: PermTreeHeuristics = {
@@ -153,6 +152,9 @@ export const buildPermissionTree = async (
     await writeArtifact(input.outputRoot, "role_permissions_stub.json", JSON.stringify(rolePerm, null, 2)),
   );
 
+  artifacts.push(await writeArtifact(input.outputRoot, 'route_roles.json', '[]'));
+  artifacts.push(await writeArtifact(input.outputRoot, 'perm_codes_generic.txt', ''));
+  artifacts.push(await writeArtifact(input.outputRoot, 'permission_manifest.json', JSON.stringify({producer:'permission-tree',runId:executionRunId(),jsDir:input.jsDir,count:allCodes.length,mode:'userRouteAuth',artifacts},null,2)));
   return {
     authSourceFile: authFile.path,
     entries: Object.keys(entries).length,

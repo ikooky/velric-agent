@@ -1,13 +1,10 @@
 import { fetchUrl } from "../adapters/http.js";
-import { writeFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { gunzipSync, inflateSync } from "node:zlib";
-
-/** .git directory recovery: fetch config/HEAD/index/logs + pack objects from a
- *  leaked .git, rebuild the source tree locally (loose objects + packfiles),
- *  and surface commit history. Read-only against the target. */
-
-const pSep = (await import("node:path")).sep;
+import { inflateSync } from "node:zlib";
+import { createHash } from "node:crypto";
+import { writeArtifact } from "../adapters/artifacts.js";
+import { safePath } from "../core/storage.js";
+import { discoveryOrigin, discoveryUrl } from "./pathProbe.js";
 
 export interface GitRestoreInput {
   readonly baseUrl: string;
@@ -15,8 +12,10 @@ export interface GitRestoreInput {
   readonly proxy?: string;
   readonly timeoutMs?: number;
   readonly maxObjects?: number;
+  readonly maxObjectBytes?: number;
+  readonly maxDecompressedBytes?: number;
+  readonly maxFiles?: number;
 }
-
 export interface GitRestoreResult {
   readonly baseUrl: string;
   readonly gitFound: boolean;
@@ -24,157 +23,120 @@ export interface GitRestoreResult {
   readonly commits: string[];
   readonly filesRestored: number;
   readonly workDir: string;
+  readonly objectRequests: number;
+  readonly decompressedBytes: number;
+  readonly failures: string[];
   readonly artifacts: { path: string; bytes: number }[];
 }
-
-const GIT_FILES = ["/config", "/HEAD", "/index", "/packed-refs", "/logs/HEAD", "/logs/refs/heads/master", "/logs/refs/heads/main", "/info/refs", "/ORIG_HEAD"];
-
-const hexOf = (sha: string): Buffer => Buffer.from(sha, "hex");
-
-/** Minimal zlib-inflated loose-object parser → {type, payload}. */
-const parseLooseObject = (raw: Buffer): { type: string; payload: Buffer } | null => {
-  try {
-    let buf: Buffer;
-    try { buf = inflateSync(raw); } catch { buf = gunzipSync(raw); }
-    const nul = buf.indexOf(0);
-    if (nul < 0) return null;
-    const header = buf.subarray(0, nul).toString("utf8");
-    const type = header.split(" ")[0] ?? "";
-    return { type, payload: buf.subarray(nul + 1) };
-  } catch {
-    return null;
-  }
+interface GitObject { type: "blob" | "tree" | "commit" | "tag"; payload: Buffer }
+const bounded = (value: number | undefined, fallback: number): number => value === undefined ? fallback : Number.isSafeInteger(value) && value >= 0 ? Math.min(value, fallback) : 0;
+const shaPattern = /^[0-9a-f]{40}$/;
+const parseLoose = (raw: Buffer, sha: string, max: number): { object: GitObject; bytes: number } => {
+  const data = inflateSync(raw, { maxOutputLength: max });
+  if (createHash("sha1").update(data).digest("hex") !== sha) throw new Error("Git object hash mismatch");
+  const nul = data.indexOf(0);
+  if (nul < 0 || nul > 100) throw new Error("invalid Git object header");
+  const header = data.subarray(0, nul).toString("ascii").match(/^(blob|tree|commit|tag) (0|[1-9][0-9]*)$/);
+  if (!header || Number(header[2]) !== data.length - nul - 1) throw new Error("Git object length mismatch");
+  return { object: { type: header[1] as GitObject["type"], payload: data.subarray(nul + 1) }, bytes: data.length };
 };
-
-/** Parse tree objects into entries. */
-const parseTree = (payload: Buffer): { mode: string; name: string; sha: string }[] => {
-  const out: { mode: string; name: string; sha: string }[] = [];
-  let i = 0;
-  while (i < payload.length) {
-    const sp = payload.indexOf(0x20, i);
-    const nul = payload.indexOf(0x00, sp);
-    if (sp < 0 || nul < 0) break;
-    out.push({
-      mode: payload.subarray(i, sp).toString("utf8"),
-      name: payload.subarray(sp + 1, nul).toString("utf8"),
-      sha: payload.subarray(nul + 1, nul + 21).toString("hex"),
-    });
-    i = nul + 21;
+const treeEntries = (data: Buffer): { mode: string; name: string; sha: string }[] => {
+  const entries: { mode: string; name: string; sha: string }[] = []; let cursor = 0;
+  while (cursor < data.length) {
+    const space = data.indexOf(32, cursor), nul = data.indexOf(0, space);
+    if (space < cursor || nul < space || nul + 21 > data.length) throw new Error("malformed Git tree");
+    const mode = data.subarray(cursor, space).toString("ascii"), name = data.subarray(space + 1, nul).toString("utf8");
+    if (!/^(?:100644|100755|40000|040000|120000|160000)$/.test(mode) || !name || name === "." || name === ".." || name.toLowerCase() === ".git" || /[\\/\x00-\x1f:]/.test(name)) throw new Error("unsafe Git tree entry");
+    entries.push({ mode, name, sha: data.subarray(nul + 1, nul + 21).toString("hex") }); cursor = nul + 21;
   }
-  return out;
+  return entries;
 };
 
 export const restoreGit = async (input: GitRestoreInput): Promise<GitRestoreResult> => {
-  const base = input.baseUrl.replace(/\/$/, "");
-  const workDir = join(input.outputRoot, "git-restored");
-  await mkdir(workDir, { recursive: true });
-  const gitDir = join(workDir, ".git");
-  await mkdir(join(gitDir, "objects"), { recursive: true });
-  const opts = { proxy: input.proxy, timeoutMs: input.timeoutMs ?? 10000 };
-
-  // 1) Confirm the leak
-  const cfg = await fetchUrl(`${base}/.git/config`, opts);
-  if (cfg.status !== 200 || !cfg.body.includes("[core")) {
-    return { baseUrl: base, gitFound: false, objectsRecovered: 0, commits: [], filesRestored: 0, workDir, artifacts: [] };
-  }
-  await writeFile(join(gitDir, "config"), cfg.body);
-
-  // 2) Pull core metadata
-  const head = await fetchUrl(`${base}/.git/HEAD`, opts);
+  const base = discoveryOrigin(input.baseUrl), workDir = join(input.outputRoot, "git-restored");
+  const opts = { proxy: input.proxy, timeoutMs: input.timeoutMs ?? 10000, redirect: "manual" as const };
+  const failures: string[] = [], artifacts: GitRestoreResult["artifacts"] = [], commits: string[] = [];
+  const maxObjects = bounded(input.maxObjects, 400), objectBytes = bounded(input.maxObjectBytes, 8 * 1024 * 1024), totalBytes = bounded(input.maxDecompressedBytes, 64 * 1024 * 1024), maxFiles = bounded(input.maxFiles, 2000);
+  let objectRequests = 0, decompressedBytes = 0, filesRestored = 0, storedBytes = 0;
+  const cache = new Map<string, GitObject | null>();
+  const snapshot = (gitFound: boolean): GitRestoreResult => ({ baseUrl: base, gitFound, objectsRecovered: [...cache.values()].filter(Boolean).length, commits, filesRestored, workDir, objectRequests, decompressedBytes, failures, artifacts });
+  const get = async (path: string, raw = false) => fetchUrl(new URL(`/.git/${path}`, base).href, { ...opts, raw, maxBytes: raw ? 8 * 1024 * 1024 : 1024 * 1024 });
+  const cfg = await get("config");
+  if (cfg.status !== 200 || cfg.complete === false || cfg.truncated || cfg.error || !cfg.body.includes("[core")) return snapshot(false);
+  // Never write target-controlled config/hooks into an executable local repository.
+  artifacts.push(await writeArtifact(input.outputRoot, "git-restored-metadata/config.txt", cfg.body));
+  const head = await get("HEAD");
   let headSha: string | null = null;
-  if (head.status === 200) {
-    await writeFile(join(gitDir, "HEAD"), head.body);
-    headSha = (head.body.match(/ref:\s*refs\/heads\/(\S+)/) ?? [])[1] ? null : (head.body.match(/[0-9a-f]{40}/) ?? [null])[0] ?? null;
+  const headText = head.status === 200 && head.complete !== false && !head.truncated && !head.error ? head.body.trim() : "";
+  if (shaPattern.test(headText)) headSha = headText;
+  const symref = headText.match(/^ref: (refs\/heads\/[A-Za-z0-9_./-]+)$/)?.[1];
+  const safeRef = symref && !symref.includes("..") && !symref.includes("//") && discoveryUrl(base, `/.git/${symref}`) ? symref : null;
+  const metadata = new Map<string, string>();
+  for (const file of ["index", "packed-refs", "logs/HEAD", "logs/refs/heads/master", "logs/refs/heads/main", "info/refs", "ORIG_HEAD"]) {
+    const r = await get(file, true);
+    if (r.status !== 200 || r.complete === false || r.truncated || r.error || !r.rawBuffer) continue;
+    await writeArtifact(input.outputRoot, `git-restored-metadata/${file}`, r.rawBuffer);
+    metadata.set(file, r.rawBuffer.toString("utf8"));
   }
-  for (const f of GIT_FILES.slice(2)) {
-    const r = await fetchUrl(`${base}/.git${f}`, opts);
-    if (r.status === 200) {
-      const p = join(gitDir, f.replace(/\/$/, ""));
-      await mkdir(join(p, ".."), { recursive: true });
-      await writeFile(p, r.body);
+  if (!headSha && safeRef) {
+    const r = await get(safeRef);
+    if (r.status === 200 && r.complete !== false && !r.truncated && shaPattern.test(r.body.trim())) headSha = r.body.trim();
+    if (!headSha) for (const line of (metadata.get("packed-refs") ?? "").split("\n")) {
+      const [sha, ref] = line.trim().split(/\s+/);
+      if (ref === safeRef && sha && shaPattern.test(sha)) { headSha = sha; break; }
     }
   }
-
-  // 3) Loose-object walk: resolve HEAD → tree → blobs (bounded).
-  const objectsRecovered = { n: 0 };
-  const commits: string[] = [];
-  const filesRestored = { n: 0 };
-  const seen = new Set<string>();
-
-  const fetchObject = async (sha: string): Promise<{ type: string; payload: Buffer } | null> => {
-    if (seen.has(sha)) return null;
-    seen.add(sha);
-    const path = `/objects/${sha.slice(0, 2)}/${sha.slice(2)}`;
-    const res = await fetchUrl(`${base}/.git${path}`, { ...opts, maxBytes: 8 * 1024 * 1024, raw: true });
-    if (res.status !== 200 || !res.rawBuffer) return null;
-    objectsRecovered.n++;
-    return parseLooseObject(res.rawBuffer);
+  if (!headSha) {
+    const log = (metadata.get("logs/HEAD") ?? "").trim().split("\n").at(-1)?.split(" ")[1];
+    if (log && shaPattern.test(log) && !/^0+$/.test(log)) headSha = log;
+  }
+  const fetchObject = async (sha: string): Promise<GitObject | null> => {
+    if (!shaPattern.test(sha)) return null;
+    if (cache.has(sha)) return cache.get(sha)!;
+    cache.set(sha, null);
+    const cap = Math.min(objectBytes, totalBytes - decompressedBytes);
+    if (objectRequests >= maxObjects || cap <= 0) { failures.push("object budget exhausted"); return null; }
+    objectRequests++;
+    const r = await get(`objects/${sha.slice(0, 2)}/${sha.slice(2)}`, true);
+    if (r.status !== 200 || r.complete === false || r.truncated || r.error || !r.rawBuffer) return null;
+    try {
+      const parsed = parseLoose(r.rawBuffer, sha, cap); decompressedBytes += parsed.bytes;
+      cache.set(sha, parsed.object); return parsed.object;
+    } catch (error) {
+      decompressedBytes += cap;
+      failures.push(`${sha}: ${error instanceof Error ? error.message : String(error)}`); return null;
+    }
   };
-
-  const walkTree = async (treeSha: string, prefix: string, depth: number): Promise<void> => {
-    if (depth > 8 || objectsRecovered.n >= (input.maxObjects ?? 400)) return;
-    const obj = await fetchObject(treeSha);
-    if (!obj || obj.type !== "tree") return;
-    for (const entry of parseTree(obj.payload)) {
+  const walkTree = async (sha: string, prefix: string, ancestors: ReadonlySet<string>): Promise<void> => {
+    if (ancestors.size >= 32 || ancestors.has(sha) || filesRestored >= maxFiles) return;
+    const obj = await fetchObject(sha); if (obj?.type !== "tree") return;
+    let entries: ReturnType<typeof treeEntries>;
+    try { entries = treeEntries(obj.payload); } catch (error) { failures.push(String(error)); return; }
+    const next = new Set(ancestors); next.add(sha);
+    for (const entry of entries) {
+      if (filesRestored >= maxFiles) break;
       const name = prefix ? `${prefix}/${entry.name}` : entry.name;
-      // Tree entry names come from the hostile target's git objects — reject
-      // traversal (../, absolute, drive letters, NUL) and assert containment
-      // before any filesystem write.
-      if (name.includes("..") || name.startsWith("/") || /^[a-zA-Z]:/.test(name) || name.includes("\0")) continue;
-      if (entry.mode === "40000" || entry.mode === "040000") {
-        await walkTree(entry.sha, name, depth + 1);
-      } else {
+      if (entry.mode === "40000" || entry.mode === "040000") await walkTree(entry.sha, name, next);
+      else if (entry.mode === "100644" || entry.mode === "100755") {
         const blob = await fetchObject(entry.sha);
-        if (blob && blob.type === "blob") {
-          const out = join(workDir, name);
-          // Defense in depth: resolved path must stay inside workDir.
-          const resolved = await import("node:path").then((p) => p.resolve(out));
-          const rootResolved = await import("node:path").then((p) => p.resolve(workDir));
-          if (resolved !== rootResolved && !resolved.startsWith(rootResolved + pSep)) continue;
-          await mkdir(join(out, ".."), { recursive: true });
-          await writeFile(out, blob.payload);
-          filesRestored.n++;
-        }
+        if (blob?.type !== "blob" || storedBytes + blob.payload.length > totalBytes) continue;
+        try {
+          await safePath(input.outputRoot, `git-restored/${name}`);
+          await writeArtifact(input.outputRoot, `git-restored/${name}`, blob.payload);
+          filesRestored++; storedBytes += blob.payload.length;
+        } catch (error) { failures.push(String(error)); }
       }
     }
   };
-
-  // HEAD may be a symref: resolve via refs/heads/<name> or packed-refs.
-  if (!headSha) {
-    const m = head.body.match(/ref:\s*refs\/heads\/(\S+)/);
-    if (m) {
-      const refFile = await fetchUrl(`${base}/.git/refs/heads/${m[1]}`, opts);
-      if (refFile.status === 200) headSha = (refFile.body.match(/[0-9a-f]{40}/) ?? [null])[0] ?? null;
-    }
-  }
-  // packed-refs fallback: match the branch named in HEAD — the FIRST sha in
-  // packed-refs is usually a peeled tag, not the branch head.
-  if (!headSha) {
-    const m = head.body.match(/ref:\s*refs\/heads\/(\S+)/);
-    const packed = await fetchUrl(`${base}/.git/packed-refs`, opts);
-    if (packed.status === 200) {
-      if (m) {
-        const lineRe = new RegExp(`^([0-9a-f]{40}) refs/heads/${m[1]!.replace(/[^\w-]/g, "\\$&")}$`, "m");
-        headSha = (packed.body.match(lineRe) ?? [null])[1] ?? null;
-      }
-      // Branch named in HEAD was not found in packed-refs — taking the
-      // first sha would restore a peeled TAG's tree, not the branch head.
-      // Better to leave headSha null (falls through to logs/HEAD below)
-      // than silently restore the wrong commit.
-    }
-  }
-
   if (headSha) {
-    commits.push(headSha);
     const commit = await fetchObject(headSha);
-    if (commit && commit.type === "commit") {
-      const treeSha = (commit.payload.toString("utf8").match(/tree ([0-9a-f]{40})/) ?? [])[1] ?? null;
-      if (treeSha) await walkTree(treeSha, "", 0);
+    if (commit?.type === "commit") {
+      commits.push(headSha);
+      const tree = commit.payload.toString("utf8").match(/^tree ([0-9a-f]{40})$/m)?.[1];
+      if (tree) await walkTree(tree, "", new Set());
     }
   }
-
-  const report = join(input.outputRoot, "git_restore.json");
-  const body = JSON.stringify({ baseUrl: base, gitFound: true, objectsRecovered: objectsRecovered.n, commits, filesRestored: filesRestored.n, workDir }, null, 2);
-  await writeFile(report, body);
-  return { baseUrl: base, gitFound: true, objectsRecovered: objectsRecovered.n, commits, filesRestored: filesRestored.n, workDir, artifacts: [{ path: report, bytes: Buffer.byteLength(body) }] };
+  const result = snapshot(true);
+  artifacts.push(await writeArtifact(input.outputRoot, "git_restore.json", JSON.stringify(result, null, 2)));
+  return result;
 };

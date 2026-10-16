@@ -1,124 +1,46 @@
-import { fetchUrl } from "../adapters/http.js";
-import { writeFile, mkdir } from "node:fs/promises";
-import { join } from "node:path";
-import net from "node:net";
-import tls from "node:tls";
-
-/** HTTP request-smuggling differential probe: paired requests that differ in
- *  exactly ONE canonicalization dimension (path normalization, CL/TE framing,
- *  Host case). Parser divergence between edge and backend surfaces as
- *  differential status/time/body. Read-only shapes — no queue poisoning. */
+import { rawHttpExchange, type RawHttpResult } from "../adapters/rawTunnel.js";
+import { writeArtifact } from "../adapters/artifacts.js";
 
 export interface SmuggleInput {
-  readonly baseUrl: string;
-  readonly outputRoot: string;
-  readonly proxy?: string;
-  readonly timeoutMs?: number;
+  readonly baseUrl: string; readonly outputRoot: string; readonly proxy?: string; readonly timeoutMs?: number;
+  readonly signal?: AbortSignal; readonly rejectUnauthorized?: boolean;
 }
-
+interface Attempt { dimension: string; path: string; status: number; complete: boolean; requestHash: string; responseHash: string; elapsedMs: number; error?: string; receiptId?: string }
 export interface SmuggleResult {
-  readonly baseUrl: string;
-  readonly probed: number;
-  readonly differentials: {
-    dimension: string;
-    variant: string;
-    baselineStatus: number;
-    variantStatus: number;
-    baselineMs: number;
-    variantMs: number;
-    note: string;
-  }[];
+  readonly baseUrl: string; readonly probed: number; readonly confirmed: false;
+  readonly attempts: Attempt[];
+  readonly differentials: { dimension: string; variant: string; baselineStatus: number; variantStatus: number; baselineMs: number; variantMs: number; note: string; outcome: "candidate" }[];
   readonly artifacts: { path: string; bytes: number }[];
 }
-
-const VARIANT_GETS: { dimension: string; path: (base: string) => string }[] = [
-  { dimension: "dot-segment", path: (b) => `${b}/x/../healthz-velric` },
-  { dimension: "double-slash", path: (b) => `${b}//healthz-velric` },
-  { dimension: "encoded-slash", path: (b) => `${b}/%2fhealthz-velric` },
-  { dimension: "case", path: (b) => `${b}/HEALTHZ-VELRIC` },
-  { dimension: "semicolon", path: (b) => `${b}/;/healthz-velric` },
-  { dimension: "dotcase", path: (b) => `${b}/./healthz-velric` },
-];
-
+/** Canonicalization and framing acceptance are candidates, not proof of desync. */
 export const probeSmuggle = async (input: SmuggleInput): Promise<SmuggleResult> => {
-  const base = input.baseUrl.replace(/\/$/, "");
-  await mkdir(input.outputRoot, { recursive: true });
-  const opts = { proxy: input.proxy, timeoutMs: input.timeoutMs ?? 8000 };
-  const differentials: SmuggleResult["differentials"] = [];
-  let probed = 0;
-
-  // Baseline: the canonical random-ish path (almost certainly 404/soft-404).
-  const basePath = `${base}/healthz-velric`;
-  const baseline = await fetchUrl(basePath, opts);
-  probed++;
-
-  for (const v of VARIANT_GETS) {
-    const r = await fetchUrl(v.path(base), opts);
-    probed++;
-    if (r.status === 0) continue;
-    // Unreachable baseline: any variant answering anything would record a
-    // false "status divergence" differential — there is nothing to diverge
-    // FROM. Skip the whole probe when the baseline itself failed.
-    if (baseline.status === 0) break;
-    // Differential signal: a normalization variant answers differently from
-    // the canonical path → two parsers disagree somewhere in the chain.
-    if (r.status !== baseline.status) {
-      differentials.push({
-        dimension: v.dimension,
-        variant: v.path(base).slice(base.length),
-        baselineStatus: baseline.status,
-        variantStatus: r.status,
-        baselineMs: 0,
-        variantMs: 0,
-        note: "status divergence across normalization variants",
-      });
-    }
+  const u = new URL(input.baseUrl); if (!["http:", "https:"].includes(u.protocol)) throw new Error("unsupported URL protocol");
+  const prefix = u.pathname.replace(/\/$/, ""); const canonical = `${prefix}/healthz-velric`;
+  const variants = [
+    ["dot-segment", `${prefix}/x/../healthz-velric`], ["double-slash", `${prefix}//healthz-velric`],
+    ["encoded-slash", `${prefix}/%2fhealthz-velric`], ["case", `${prefix}/HEALTHZ-VELRIC`],
+    ["semicolon", `${prefix}/;/healthz-velric`], ["dotcase", `${prefix}/./healthz-velric`],
+  ] as const;
+  const opts = { proxy: input.proxy, timeoutMs: input.timeoutMs ?? 8000, signal: input.signal, rejectUnauthorized: input.rejectUnauthorized, maxBytes: 262144 };
+  const attempts: Attempt[] = []; const differentials: SmuggleResult["differentials"] = [];
+  const run = async (dimension: string, path: string, framing = false): Promise<RawHttpResult> => {
+    const raw = framing
+      ? `POST ${path} HTTP/1.1\r\nHost: ${u.host}\r\nConnection: close\r\ncontent-type: application/x-www-form-urlencoded\r\ncontent-length: 5\r\ntransfer-encoding: chunked\r\n\r\n0\r\n\r\n`
+      : `GET ${path} HTTP/1.1\r\nHost: ${u.host}\r\nConnection: close\r\n\r\n`;
+    const r = await rawHttpExchange(u.origin + path, Buffer.from(raw, "latin1"), opts);
+    attempts.push({ dimension, path, status: r.status, complete: r.complete, requestHash: r.requestHash, responseHash: r.responseHash, elapsedMs: r.elapsedMs, ...(r.error ? { error: r.error } : {}), ...(r.receiptId ? { receiptId: r.receiptId } : {}) });
+    return r;
+  };
+  const baseline = await run("baseline", canonical);
+  if (baseline.complete && baseline.status > 0) for (const [dimension, path] of variants) {
+    if (input.signal?.aborted) break;
+    const r = await run(dimension, path);
+    if (r.complete && r.status > 0 && (r.status !== baseline.status || r.responseHash !== baseline.responseHash)) differentials.push({ dimension, variant: path, baselineStatus: baseline.status, variantStatus: r.status, baselineMs: baseline.elapsedMs, variantMs: r.elapsedMs, outcome: "candidate", note: "single-hop response difference; parser disagreement and request desynchronization unproven" });
   }
-
-  // CL+TE both present — BYTE-LEVEL raw socket. HTTP client libraries
-  // (undici, node fetch, node:http) all re-frame the body and undici
-  // rejects the conflicting pair outright ("invalid transfer-encoding
-  // header") before anything reaches the wire; only a hand-written
-  // request guarantees the exact CL+TE bytes arrive at the server.
-  try {
-    const u = new URL(base);
-    const port = Number(u.port || (u.protocol === "https:" ? 443 : 80));
-    const t0 = Date.now();
-    // Host must carry the port when non-default (HTTP/1.1 virtual hosts and
-    // some proxies route on it); body `0\r\n\r\n` is exactly 5 bytes — CL
-    // must match the wire truth byte-for-byte or the probe itself desyncs.
-    const hostHeader = u.port ? `${u.hostname}:${u.port}` : u.hostname;
-    const raw = `POST /healthz-velric HTTP/1.1\r\nHost: ${hostHeader}\r\ncontent-type: application/x-www-form-urlencoded\r\ncontent-length: 5\r\ntransfer-encoding: chunked\r\n\r\n0\r\n\r\n`;
-    const res = await new Promise<{ status: number; ms: number }>((resolve) => {
-      const sock: net.Socket = u.protocol === "https:"
-        ? tls.connect({ host: u.hostname, port, rejectUnauthorized: false, servername: u.hostname })
-        : net.connect({ host: u.hostname, port });
-      let head = "";
-      const finish = (status: number): void => { sock.destroy(); resolve({ status, ms: Date.now() - t0 }); };
-      const timer = setTimeout(() => finish(-1), input.timeoutMs ?? 8000);
-      sock.on("error", () => { clearTimeout(timer); finish(0); });
-      sock.on("connect", () => { sock.write(raw); });
-      sock.on("data", (d: Buffer) => {
-        head += d.toString("latin1");
-        const m = head.match(/^HTTP\/[\d.]+\s+(\d{3})/);
-        if (m) { clearTimeout(timer); finish(Number(m[1])); } // status line is all we need
-      });
-      sock.on("close", () => { clearTimeout(timer); if (!/^HTTP\//.test(head)) finish(0); });
-    });
-    probed++;
-    // 400 from either parser = the pair was rejected (good). A clean
-    // 200-family on CL+TE both = framing ambiguity.
-    if (res.status >= 200 && res.status < 300) {
-      differentials.push({ dimension: "CL+TE", variant: "both headers on POST", baselineStatus: baseline.status, variantStatus: res.status, baselineMs: 0, variantMs: res.ms, note: "both CL and TE accepted — framing ambiguity" });
-    }
-  } catch {
-    /* raw socket unavailable (e.g. via SOCKS proxy) — skipped */
+  if (!input.signal?.aborted) {
+    const r = await run("CL+TE", canonical, true);
+    if (r.complete && r.status >= 200 && r.status < 300) differentials.push({ dimension: "CL+TE", variant: canonical, baselineStatus: baseline.status, variantStatus: r.status, baselineMs: baseline.elapsedMs, variantMs: r.elapsedMs, outcome: "candidate", note: "conflicting framing accepted; no second-parser disagreement or desync demonstrated" });
   }
-
-  const result: SmuggleResult = { baseUrl: base, probed, differentials, artifacts: [] };
-  const path = join(input.outputRoot, "smuggle_probe.json");
-  const body = JSON.stringify(result, null, 2);
-  await writeFile(path, body);
-  result.artifacts.push({ path, bytes: Buffer.byteLength(body) });
-  return result;
+  const result: SmuggleResult = { baseUrl: input.baseUrl, probed: attempts.length, confirmed: false, attempts, differentials, artifacts: [] };
+  return { ...result, artifacts: [await writeArtifact(input.outputRoot, "smuggle_probe.json", JSON.stringify(result, null, 2))] };
 };

@@ -1,124 +1,93 @@
-import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
-import { join, basename } from "node:path";
+import { readFile, readdir } from "node:fs/promises";
+import { join } from "node:path";
+import type * as ESTree from "estree";
+import { writeArtifact } from "../adapters/artifacts.js";
+import { parseJavaScript, walkAst } from "./rename.js";
 
-/** DOM-XSS sink scan over the harvested JS corpus: taint-style source→sink
- *  chains (location.hash/search/referer/name → innerHTML/eval/document.write/
- *  insertAdjacentHTML/jQuery $()...). Pure static analysis, local files only. */
-
-export interface DomSinkInput {
-  readonly jsDir: string;
-  readonly outputRoot: string;
-  readonly maxFiles?: number;
-}
-
+export interface DomSinkInput { readonly jsDir: string; readonly outputRoot: string; readonly maxFiles?: number }
 export interface DomSinkResult {
   readonly scanned: number;
+  /** Static candidates, never confirmed taint flow or exploitability. */
   readonly chains: {
-    file: string;
-    source: string;
-    sink: string;
-    excerpt: string;
+    file: string; source: string; sink: string; excerpt: string; confidence: "candidate";
+    evidence: { kind: "direct-expression" | "same-function-co-occurrence" | "unresolved-message-handler"; range: [number, number]; sourceRange?: [number, number]; limitation: string };
   }[];
   readonly sinks: { file: string; sink: string; count: number }[];
+  readonly skipped: { file: string; reason: string }[];
   readonly artifacts: { path: string; bytes: number }[];
 }
-
-const SOURCES = [
-  "location.hash", "location.search", "location.href", "location.pathname",
-  "document.referrer", "document.URL", "document.documentURI", "window.name",
-  "postMessage", "URLSearchParams",
-] as const;
-
-const SINKS: ReadonlyArray<readonly [string, RegExp]> = [
-  ["postMessage-no-origin", /postMessage\s*\(\s*[\s\S]{0,120}?\)\s*;/],
-  ["innerHTML", /\.innerHTML\s*=/],
-  ["outerHTML", /\.outerHTML\s*=/],
-  ["document.write", /document\.write(?:ln)?\s*\(/],
-  ["eval", /(?:^|[^\w$.])eval\s*\(/],
-  ["setTimeout-string", /setTimeout\s*\(\s*['"`]/],
-  ["setInterval-string", /setInterval\s*\(\s*['"`]/],
-  ["insertAdjacentHTML", /\.insertAdjacentHTML\s*\(/],
-  ["Function-ctor", /new\s+Function\s*\(/],
-  ["jQuery-html", /\$\([^)]*\)\.html\s*\(/],
-  ["attr-href-js", /\.attr\s*\(\s*['"]href['"]\s*,/],
-  ["srcdoc", /\.srcdoc\s*=/],
-  ["script-src", /\.src\s*=\s*[^;]*(?:hash|search|referrer|name)/],
-];
-
-/** Find source→sink chains inside one function-ish window: for each sink
- *  occurrence, look backwards up to N chars for a source reference. */
-const CHAIN_WINDOW = 600;
-
-const scanFile = (file: string, text: string): Pick<DomSinkResult, "chains" | "sinks"> => {
+const property = (node: ESTree.MemberExpression): string | null => !node.computed && node.property.type === "Identifier" ? node.property.name : node.property.type === "Literal" && typeof node.property.value === "string" ? node.property.value : null;
+const pathOf = (node: ESTree.Node): string => node.type === "Identifier" ? node.name : node.type === "MemberExpression" ? `${pathOf(node.object)}.${property(node) ?? "?"}` : "";
+const SOURCES = new Set(["location.hash", "location.search", "location.href", "location.pathname", "document.referrer", "document.URL", "document.documentURI", "window.name"]);
+const scanFile = (file: string, text: string): Pick<DomSinkResult, "chains" | "sinks" | "skipped"> => {
+  const parsed = parseJavaScript(text);
+  if (!parsed) return { chains: [], sinks: [], skipped: [{ file, reason: "parse-failed" }] };
+  const parents = new Map<ESTree.Node, ESTree.Node | null>();
+  const nodes: ESTree.Node[] = [];
+  walkAst(parsed.ast, (n, p) => { nodes.push(n); parents.set(n, p); });
+  const scopeOf = (n: ESTree.Node): ESTree.Node => {
+    let p = parents.get(n);
+    while (p) { if (/^(?:FunctionDeclaration|FunctionExpression|ArrowFunctionExpression)$/.test(p.type)) return p; p = parents.get(p); }
+    return parsed.ast;
+  };
+  const sources = nodes.flatMap(n => {
+    let name = pathOf(n).replace(/^window\.location\./, "location.");
+    if (n.type === "NewExpression" && pathOf(n.callee) === "URLSearchParams") name = "URLSearchParams";
+    return SOURCES.has(name) || name === "URLSearchParams" ? [{ node: n, name, scope: scopeOf(n) }] : [];
+  });
   const chains: DomSinkResult["chains"] = [];
-  const sinks: DomSinkResult["sinks"] = [];
-  // postMessage listener origin-validation check: an addEventListener('message')
-  // handler that never reads event.origin accepts messages from any sender.
-  {
-    const listenerRe = /addEventListener\s*\(\s*['"]message['"]\s*,\s*([\w$]+|(?:function\s*\([^)]*\)|\([^)]*\)\s*=>))[,)]/g;
-    let m: RegExpExecArray | null;
-    while ((m = listenerRe.exec(text)) !== null) {
-      const handlerName = m[1]!;
-      if (handlerName.startsWith("(") || handlerName.startsWith("function")) continue; // inline — approximate window check
-      const handlerBody = text.slice(m.index, m.index + 2500);
-      if (!/\.origin\s*(?:===|!==|==|!=|includes|startsWith|endsWith|indexOf)/.test(handlerBody)) {
-        chains.push({ file: basename(file), source: "postMessage", sink: "message-listener-no-origin-check", excerpt: handlerBody.slice(0, 120).replace(/\s+/g, " ") });
+  const counts = new Map<string, number>();
+  const within = (inner: ESTree.Node, outer: ESTree.Node): boolean => !!inner.range && !!outer.range && inner.range[0] >= outer.range[0] && inner.range[1] <= outer.range[1];
+  for (const n of nodes) {
+    let sink = "";
+    let input: ESTree.Node | null = null;
+    if (n.type === "AssignmentExpression" && n.left.type === "MemberExpression") {
+      const prop = property(n.left);
+      if (["innerHTML", "outerHTML", "srcdoc"].includes(prop ?? "")) { sink = prop!; input = n.right; }
+    } else if (n.type === "CallExpression" || n.type === "NewExpression") {
+      const name = pathOf(n.callee);
+      const tail = name.split(".").pop();
+      if (name === "eval" || name === "Function" || name === "document.write" || name === "document.writeln") { sink = name; input = n.arguments[0] ?? null; }
+      else if (tail === "insertAdjacentHTML") { sink = "insertAdjacentHTML"; input = n.arguments[1] ?? null; }
+      else if (tail === "html" || tail === "attr") { sink = tail === "html" ? "html-call" : "attr-call"; input = n.arguments[tail === "attr" ? 1 : 0] ?? null; }
+      else if (name === "setTimeout" || name === "setInterval") {
+        const first = n.arguments[0];
+        if (first?.type === "Literal" && typeof first.value === "string") { sink = `${name}-string`; input = first; }
+      } else if (tail === "postMessage") { sink = "postMessage-call"; input = n.arguments[0] ?? null; }
+      else if (tail === "addEventListener" && n.arguments[0]?.type === "Literal" && n.arguments[0].value === "message") {
+        sink = "message-listener"; input = n.arguments[1] ?? null;
       }
     }
-  }
-  for (const [sinkName, sinkRe] of SINKS) {
-    let count = 0;
-    const g = new RegExp(sinkRe.source, sinkRe.flags.includes("g") ? sinkRe.flags : sinkRe.flags + "g");
-    let m: RegExpExecArray | null;
-    while ((m = g.exec(text)) !== null) {
-      count++;
-      // look back for a source feeding this sink
-      const back = text.slice(Math.max(0, m.index - CHAIN_WINDOW), m.index);
-      for (const src of SOURCES) {
-        if (back.includes(src)) {
-          chains.push({
-            file: basename(file),
-            source: src,
-            sink: sinkName,
-            excerpt: text.slice(Math.max(0, m.index - 80), m.index + 80).replace(/\s+/g, " ").slice(0, 160),
-          });
-          break;
-        }
-      }
+    if (!sink) continue;
+    counts.set(sink, (counts.get(sink) ?? 0) + 1);
+    const matches = sources.filter(s => s.scope === scopeOf(n) && (input ? within(s.node, input) : false));
+    const candidates = matches.length ? matches : sources.filter(s => s.scope === scopeOf(n) && Math.abs(s.node.range![0] - n.range![0]) <= 600);
+    for (const source of candidates) {
+      chains.push({ file, source: source.name, sink, excerpt: text.slice(...n.range!).slice(0, 240), confidence: "candidate", evidence: {
+        kind: matches.length ? "direct-expression" : "same-function-co-occurrence", range: n.range!, sourceRange: source.node.range!,
+        limitation: matches.length ? "AST expression match only; receiver identity, sanitization and exploitability not established" : "No binding/dataflow proof; same-function co-occurrence only",
+      } });
     }
-    if (count > 0) sinks.push({ file: basename(file), sink: sinkName, count });
+    if (sink === "message-listener") chains.push({ file, source: "postMessage", sink, excerpt: text.slice(...n.range!).slice(0, 240), confidence: "candidate", evidence: { kind: "unresolved-message-handler", range: n.range!, limitation: "Origin validation and handler reachability not established; no missing-check conclusion" } });
   }
-  return { chains, sinks };
+  return { chains, sinks: [...counts].map(([sink, count]) => ({ file, sink, count })), skipped: [] };
 };
-
 export const scanDomSinks = async (input: DomSinkInput): Promise<DomSinkResult> => {
-  await mkdir(input.outputRoot, { recursive: true });
-  let files: string[] = [];
-  try {
-    files = (await readdir(input.jsDir)).filter((f) => f.endsWith(".js")).map((f) => join(input.jsDir, f));
-  } catch {
-    return { scanned: 0, chains: [], sinks: [], artifacts: [] };
-  }
-  const cap = input.maxFiles ?? 300;
-
-  const allChains: DomSinkResult["chains"] = [];
-  const allSinks: DomSinkResult["sinks"] = [];
+  let names: string[];
+  try { names = (await readdir(input.jsDir, { withFileTypes: true })).filter(e => e.isFile() && /\.m?js$/.test(e.name)).map(e => e.name).sort(); }
+  catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e; names = []; }
+  const chains: DomSinkResult["chains"] = [], sinks: DomSinkResult["sinks"] = [], skipped: DomSinkResult["skipped"] = [];
   let scanned = 0;
-  for (const f of files.slice(0, cap)) {
+  const cap = Math.max(0, input.maxFiles ?? 300);
+  for (const file of names.slice(0, cap)) {
     let text: string;
-    try {
-      text = await readFile(f, "utf8");
-    } catch {
-      continue;
-    }
+    try { text = await readFile(join(input.jsDir, file), "utf8"); } catch { skipped.push({ file, reason: "read-failed" }); continue; }
     scanned++;
-    const r = scanFile(f, text);
-    allChains.push(...r.chains);
-    allSinks.push(...r.sinks);
+    const result = scanFile(file, text);
+    chains.push(...result.chains); sinks.push(...result.sinks); skipped.push(...result.skipped);
   }
-
-  const path = join(input.outputRoot, "dom_sinks.json");
-  const body = JSON.stringify({ scanned, chains: allChains.slice(0, 200), sinks: allSinks }, null, 2);
-  await writeFile(path, body);
-  return { scanned, chains: allChains, sinks: allSinks, artifacts: [{ path, bytes: Buffer.byteLength(body) }] };
+  skipped.push(...names.slice(cap).map(file => ({ file, reason: "file-cap" })));
+  const result = { scanned, chains, sinks, skipped };
+  const artifact = await writeArtifact(input.outputRoot, "dom_sinks.json", JSON.stringify(result, null, 2));
+  return { ...result, artifacts: [artifact] };
 };

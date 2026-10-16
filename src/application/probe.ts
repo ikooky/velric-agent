@@ -1,4 +1,4 @@
-import { connect as tlsConnect, type PeerCertificate } from "node:tls";
+import { tlsCertificate } from "../domain/tlsAudit.js";
 
 import { fetchUrl } from "../adapters/http.js";
 
@@ -23,6 +23,10 @@ export interface ProbeResult {
   /** Lightweight tech-stack signature from headers + body markers. */
   readonly techStack: string[];
   readonly error?: string;
+  readonly complete?: boolean;
+  readonly truncated?: boolean;
+  readonly tlsError?: string;
+  readonly receiptId?: string;
 }
 
 const SECURITY_HEADERS = [
@@ -55,27 +59,6 @@ const TECH_MARKERS: ReadonlyArray<readonly [string, RegExp]> = [
   ["fastjson", /com\.alibaba\.fastjson/i],
 ];
 
-const tlsPeek = async (host: string, port = 443): Promise<PeerCertificate | null> => {
-  try {
-    return await new Promise((resolve) => {
-      const sock = tlsConnect(
-        { host, port, rejectUnauthorized: false, servername: host, timeout: 5000 },
-        () => {
-          const cert = sock.getPeerCertificate();
-          sock.destroy();
-          resolve(cert && cert.subject ? (cert as PeerCertificate) : null);
-        },
-      );
-      sock.on("error", () => resolve(null));
-      sock.on("timeout", () => {
-        sock.destroy();
-        resolve(null);
-  });
-    });
-  } catch {
-    return null;
-  }
-};
 
 /** One probe: status line, title, fingerprint headers, TLS SANs, tech stack. */
 export const httpProbe = async (input: {
@@ -88,6 +71,8 @@ export const httpProbe = async (input: {
   readonly redirect?: "follow" | "manual";
   readonly method?: string;
   readonly body?: string;
+  readonly signal?: AbortSignal;
+  readonly rejectUnauthorized?: boolean;
 }): Promise<ProbeResult> => {
   const started = Date.now();
   const res = await fetchUrl(input.url, {
@@ -99,6 +84,7 @@ export const httpProbe = async (input: {
     redirect: input.redirect,
     method: input.method,
     body: input.body,
+    signal: input.signal, rejectUnauthorized: input.rejectUnauthorized,
   });
   const titleMatch = res.body.match(TITLE_RE);
   const title = titleMatch
@@ -122,12 +108,13 @@ export const httpProbe = async (input: {
   }
 
   let tlsSans: string[] = [];
+  let tlsError: string | undefined;
   // A malformed URL must degrade to "no TLS info", not throw past the
   // never-throw fetch contract.
   let u: URL | null = null;
   try { u = new URL(input.url); } catch { u = null; }
   if (u && u.protocol === "https:") {
-    const cert = await tlsPeek(u.hostname, Number(u.port) || 443);
+    const cert = await tlsCertificate(u, { proxy: input.proxy, timeoutMs: input.timeoutMs ?? 5000, signal: input.signal, rejectUnauthorized: input.rejectUnauthorized }).catch(e => { tlsError = e instanceof Error ? e.message : String(e); return null; });
     if (cert?.subject?.CN) tlsSans.push(`CN:${cert.subject.CN}`);
     const sans = (cert as unknown as { subjectaltname?: string })?.subjectaltname;
     if (sans) {
@@ -139,7 +126,9 @@ export const httpProbe = async (input: {
 
   return {
     url: input.url,
-    finalUrl: res.headers["location"] ?? null,
+    finalUrl: res.finalUrl ?? null,
+    complete: res.complete, truncated: res.truncated, receiptId: res.receiptId,
+    ...(tlsError ? { tlsError } : {}),
     status: res.status,
     ok: res.ok,
     contentType: res.contentType,

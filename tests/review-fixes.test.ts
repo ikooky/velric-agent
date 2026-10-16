@@ -96,9 +96,9 @@ describe("review fixes: behavioral both-polarity fixtures", () => {
     // every outcome is dry-run and no fetch happened: use a dedicated record
     // root whose only exchange targets a dead port; dry-run must not care.
     const deadRoot = mkdtempSync(join(tmpdir(), "revfix-dead-"));
-    const rbh = H("{}");
+    const rbh = H(JSON.stringify({ price: 100 }));
     await mkdir(join(deadRoot, "blobs", rbh.slice(0, 2)), { recursive: true });
-    await writeFile(join(deadRoot, "blobs", rbh.slice(0, 2), rbh + ".bin"), "{}");
+    await writeFile(join(deadRoot, "blobs", rbh.slice(0, 2), rbh + ".bin"), JSON.stringify({ price: 100 }));
     await writeFile(join(deadRoot, "traffic.ndjson"), JSON.stringify({
       id: "dx1", ts: "t", client: "c", method: "POST", url: "http://127.0.0.1:9/x",
       status: 200, reqHeaders: {}, reqBodyHash: rbh, respBodyHash: H("r"), respContentType: "application/json",
@@ -269,12 +269,22 @@ describe("review fixes: behavioral both-polarity fixtures", () => {
     const { probeParams } = await import("../src/application/paramProbe.js");
     const root2 = mkdtempSync(join(tmpdir(), "revfix-pp-"));
     await writeFile(join(root2, "params_merged.json"), JSON.stringify([
-      { method: "GET", path: "/noisy", fields: [{ name: "q", in: "query" }] },
+      {
+        method: "GET",
+        path: "/noisy",
+        fields: [{ name: "q", in: "query" }],
+        // New domain contract: a baseline is only attempted from an observed request sample
+        // carrying real query values; a bare path+fields endpoint is skipped before any request.
+        requestSamples: [{ method: "GET", url: `${b2}/noisy?q=1`, status: 200 }],
+      },
     ]));
     const out = await probeParams({ mergedFile: join(root2, "params_merged.json"), baseUrl: b2, outputRoot: root2 } as never);
-    const first = out.endpointResults[0]!;
-    expect(first.baseline.sha256).toBe("unstable-baseline");
-    expect(first.params).toHaveLength(0);
+    // New contract: an unstable baseline skips the endpoint with an explicit reason instead of
+    // emitting a sentinel baseline row.
+    expect(out.endpointResults).toHaveLength(0);
+    expect(out.skipped.some((s: { url: string; reason: string }) => s.url.includes("/noisy") && s.reason.includes("unstable"))).toBe(true);
+    // Abort semantics preserved: only the baseline pair (base + repeat) is sent; no parameter-removal request fires.
+    expect(n).toBe(2);
     srv2.close();
   });
 });

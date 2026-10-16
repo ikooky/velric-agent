@@ -1,52 +1,37 @@
-import { createHash } from "node:crypto";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
+import { readBlob, readJson, safePath, withRootLock, writeJson } from "../core/storage.js";
+import { EvidenceStore } from "../domain/graphs.js";
 
-/**
- * 内容寻址证据存储:blob 存储 + sha256 校验。
- * blobs/<hash[:2]>/<hash>.bin + manifest.json(记录来源/长度/哈希)。
- */
-export interface EvidenceItem {
-  readonly source: string; // e.g. "runtime_api.json#detail[3]" or "curl poc"
-  readonly label?: string;
-  readonly content: string;
-}
-
-export interface EvidenceInput {
-  readonly outputRoot: string;
-  readonly items: EvidenceItem[];
-}
-
+export interface EvidenceItem { readonly source: string; readonly label?: string; readonly content: string }
+export interface EvidenceInput { readonly outputRoot: string; readonly items: EvidenceItem[] }
 export interface EvidenceResult {
   readonly blobs: { hash: string; bytes: number; path: string; source: string; label?: string }[];
   readonly manifestPath: string;
 }
+interface Manifest { blobs: EvidenceResult["blobs"]; generatedAt?: string }
 
-const sha256 = (data: string): string =>
-  createHash("sha256").update(data, "utf8").digest("hex");
-
-export const saveEvidence = async (input: EvidenceInput): Promise<EvidenceResult> => {
-  const blobDir = join(input.outputRoot, "blobs");
-  const blobs: EvidenceResult["blobs"] = [];
-  for (const it of input.items) {
-    const hash = sha256(it.content);
-    const bin = join(blobDir, hash.slice(0, 2), `${hash}.bin`);
-    await mkdir(dirname(bin), { recursive: true });
-    await writeFile(bin, it.content, "utf8");
-    // write-after-verify: reread to confirm durable write
-    const written = await readFile(bin, "utf8");
-    if (sha256(written) !== hash) {
-      throw { code: "io_error", message: `evidence write verify failed for ${hash}` };
-    }
-    blobs.push({ hash, bytes: Buffer.byteLength(it.content), path: bin, source: it.source, label: it.label });
+/** Publication and manifest merge are one cross-process transaction. */
+export const saveEvidence = async (input: EvidenceInput): Promise<EvidenceResult> => withRootLock(input.outputRoot, async () => {
+  const root = input.outputRoot;
+  const old = await readJson<Manifest>(root, "manifest.json", () => ({blobs:[]}), (value) => {
+    const m = value as Manifest;
+    return !!m && Array.isArray(m.blobs) && m.blobs.every(b => b && /^[a-f0-9]{64}$/.test(b.hash) &&
+      Number.isSafeInteger(b.bytes) && b.bytes >= 0 && typeof b.path === "string" && typeof b.source === "string");
+  });
+  for (const entry of old.blobs) {
+    const path = await safePath(root, `blobs/${entry.hash.slice(0,2)}/${entry.hash}.bin`);
+    const bytes = await readBlob(root, entry.hash);
+    if (entry.path !== path || !bytes || bytes.length !== entry.bytes) throw Object.assign(new Error("manifest evidence integrity mismatch"),{code:"evidence_integrity"});
   }
-  // Merge into an existing manifest instead of clobbering: a second save
-  // in the same outputRoot previously wiped the first call's blob entries.
-  const manifestPath = join(input.outputRoot, "manifest.json");
-  let existing: { blobs?: { hash: string }[] } = {};
-  try { existing = JSON.parse(await readFile(manifestPath, "utf8")) as { blobs?: { hash: string }[] }; } catch { /* fresh */ }
-  const merged = [...(existing.blobs ?? []).filter((b) => !blobs.some((n) => n.hash === b.hash)), ...blobs];
-  await writeFile(manifestPath, JSON.stringify({ generatedAt: new Date().toISOString(), blobs: merged }, null, 2), "utf8");
-  return { blobs, manifestPath };
-};
-
+  const store = new EvidenceStore(root); await store.load();
+  const blobs: EvidenceResult["blobs"] = [];
+  for (const item of input.items) {
+    const blob = await store.put(Buffer.from(item.content,"utf8"),item.label);
+    const path = await safePath(root, `blobs/${blob.hash.slice(0,2)}/${blob.hash}.bin`);
+    blobs.push({hash:blob.hash,bytes:blob.bytes,path,source:item.source,label:item.label});
+  }
+  const merged = new Map(old.blobs.map(b=>[b.hash,b]));
+  for (const b of blobs) merged.set(b.hash,b);
+  await writeJson(root,"manifest.json",{generatedAt:new Date().toISOString(),blobs:[...merged.values()]});
+  return {blobs,manifestPath:join(root,"manifest.json")};
+});

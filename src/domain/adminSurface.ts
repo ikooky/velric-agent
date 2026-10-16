@@ -1,6 +1,8 @@
 import { fetchUrl } from "../adapters/http.js";
 import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { discoveryOrigin, discoverySignature, stableDiscoverySignatures } from "./pathProbe.js";
 
 /** Framework admin-surface discovery: well-known unauthenticated management
  *  endpoints (Spring actuator, swagger/openapi, druid, nacos, eureka,
@@ -27,6 +29,8 @@ export interface AdminSurfaceFound {
 export interface AdminSurfaceResult {
   readonly probed: number;
   readonly found: AdminSurfaceFound[];
+  /** Reachable panels without verified product content — leads, not findings. */
+  readonly candidates: { url: string; reason: string }[];
   readonly artifacts: { path: string; bytes: number }[];
 }
 
@@ -69,56 +73,90 @@ const SURFACES: Surface[] = [
   { path: "/metrics", kind: "metrics-endpoint" },
 ];
 
-/** Body signature robust to embedded random tokens (mirrors pathProbe):
- *  SPA catch-alls answer 200 to /admin too — a signature identical to the
- *  random-path baseline is the soft-404 page, not a real panel. */
-const sigOf = (status: number, bytes: number, contentType: string, body: string): string => {
-  const kind = contentType.includes("json") ? "json" : contentType.includes("html") ? "html" : "other";
-  const band = bytes < 512 ? "s" : bytes < 2048 ? "m" : bytes < 16384 ? "l" : "xl";
-  const marker = kind === "json"
-    ? (body.match(/"(?:error|message|code|msg|status)"\s*:/) ?? [""])[0]
-    : kind === "html"
-      ? (body.match(/<(?:title|h1)[^>]*>([^<]{0,60})/) ?? [""])[0]
-      : "";
-  return `${status}:${kind}:${band}:${marker}`;
+const surfaceEvidence = (kind: string, body: string): string | undefined => {
+  const text = body.slice(0, 262144);
+  if (kind.startsWith("openapi") || kind === "api-docs") {
+    try {
+      const data = JSON.parse(text) as Record<string, unknown>;
+      if (data && typeof data === "object" && (typeof data.openapi === "string" || typeof data.swagger === "string") && data.paths && typeof data.paths === "object") return "openapi document with paths";
+    } catch { /* HTML UI is checked below */ }
+  }
+  const patterns: Record<string, RegExp> = {
+    "spring-actuator": /"_links"\s*:\s*\{[\s\S]*"(?:health|self)"\s*:/,
+    "actuator-env": /"propertySources"\s*:/,
+    "actuator-health": /"status"\s*:\s*"(?:UP|DOWN|OUT_OF_SERVICE|UNKNOWN)"/,
+    "actuator-mappings": /"(?:contexts|dispatcherServlets)"\s*:/,
+    "actuator-configprops": /"(?:contexts|beans)"\s*:/,
+    "actuator-heapdump": /^JAVA PROFILE 1\.0/,
+    "swagger": /swagger-ui|SwaggerUIBundle|swagger-ui-bundle/i,
+    "swagger-ui": /swagger-ui|SwaggerUIBundle|swagger-ui-bundle/i,
+    "druid-console": /Druid Stat|druid\.js|Druid Monitor/i,
+    "nacos-console": /nacos.*(?:console|login)|nacos-logo/i,
+    "nacos-namespaces": /"namespace(?:ShowName)?"\s*:/,
+    "eureka-registry": /<applications(?:\s|>)/,
+    "grafana": /grafanaBootData|grafana-app/i,
+    "kibana": /kbn-injected-metadata|kibanaLegacy/i,
+    "jenkins": /jenkins\.js|Jenkins-Crumb|jenkins-head-icon/i,
+    "tomcat-manager": /Tomcat Web Application Manager/i,
+    "weblogic-console": /WebLogic Server Administration Console/i,
+    "elasticsearch-cat": /\b(?:green|yellow|red)\s+(?:open|close)\s+/,
+    "k8s-pods": /"kind"\s*:\s*"PodList"/,
+    "metrics-endpoint": /^# (?:HELP|TYPE) /m,
+    "version-endpoint": /"(?:version|buildVersion)"\s*:\s*"[0-9]/,
+  };
+  return patterns[kind]?.test(text) ? `${kind} product content` : undefined;
 };
+
 
 export const probeAdminSurface = async (input: AdminSurfaceInput): Promise<AdminSurfaceResult> => {
   await mkdir(input.outputRoot, { recursive: true });
-  const opts = { proxy: input.proxy, timeoutMs: input.timeoutMs ?? 8000, cookie: input.cookie, headers: input.headers };
-  const base = input.baseUrl.replace(/\/+$/, "");
+  const opts = { proxy: input.proxy, timeoutMs: input.timeoutMs ?? 8000, cookie: input.cookie, headers: input.headers, redirect: "manual" as const };
+  const base = discoveryOrigin(input.baseUrl);
 
   // Soft-404 calibration: 3 random paths → the catch-all signature to EXCLUDE.
-  const softSigs = new Set<string>();
-  for (const rnd of ["/zzqq-velric-404-a", "/zzqq-velric-404-b", "/zzqq-velric-404-c"]) {
-    const r = await fetchUrl(base + rnd, opts);
-    if (r.status > 0) softSigs.add(sigOf(r.status, r.bytes, r.contentType, r.body));
-  }
+  const baselines = [];
+  for (let i = 0; i < 3; i++) baselines.push(await fetchUrl(new URL(`/zzqq-${randomUUID()}`, base).href, opts));
+  const softSigs = stableDiscoverySignatures(baselines);
 
   const found: AdminSurfaceFound[] = [];
+  const candidates: { url: string; reason: string }[] = [];
   let probed = 0;
 
   for (const s of SURFACES) {
     const url = `${base}${s.path}`;
     probed += 1;
     const r = await fetchUrl(url, { ...opts, method: "GET" });
-    const isSoft404 = softSigs.has(sigOf(r.status, r.bytes, r.contentType, r.body));
-    if (r.status >= 200 && r.status < 300 && r.bytes > 0 && !isSoft404) {
-      found.push({ url, kind: s.kind, status: r.status, bytes: r.bytes, evidence: s.evidence?.(r.body.slice(0, 4096)) });
-      for (const sub of s.subs ?? []) {
-        const su = `${base}${sub.path}`;
-        probed += 1;
-        const sr = await fetchUrl(su, { ...opts, method: "GET" });
-        const subSoft = softSigs.has(sigOf(sr.status, sr.bytes, sr.contentType, sr.body));
-        if (sr.status >= 200 && sr.status < 300 && sr.bytes > 0 && !subSoft) {
-          found.push({ url: su, kind: sub.kind, status: sr.status, bytes: sr.bytes, evidence: sub.evidence?.(sr.body.slice(0, 4096)) });
-        }
+    const isSoft404 = softSigs.has(discoverySignature(r));
+    const evidence = surfaceEvidence(s.kind, r.body);
+    const reachable = r.status >= 200 && r.status < 300 && r.bytes > 0 && !isSoft404 && r.complete !== false && !r.truncated && !r.error;
+    if (reachable && evidence) {
+      found.push({ url, kind: s.kind, status: r.status, bytes: r.bytes, evidence: s.evidence?.(r.body.slice(0, 4096)) ?? evidence });
+    } else if (reachable && !evidence && s.kind.endsWith("console") || (reachable && !evidence && ["admin-generic", "console-generic"].includes(s.kind))) {
+      // A reachable panel without recognized product content is a LEAD, not a
+      // finding (login walls look exactly like this) — preserved with its
+      // reason instead of silently dropped.
+      candidates.push({ url, reason: "product-content-unverified" });
+    }
+    // Subpaths are probed INDEPENDENTLY of the parent: a locked-down /actuator
+    // with an exposed /actuator/env is precisely the misconfiguration class
+    // this probe exists to find.
+    for (const sub of s.subs ?? []) {
+      const su = `${base}${sub.path}`;
+      probed += 1;
+      const sr = await fetchUrl(su, { ...opts, method: "GET" });
+      const subSoft = softSigs.has(discoverySignature(sr));
+      const subEvidence = surfaceEvidence(sub.kind, sr.body);
+      const subReachable = sr.status >= 200 && sr.status < 300 && sr.bytes > 0 && !subSoft && sr.complete !== false && !sr.truncated && !sr.error;
+      if (subReachable && subEvidence) {
+        found.push({ url: su, kind: sub.kind, status: sr.status, bytes: sr.bytes, evidence: sub.evidence?.(sr.body.slice(0, 4096)) ?? subEvidence });
+      } else if (subReachable && !subEvidence) {
+        candidates.push({ url: su, reason: "product-content-unverified" });
       }
     }
   }
 
-  const body = JSON.stringify({ probed, found }, null, 2);
+  const body = JSON.stringify({ probed, found, candidates }, null, 2);
   const path = join(input.outputRoot, "admin_surface.json");
   await writeFile(path, body, "utf8");
-  return { probed, found, artifacts: [{ path, bytes: Buffer.byteLength(body) }] };
+  return { probed, found, candidates, artifacts: [{ path, bytes: Buffer.byteLength(body) }] };
 };

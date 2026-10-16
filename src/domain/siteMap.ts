@@ -1,5 +1,7 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { ensureDir, writeArtifact } from "../adapters/artifacts.js";
+import { writeOwnedManifest } from "../application/harvest.js";
 
 /** Structured site map (api-recon Phase 5 deliverable): one JSON artifact
  *  aggregating routes, APIs, params, feature trigger points, and honest
@@ -32,43 +34,43 @@ export interface SiteMap {
   readonly params: { method: string; path: string; transport: string; fields: string[]; confidence: string }[];
   readonly featuresTriggered: { route: string; kind: string; label: string }[];
   readonly limitations: string;
+  readonly artifacts: {path:string;bytes:number}[];
 }
 
 const readLines = async (p: string): Promise<string[]> => {
   try { return (await readFile(p, "utf8")).split("\n").map((l) => l.trim()).filter(Boolean); }
-  catch { return []; }
+  catch (err) { if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []; throw err; }
 };
 
 const readJson = async <T>(p: string): Promise<T | null> => {
   try { return JSON.parse(await readFile(p, "utf8")) as T; }
-  catch { return null; }
+  catch (err) { if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null; throw err; }
 };
 
 export const buildSiteMap = async (input: SiteMapInput): Promise<SiteMap> => {
-  await mkdir(input.outputRoot, { recursive: true });
+  await ensureDir(input.outputRoot);
   const root = input.outputRoot;
 
-  const routes = await readLines(join(root, "routes.txt"));
-  const apis = await readLines(join(root, "api_merged.txt"));
+  const routes = await readLines(input.routesFile ?? join(root, "routes.txt"));
+  const apis = await readLines(input.apiMergedFile ?? join(root, "api_merged.txt"));
   const staticApis = await readLines(join(root, "api_static.txt"));
-  const runtimeRaw = await readJson<{ uniqueCalls?: string[] }>(join(root, "runtime_api.json"));
+  const runtimeRaw = await readJson<{ uniqueCalls?: string[]; mode?: string }>(join(root, "runtime_api.json"));
   const runtimeApis = [...new Set((runtimeRaw?.uniqueCalls ?? []).map((c) => c.split(" ").slice(1).join(" ")))];
   // merged = static ∪ runtime; attribute each merged api to its source(s).
   const staticSet = new Set(staticApis);
   const runtimeSet = new Set(runtimeApis);
   const apisFromStatic = apis.filter((a) => staticSet.has(a));
   const apisFromRuntime = apis.filter((a) => runtimeSet.has(a));
-  const coverageRaw = await readJson<{ interactions?: { route: string }[] }>(join(root, "coverage.json"));
-  const routesVerifiedByClick = [...new Set((coverageRaw?.interactions ?? []).map((i) => i.route))].filter(Boolean);
+  const coverageRaw = await readJson<{ interactions?: { route: string; kind:string; requestIds?:number[] }[] }>(input.coverageFile ?? join(root, "coverage.json"));
+  const routesVerifiedByClick = [...new Set((coverageRaw?.interactions ?? []).filter(i => i.kind === 'menu' && i.requestIds !== undefined).map(i => i.route))].filter(Boolean);
   // Guard strategy facts recorded by the runtime hook (best effort).
-  const gatesRaw = await readJson<{ suggestedConfig?: unknown }>(join(root, "gates_report.json"));
-  const routeGuardStrategy = gatesRaw ? ["gates-analyzed"] : [];
+  const routeGuardStrategy = runtimeRaw?.mode === 'gate-defeat' ? ['gate-defeat-requested; effectiveness-unverified'] : [];
   // params_merged.json shape: paramMerge writes a TOP-LEVEL ARRAY of
   // endpoints (accept that first); tolerate a legacy {endpoints:[...]} wrapper.
   type ParamEntry = { method: string; path: string; fields: { name: string; in: string; confidence: string }[] };
-  const paramsRaw = (await readJson<ParamEntry[] | { endpoints?: ParamEntry[] }>(join(root, "params_merged.json"))) ?? [];
+  const paramsRaw = (await readJson<ParamEntry[] | { endpoints?: ParamEntry[] }>(input.paramsFile ?? join(root, "params_merged.json"))) ?? [];
   const paramEntries: ParamEntry[] = Array.isArray(paramsRaw) ? paramsRaw : paramsRaw.endpoints ?? [];
-  const coverage = await readJson<{ interactions?: { route: string; kind: string; label: string }[] }>(join(root, "coverage.json"));
+  const coverage = await readJson<{ interactions?: { route: string; kind: string; label: string }[] }>(input.coverageFile ?? join(root, "coverage.json"));
 
   const params: SiteMap["params"] = paramEntries.map((e) => ({
     method: e.method,
@@ -90,8 +92,10 @@ export const buildSiteMap = async (input: SiteMapInput): Promise<SiteMap> => {
     routesVerifiedByClick,
     params,
     featuresTriggered: (coverage?.interactions ?? []).map((i) => ({ route: i.route, kind: i.kind, label: i.label })),
-    limitations: input.limitations ?? "static harvest only; runtime/coverage stages not run",
+    limitations: input.limitations ?? (!runtimeRaw && !coverage ? "static harvest only; runtime/coverage stages not run" : "bounded capture; unvisited routes and authentication remain unverified"),
+    artifacts: [],
   };
-  await writeFile(join(root, "site_map.json"), JSON.stringify(sitemap, null, 2));
+  sitemap.artifacts.push(await writeArtifact(root, "site_map.json", JSON.stringify(sitemap, null, 2)));
+  sitemap.artifacts.push(await writeOwnedManifest(root, "site_map_manifest.json", 'site-map', input.baseUrl, sitemap.artifacts, apis.length));
   return sitemap;
 };

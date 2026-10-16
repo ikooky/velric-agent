@@ -50,27 +50,48 @@ const ROOT_DUMPS: readonly string[] = [
 export const findBackups = async (input: BackupFindInput): Promise<BackupFindResult> => {
   await ensureDir(input.outputRoot);
   const origin = new URL(input.baseUrl).origin;
-  const opts = { proxy: input.proxy, timeoutMs: input.timeoutMs ?? 8000 };
+  const opts = { proxy: input.proxy, timeoutMs: input.timeoutMs ?? 8000, redirect: "manual" as const };
 
   // soft-404 calibration: two random paths; responses identical to random
   // baselines are catch-all noise, not findings (pathProbe discipline).
   const rnd = (): string => `${origin}/${Math.random().toString(36).slice(2, 14)}`;
   const soft1 = await fetchUrl(rnd(), opts);
   const soft2 = await fetchUrl(rnd(), opts);
-  const softFp = soft1.status === soft2.status ? `${soft1.status}:${soft1.sha256.slice(0, 12)}` : null;
+  // A soft-404 fingerprint is only learnable from AGREEING random baselines:
+  // two random paths with different bodies prove the origin serves real,
+  // distinct content — treating the first body as the catch-all shape would
+  // delete genuine files that happen to share its bytes.
+  const softFp = soft1.status === soft2.status && soft1.sha256 === soft2.sha256 ? `${soft1.status}:${soft1.sha256.slice(0, 12)}` : null;
 
   // candidate set: targets x suffixes + root dumps
   const targets = input.targets ?? DEFAULT_TARGETS;
   const candidates = new Set<string>();
+  const derived: string[] = [];
   for (const t of targets) {
-    const clean = t.replace(/^\//, "");
-    for (const sfx of SUFFIXES) {
-      candidates.add(`${origin}/${clean}${sfx}`);
-      if (clean.endsWith("/")) candidates.add(`${origin}${clean}${clean.slice(0, -1)}${sfx}`); // dir -> dir.bak
-    }
+    if (typeof t !== "string" || /[\\\x00-\x20\x7f]/.test(t)) continue;
+    try {
+      // Targets are file/dir names relative to the SITE ROOT (the probe's own
+      // docstring: index.php -> /index.php.bak), never relative to the
+      // baseUrl's path — a session URL like /a/?x=2 must not shift candidates
+      // into /a/. Absolute-path targets keep their path.
+      const isAbsolute = t.startsWith("/");
+      const target = new URL(isAbsolute ? t : `/${t.replace(/^\/+/, "")}`, `${origin}/`);
+      if (target.origin !== origin || target.username || target.password || target.search || target.hash) continue;
+      const path = target.pathname.replace(/\/+$/, "");
+      if (!path) continue;
+      for (const sfx of SUFFIXES) {
+        const candidate = new URL(origin);
+        candidate.pathname = `${path}${sfx}`;
+        if (candidate.origin === origin) derived.push(candidate.href);
+      }
+    } catch { /* a dirty target must not abort the remaining candidates */ }
   }
-  for (const d of ROOT_DUMPS) candidates.add(`${origin}/${d}`);
-  const list = [...candidates].slice(0, input.maxCandidates ?? 300);
+  // Reserve root dumps even when the target/suffix product exceeds the budget.
+  if (derived[0]) candidates.add(derived[0]);
+  for (const d of ROOT_DUMPS) candidates.add(new URL(`/${d}`, origin).href);
+  for (const url of derived) candidates.add(url);
+  const budget = Number.isFinite(input.maxCandidates) ? Math.max(0, Math.min(3000, Math.floor(input.maxCandidates!))) : 300;
+  const list = [...candidates].slice(0, budget);
 
   const found: BackupFindResult["found"] = [];
   let probed = 0;

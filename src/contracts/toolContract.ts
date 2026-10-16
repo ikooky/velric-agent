@@ -50,7 +50,7 @@ export interface ToolContract<
   readonly examples: readonly ToolExample[];
   /** Who should call this tool. "host" = caller-facing (default);
    *  "internal" = pipeline bookkeeping — registered only in the full
-   *  profile (REA-style capability gating keeps the catalog complete while
+   *  profile (capability gating keeps the catalog complete while
    *  letting lean hosts see just the recon surface). */
   readonly audience?: "host" | "internal";
 }

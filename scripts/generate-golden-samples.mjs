@@ -33,10 +33,12 @@ const EXCLUDED = {
 // ---- local mock: deterministic behaviors on 127.0.0.1 ----
 const MIME = { html: "text/html", js: "application/javascript", json: "application/json" };
 const pages = {
-  "/": [200, "html", "<html><body>ok <a href='/api/v1/users'>u</a></body></html>"],
+  "/": [200, "html", "<html><body>ok <a href='/api/v1/users'>u</a><script src='/js/app.js'></script><script src='/js/rbac.js'></script></body></html>"],
   "/login": [200, "html", "<html><body><form action='/dologin'><input name=user><input name=pass></form></body></html>"],
   "/dologin": [200, "json", '{"ok":true}', { "set-cookie": "sid=abc; Path=/" }],
   "/api/v1/users": [200, "json", JSON.stringify([{ id: 1, name: "a", email: "a@x.com" }])],
+  "/js/app.js": [200, "js", "var k='AKIAIOSFODNN7EXAMPLE';fetch('/api/v1/users?x=1')"],
+  "/js/rbac.js": [200, "js", "router.beforeEach((to)=>{ if(to.meta.requiresAuth && !user.role) redirect('/login'); });"],
   "/app.js": [200, "js", "var k='AKIAIOSFODNN7EXAMPLE';fetch('/api/v1/users?x=1')"],
   "/admin": [200, "html", "<html><body>admin</body></html>"],
   "/login": [200, "html", "<html><body><form action='/login'><input name=user><input name=pass></form></body></html>"],
@@ -87,9 +89,7 @@ const overrides = {
   session_crawl: { baseUrl: `${base}/`, loginUrl: `${base}/dologin`, username: "a", password: "b", outputRoot: root, maxPages: 2, loggedInRegex: "ok" },
   harvest_static: { baseUrl: base, outputRoot: root },
   detect_sourcemaps: { baseUrl: base, outputRoot: root },
-  extract_routes: { jsDir: root, outputRoot: root },
   deobfuscate_js: { jsDir: root, outputRoot: root },
-  dom_sinks: { jsDir: root, outputRoot: root },
   probe_oidc: { baseUrl: base, outputRoot: root },
   jwt: { action: "attack", token: jwtTok, endpoint: `${base}/api/v1/users`, outputRoot: root },
   mine_hidden_params: { url: `${base}/api/v1/users?x=1`, outputRoot: root, maxWords: 3, timeoutMs: 2000 },
@@ -140,11 +140,11 @@ const blobHash = (b) => createHash("sha256").update(b).digest("hex");
 const reqBody = JSON.stringify({ user: "u1", role: "user" });
 const rbh = blobHash(reqBody);
 await mk(join(root, "blobs", rbh.slice(0, 2)), { recursive: true });
-await wf(join(root, "blobs", rbh.slice(0, 2), rbh), reqBody);
+await wf(join(root, "blobs", rbh.slice(0, 2), rbh + ".bin"), reqBody);
 const respBody = JSON.stringify({ ok: true, rows: [1] });
 const rspbh = blobHash(respBody);
 await mk(join(root, "blobs", rspbh.slice(0, 2)), { recursive: true });
-await wf(join(root, "blobs", rspbh.slice(0, 2), rspbh), respBody);
+await wf(join(root, "blobs", rspbh.slice(0, 2), rspbh + ".bin"), respBody);
 const ex = { id: "ex1", ts: "2026-01-01T00:00:00Z", client: "127.0.0.1", method: "POST", url: `${base}/api/v1/users`, status: 200, reqHeaders: { "content-type": "application/json", cookie: "sid=admin" }, reqBodyHash: rbh, respBodyHash: rspbh, respContentType: "application/json" };
 await wf(join(root, "traffic.ndjson"), JSON.stringify(ex) + "\n");
 

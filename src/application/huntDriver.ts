@@ -10,9 +10,11 @@
  *   hunt_record(intents/facts/findings) → gated write-back into the graph
  *   hunt_overview()                     → situation for the host's next decision
  */
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { readJson, writeJson, withRootLock, putBlob } from "../core/storage.js";
 import { join } from "node:path";
-import { toolError } from "../domain/result.js";
+import { EvidenceStore } from "../domain/graphs.js";
+import { bindEvidence } from "../domain/evidenceBinding.js";
 import {
   loadGraph, saveGraph, graphOverview,
   type Graph, type Intent,
@@ -21,6 +23,8 @@ import {
 export interface HuntBeginInput {
   readonly goal: string;
   readonly outputRoot: string;
+  readonly reset?: boolean;
+  readonly runId?: string;
   /** Budget caps (HackingBuddyGPT-style run limits). The hunt HARD-STOPS when
    *  any cap is exceeded; hunt_record refuses to advance and returns the
    *  exceeded limit. All optional — no caps means unbounded (legacy). */
@@ -33,6 +37,7 @@ export interface HuntBeginInput {
 
 /** Persisted hunt state beyond the graph: round counter + budget bookkeeping. */
 interface HuntBudget {
+  readonly runId?: string;
   readonly startedAt: string;
   rounds: number;
   cost: number;
@@ -44,21 +49,11 @@ const BUDGET_FILE = "hunt_budget.json";
 export const budgetPath = (root: string): string => join(root, BUDGET_FILE);
 
 const loadBudget = async (root: string): Promise<HuntBudget> => {
-  try {
-    return JSON.parse(await readFile(budgetPath(root), "utf8")) as HuntBudget;
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") {
-      return { startedAt: new Date().toISOString(), rounds: 0, cost: 0 };
-    }
-    // Fail-closed: a corrupt budget file must NOT silently disarm the caps —
-    // treat as budget-exhausted so hunt_record refuses until the file is
-    // fixed or removed (the write path atomically replaces it).
-    throw toolError("corrupt_hunt_budget", "hunt_budget.json is unreadable — refusing writes until fixed (delete it to reset)", { details: { path: budgetPath(root), error: String((e as Error).message) } });
-  }
-};
-
-const saveBudget = async (root: string, b: HuntBudget): Promise<void> => {
-  await writeFile(budgetPath(root), JSON.stringify(b, null, 2), "utf8");
+  const graph = await loadGraph(root);
+  if (graph.huntBudget) return graph.huntBudget;
+  return readJson(root, BUDGET_FILE, () => ({startedAt:new Date().toISOString(),rounds:0,cost:0}), v => {
+    const b=v as HuntBudget; return !!b && Number.isInteger(b.rounds) && b.rounds>=0 && Number.isFinite(b.cost) && b.cost>=0 && Number.isFinite(Date.parse(b.startedAt));
+  });
 };
 
 /** Check the caps; returns the exceeded limit name, or null when within budget. */
@@ -76,12 +71,15 @@ export const budgetExceeded = (b: HuntBudget): string | null => {
 
 export interface HuntRecordInput {
   readonly outputRoot: string;
+  readonly runId?: string;
+  readonly expectedVersion?: number;
+  readonly intentState?: Intent["state"];
   readonly intentId?: number;
   readonly intentSummary?: string;
   readonly goals?: { summary: string; vulnclass?: string }[];
-  readonly intents?: { summary: string; state?: string }[];
-  readonly facts?: { summary?: string; detail?: string; evidence?: string; confidence?: string }[];
-  readonly findings?: { name?: string; vulnclass?: string; severity?: string; summary?: string; poc?: string }[];
+  readonly intents?: { id?: number; summary?: string; state?: string }[];
+  readonly facts?: { summary?: string; detail?: string; evidence?: string; confidence?: string; observationIds?: string[] }[];
+  readonly findings?: { name?: string; vulnclass?: string; severity?: string; summary?: string; poc?: string; observationIds?: string[]; proofKind?: string; outcome?: string; proof?: {kind:string; observationIds:string[]; principal:string; requestHash:string; responseHash:string; claim?:string; expectedPolicy?:string; objectOwner?:string} }[];
   readonly assets?: { type?: string; key?: string; props?: Record<string, unknown> }[];
   readonly goalsMet?: { id: number; reason?: string }[];
   /** host-declared round increment (one hunt_record per round convention). */
@@ -92,55 +90,35 @@ export interface HuntRecordInput {
 
 /** Ledger entry — system-written record of what a tool ACTUALLY observed. */
 export interface LedgerEntry {
+  readonly id?: string;
+  readonly runId?: string;
   readonly tool: string;
   readonly url: string;
   readonly status: number | null;
   readonly at: string;
+  readonly method?: string;
+  readonly requestHash?: string | null;
+  readonly responseHash?: string | null;
+  readonly principal?: string;
+  readonly complete?: boolean;
 }
-
 const LEDGER_FILE = "observation_ledger.json";
-
 export const ledgerPath = (root: string): string => join(root, LEDGER_FILE);
-
-// Per-root append queue: read-modify-write must not interleave across
-// concurrent MCP tool calls sharing one ledger root.
-const ledgerQueues = new Map<string, Promise<unknown>>();
-const serialized = <T>(root: string, fn: () => Promise<T>): Promise<T> => {
-  const prev = ledgerQueues.get(root) ?? Promise.resolve();
-  const next = prev.then(fn, fn);
-  ledgerQueues.set(root, next.catch(() => {}));
-  return next;
-};
-
-/** Append what a tool truly requested/observed. Called by the MCP server for
- * every tool execution (never by the host). */
-export const appendLedger = (root: string, entries: LedgerEntry[]): Promise<void> =>
-  serialized(root, async () => {
-    await mkdir(root, { recursive: true });
-    const prev = await readLedger(root);
-    // Upsert by URL: a statusless older entry upgrades when a later observation
-    // carries a status; a URL never duplicates in the ledger.
-    const byUrl = new Map<string, LedgerEntry>();
-    for (const e of [...prev, ...entries]) {
-      const prior = byUrl.get(e.url);
-      if (!prior) byUrl.set(e.url, e);
-      else if (prior.status == null && e.status != null) byUrl.set(e.url, { ...prior, status: e.status });
-    }
-    const next = [...byUrl.values()];
-    const { writeFile, rename } = await import("node:fs/promises");
-    // Atomic publish: concurrent appenders never expose a torn ledger.
-    const tmp = ledgerPath(root) + ".tmp";
-    await writeFile(tmp, JSON.stringify(next, null, 2));
-    await rename(tmp, ledgerPath(root));
-  });
-
-export const readLedger = async (root: string): Promise<LedgerEntry[]> => {
-  try {
-    return JSON.parse(await readFile(ledgerPath(root), "utf8")) as LedgerEntry[];
-  } catch {
-    return [];
+export const readLedger = (root: string): Promise<LedgerEntry[]> => readJson(root, LEDGER_FILE, () => [], value =>
+  Array.isArray(value) && value.every(e=>e && typeof e.tool === "string" && typeof e.url === "string" &&
+    (e.status===null || (Number.isInteger(e.status) && e.status>=0 && e.status<=599)) && typeof e.at === "string") &&
+  new Set(value.filter(e=>e.id).map(e=>e.id)).size === value.filter(e=>e.id).length);
+/** Compatibility imports are hints, kept outside the transport-only observation ledger. */
+export const appendLedger = (root: string, entries: LedgerEntry[]): Promise<void> => withRootLock(root, async () => {
+  const receipts=await readLedger(root);
+  const hints=await readJson<LedgerEntry[]>(root,"observation_hints.json",()=>[],Array.isArray);
+  for(const entry of entries){
+    const exists=entry.id?receipts.find(x=>x.id===entry.id):undefined;
+    if(exists){if(JSON.stringify(exists)!==JSON.stringify(entry))throw new Error("immutable observation conflict");continue;}
+    hints.push({...entry,id:undefined,runId:undefined,complete:false,requestHash:null,responseHash:null});
   }
-};
+  await writeJson(root,"observation_hints.json",hints);
+});
 
 /** Driver playbook handed to the host at hunt_begin. */
 export const DRIVER_PLAYBOOK = `# 自主侦察驱动手册(宿主 agent 执行)
@@ -184,110 +162,44 @@ export const DRIVER_PLAYBOOK = `# 自主侦察驱动手册(宿主 agent 执行)
 ## 收尾
 所有目标 met 或收益递减时:hunt_record(goalsMet)→ gen_report + save_evidence 交付`;
 
-export const huntBegin = async (input: HuntBeginInput): Promise<{ outputRoot: string; goal: string; driverPlaybook: string; next: string; budget?: { rounds: number; cost: number; caps?: { maxRounds?: number; maxCost?: number; maxDurationMin?: number } } }> => {
+export const huntBegin = async (input: HuntBeginInput) => withRootLock(input.outputRoot, async () => {
   const root = input.outputRoot;
-  await mkdir(root, { recursive: true });
-  let g = await loadGraph(root);
-  if (g.goal === "" || g.goal !== input.goal) {
-    g = { goal: input.goal, constraints: [], goals: [], intents: [], facts: [], findings: [], assets: [], nextId: 1 };
-    // The observation ledger vouches for THIS hunt's citations. A stale
-    // ledger from the previous goal would keep vouching for the new hunt's
-    // fabricated URLs — reset it with the graph.
-    try { await (await import("node:fs/promises")).rm(join(root, LEDGER_FILE), { force: true }); } catch { /* absent */ }
-  }
-  // budget state: fresh on new goal, preserved on re-begin of the same goal
-  let budget = await loadBudget(root);
-  const caps = { maxRounds: input.maxRounds, maxCost: input.maxCost, maxDurationMin: input.maxDurationMin };
-  const hasCaps = input.maxRounds != null || input.maxCost != null || input.maxDurationMin != null;
-  if (g.goal !== input.goal || budget.rounds === 0) {
-    budget = { startedAt: new Date().toISOString(), rounds: 0, cost: 0, ...(hasCaps ? { caps } : {}) };
-  } else if (hasCaps) {
-    budget = { ...budget, caps };
-  }
-  await saveBudget(root, budget);
-  // goals stay host-managed: the host decomposes via hunt_record(intents...)
-  await saveGraph(root, g);
-  return {
-    outputRoot: root,
-    goal: input.goal,
-    driverPlaybook: DRIVER_PLAYBOOK,
-    next: "调 hunt_overview 读态势;用 hunt_record 派 goals/intents;侦察工具带 observationLedgerRoot",
-    ...(budget.caps ? { budget: { rounds: budget.rounds, cost: budget.cost, caps: budget.caps } } : {}),
-  };
-};
+  const old = await loadGraph(root);
+  const fresh = input.reset === true || old.goal === "" || old.goal !== input.goal;
+  let g: Graph = fresh ? {goal:input.goal,constraints:[],goals:[],intents:[],facts:[],findings:[],assets:[],nextId:old.nextId,version:old.version,runId:input.runId ?? randomUUID()} : old;
+  if(input.runId!==undefined && !input.runId.trim())throw new Error("invalid runId");
+  if(fresh && old.runId && input.runId===old.runId)throw new Error("reset requires a new runId");
+  if (!fresh && input.runId && input.runId !== g.runId) throw new Error("runId mismatch; reset required");
+  if (!g.runId) g.runId=randomUUID();
+  let budget: HuntBudget = fresh ? {runId:g.runId,startedAt:new Date().toISOString(),rounds:0,cost:0} : await loadBudget(root);
+  const caps = {maxRounds:input.maxRounds,maxCost:input.maxCost,maxDurationMin:input.maxDurationMin};
+  for (const [key,value] of Object.entries(caps)) if (value != null && (!Number.isFinite(value) || value < 0 || (key === "maxRounds" && !Number.isInteger(value)))) throw new Error("invalid budget cap");
+  if (Object.values(caps).some(v => v != null)) budget={...budget,caps:{...budget.caps,...Object.fromEntries(Object.entries(caps).filter(([,v])=>v!=null))}};
+  g.huntBudget=budget;
+  await saveGraph(root,g);
+  return {outputRoot:root,goal:input.goal,runId:g.runId,version:g.version,driverPlaybook:DRIVER_PLAYBOOK,next:"hunt_overview then hunt_record; cite observationIds and verified proof metadata",budget:{rounds:budget.rounds,cost:budget.cost,caps:budget.caps}};
+});
 
-const norm = (u: string): string => {
-  try {
-    const x = new URL(u);
-    return `${x.origin}${x.pathname}`;
-  } catch {
-    return u.replace(/[?#].*$/, "");
-  }
-};
-
-export const huntRecord = async (input: HuntRecordInput): Promise<{ graph: Graph; accepted: number; dropped: number; dropReasons: string[]; budgetExceeded?: string }> => {
+export const huntRecord = async (input: HuntRecordInput): Promise<{ graph: Graph; accepted: number; dropped: number; dropReasons: string[]; budgetExceeded?: string }> => withRootLock(input.outputRoot, async () => {
   const root = input.outputRoot;
-  // Budget gate: once any cap is exceeded the hunt is OVER — refuse writes.
-  const budget = await loadBudget(root);
-  const exceeded = budgetExceeded(budget);
-  if (exceeded != null) {
-    const g0 = await loadGraph(root);
-    return { graph: g0, accepted: 0, dropped: 0, dropReasons: [`budget exceeded: ${exceeded} — hunt hard-stopped; deliver findings now`], budgetExceeded: exceeded };
-  }
   const g = await loadGraph(root);
+  if (input.runId && input.runId !== g.runId) throw new Error("runId mismatch");
+  if (input.expectedVersion != null && input.expectedVersion !== (g.version ?? 0)) throw Object.assign(new Error("graph version conflict"),{code:"version_conflict"});
+  const round = input.round ?? 1, cost = input.costDelta ?? 0;
+  if (!Number.isInteger(round) || round <= 0 || !Number.isFinite(cost) || cost < 0) throw new Error("invalid nonnegative budget consumption");
+  const budget = await loadBudget(root);
+  const nextBudget = {...budget,rounds:budget.rounds+round,cost:budget.cost+cost};
+  const exceeded = budgetExceeded(nextBudget);
+  if (exceeded) return {graph:g,accepted:0,dropped:0,dropReasons:[`budget exceeded: ${exceeded}`],budgetExceeded:exceeded};
   const ledger = await readLedger(root);
-  const requested = new Set(ledger.map((e) => norm(e.url)));
-  const statusByUrl = new Map<string, Set<number>>();
-  for (const e of ledger) {
-    const k = norm(e.url);
-    if (!statusByUrl.has(k)) statusByUrl.set(k, new Set());
-    if (e.status !== null) statusByUrl.get(k)!.add(e.status);
-  }
-
-  const citedUrls = (txt: string): string[] =>
-    [...String(txt).matchAll(/https?:\/\/[^\s"'\]]+/g)].map((m) => m[0]!.replace(/[.,;)]+$/, ""));
-  const urlOk = (txt: string): boolean =>
-    citedUrls(txt).every((u) => requested.has(norm(u)));
-
-  const digestOk = (evidence: string, summary: string): boolean => {
-    const txt = `${evidence} ${summary}`;
-    // EVERY cited URL must satisfy its own status check — a stray earlier
-    // ledger entry must not vouch for a citation it doesn't cover.
-    const cited = citedUrls(txt);
-    if (cited.length === 0) return false;
-    for (const cu of cited) {
-      const statuses = statusByUrl.get(norm(cu)) ?? statusByUrl.get(cu);
-      if (!statuses) {
-        // not ledgered verbatim — allow same-origin relative-path match.
-        // The ledger's site-root entry ("/") matches EVERYTHING, so it is
-        // excluded from the fallback: only non-root paths may vouch.
-        let matched = false;
-        for (const [k, st] of statusByUrl) {
-          try {
-            const u = new URL(k);
-            if (u.pathname === "/" || u.pathname === "") continue; // root vouches for nothing
-            const stArr = [...st];
-            // Segment-exact match, not substring: a cited "/a" must not
-            // vouch for "/api/secret" (includes() let any short path
-            // guarantee any longer one — the anti-hallucination gate itself).
-            const cite = new URL(cu, "http://l.invalid").pathname;
-            const seg = cite.split("/").filter(Boolean);
-            const tgt = u.pathname.split("/").filter(Boolean);
-            const segMatch = cite === u.pathname ||
-              (tgt.length > 0 && seg.length >= tgt.length && tgt.every((t, i) => seg[i] === t));
-            if (segMatch) { matched = stArr.length === 0 || stArr.some((sv) => txt.includes(String(sv))); break; }
-          } catch { /* malformed */ }
-        }
-        if (!matched) return false;
-        continue;
-      }
-      const known = [...statuses].filter((sv): sv is number => typeof sv === "number");
-      // Token-boundary status match: a bare "200" substring also matches
-      // dates/versions ("v200.3") — require the code to appear as a word.
-      if (known.length > 0 && !known.some((sv) => new RegExp(`\\b${sv}\\b`).test(txt))) return false;
-    }
-    return true;
+  const validReceipts = ledger.filter(e => e.id && e.runId === g.runId && e.complete === true && e.method && e.principal && e.status != null && Number.isInteger(e.status) && e.status >= 100 && e.status <= 599 && /^[a-f0-9]{64}$/.test(e.requestHash ?? "") && /^[a-f0-9]{64}$/.test(e.responseHash ?? ""));
+  const citedUrls = (txt:string):string[] => [...String(txt).matchAll(/https?:\/\/[^\s"'\]]+/g)].map(m=>m[0]!.replace(/[.,;)]+$/, ""));
+  const receiptsFor = (ids?:string[]):LedgerEntry[] => ids?.length ? validReceipts.filter(e=>ids.includes(e.id!)) : [];
+  const referencesOk = (ids:string[]|undefined,txt:string):boolean => {
+    const receipts=receiptsFor(ids);
+    return !!ids?.length && receipts.length === new Set(ids).size && citedUrls(txt).every(u=>receipts.some(e=>e.url===u));
   };
+  const urlOk = (txt:string):boolean => citedUrls(txt).every(u=>validReceipts.some(e=>e.url===u));
 
   let accepted = 0;
   let dropped = 0;
@@ -322,33 +234,33 @@ export const huntRecord = async (input: HuntRecordInput): Promise<{ graph: Graph
     // unknown id or already met: not accepted — no inflation
   }
 
-  // intents (create; optionally set state)
+  const states = new Set(["open","running","done","blocked","exhausted"]);
+  const transition = (intent: Intent, state: string): void => {
+    if (!states.has(state)) { drop("invalid intent state"); return; }
+    if (intent.state === state) return;
+    if (intent.state === "done") { drop("completed intent requires a new intent ID"); return; }
+    intent.state=state as Intent["state"]; accepted++;
+  };
   for (const ni of input.intents ?? []) {
-    const summary = String(ni.summary ?? "").trim().slice(0, 300);
-    if (!summary) continue;
-    if (g.intents.some((i) => i.summary === summary)) continue;
-    g.intents.push({
-      id: g.nextId++,
-      summary,
-      state: ni.state === "running" || ni.state === "done" || ni.state === "blocked" || ni.state === "exhausted" ? ni.state : "open",
-      parentIds: [],
-      yields: [],
-    });
-    accepted++;
+    const summary = String(ni.summary ?? "").trim().slice(0,300);
+    if (ni.id != null) {
+      const intent=g.intents.find(i=>i.id===ni.id);
+      if (!intent) { drop("unknown intent id"); continue; }
+      if (ni.state) transition(intent,ni.state);
+      if (summary && summary!==intent.summary) { intent.summary=summary; accepted++; }
+      continue;
+    }
+    if (!summary || g.intents.some(i=>i.summary===summary)) continue;
+    if (ni.state && !states.has(ni.state)) { drop("invalid intent state"); continue; }
+    g.intents.push({id:g.nextId++,summary,state:(ni.state??"open") as Intent["state"],parentIds:[],yields:[]}); accepted++;
   }
-
-  // optional: mark one intent's state alongside the record
-  if (typeof input.intentId === "number" && typeof input.intentSummary === "string") {
-    const intent = g.intents.find((i) => i.id === input.intentId);
-    if (intent) intent.summary = input.intentSummary.slice(0, 300);
-  }
-
   let currentIntent: Intent | null = null;
-  if (typeof input.intentId === "number") {
-    currentIntent = g.intents.find((i) => i.id === input.intentId) ?? null;
-    if (!currentIntent && input.intentSummary) {
-      currentIntent = { id: g.nextId++, summary: input.intentSummary.slice(0, 300), state: "running", parentIds: [], yields: [] };
-      g.intents.push(currentIntent);
+  if (input.intentId != null) {
+    currentIntent=g.intents.find(i=>i.id===input.intentId)??null;
+    if (!currentIntent) drop("unknown intent id");
+    else {
+      if (input.intentState) transition(currentIntent,input.intentState);
+      if (input.intentSummary?.trim()) currentIntent.summary=input.intentSummary.trim().slice(0,300);
     }
   }
 
@@ -365,7 +277,7 @@ export const huntRecord = async (input: HuntRecordInput): Promise<{ graph: Graph
     const conf = f.confidence === "inferred" ? "inferred" : "observed";
     const txt = `${f.summary} ${f.evidence ?? ""} ${f.detail ?? ""}`;
     if (!urlOk(txt)) { drop(`fact#? url not in ledger: ${citedUrls(txt)[0] ?? "(none)"}`); continue; }
-    if (conf === "observed" && !digestOk(f.evidence ?? "", f.summary)) {
+    if (conf === "observed" && !referencesOk(f.observationIds, txt)) {
       drop(`fact#? observed but no ledger citation`);
       continue;
     }
@@ -377,6 +289,7 @@ export const huntRecord = async (input: HuntRecordInput): Promise<{ graph: Graph
       detail: f.detail,
       evidence: f.evidence,
       confidence: conf,
+      observationIds: f.observationIds,
     });
     currentIntent?.yields.push(id);
     accepted++;
@@ -393,7 +306,12 @@ export const huntRecord = async (input: HuntRecordInput): Promise<{ graph: Graph
     // Findings are the STRONGEST claims — they get the same digest check as
     // facts: a cited URL requested with any random status must not vouch
     // for "RCE at /api/x" unless the claimed status matches the ledger.
-    if (!digestOk(f.poc ?? "", f.summary ?? "")) { drop(`finding '${String(f.name).slice(0, 40)}' status digest mismatch vs ledger`); continue; }
+    const proof=f.proof;
+    if (!referencesOk(f.observationIds,txt) || !proof || !referencesOk(proof.observationIds,txt) || !proof.claim?.trim() || !proof.kind?.trim() || !proof.expectedPolicy?.trim() || !proof.objectOwner?.trim() || proof.observationIds.some(id=>!f.observationIds?.includes(id)) || !receiptsFor(proof.observationIds).some(e=>e.principal===proof.principal && e.requestHash===proof.requestHash && e.responseHash===proof.responseHash)) {
+      drop(`finding '${f.name}' missing receipt-bound policy proof`); continue;
+    }
+    const store = new EvidenceStore(root);
+    const evidence = await store.put(Buffer.from(JSON.stringify({proof,receipts:receiptsFor(proof.observationIds)},null,2)), "finding-proof");
     const id = g.nextId++;
     g.findings.push({
       id,
@@ -403,23 +321,19 @@ export const huntRecord = async (input: HuntRecordInput): Promise<{ graph: Graph
       severity: (["low", "medium", "high", "critical"].includes(String(f.severity)) ? f.severity : "low") as "low",
       summary: String(f.summary ?? "").slice(0, 1000),
       poc: String(f.poc ?? "").slice(0, 4000),
+      observationIds:f.observationIds, proofKind:proof.kind, proof:{...proof}, outcome:"confirmed", validated:true, evidenceVersion:0, evidenceHashes:[evidence.hash],
     });
     currentIntent?.yields.push(id);
     accepted++;
   }
 
-  await saveGraph(root, g);
-  // budget bookkeeping: consume the host-declared round/cost, persist, and
-  // annotate the response when the caps flip past their limits THIS round.
-  budget.rounds += input.round ?? 1;
-  budget.cost += input.costDelta ?? 0;
-  await saveBudget(root, budget);
-  const nowExceeded = budgetExceeded(budget);
-  if (nowExceeded != null) {
-    return { graph: g, accepted, dropped, dropReasons, budgetExceeded: nowExceeded };
+  g.huntBudget=nextBudget;
+  await saveGraph(root,g);
+  for (const finding of g.findings.filter(f=>f.evidenceVersion===0 && f.evidenceHashes?.length)) {
+    await bindEvidence({root,findingId:String(finding.id),expectedVersion:0,refs:finding.evidenceHashes!.map(hash=>({hash,role:"proof" as const}))});
   }
-  return { graph: g, accepted, dropped, dropReasons };
-};
+  return {graph:await loadGraph(root),accepted,dropped,dropReasons};
+});
 
 export const huntOverview = async (
   root: string,
@@ -439,14 +353,6 @@ export const huntOverview = async (
 export const exportLedgerEvidence = async (root: string): Promise<{ hash: string; bytes: number } | null> => {
   const ledger = await readLedger(root);
   if (ledger.length === 0) return null;
-  const { createHash } = await import("node:crypto");
-  const { mkdir, writeFile } = await import("node:fs/promises");
-  const { join } = await import("node:path");
-  const body = JSON.stringify(ledger, null, 2);
-  const hash = createHash("sha256").update(body).digest("hex");
-  const dir = join(root, "blobs", hash.slice(0, 2));
-  await mkdir(dir, { recursive: true });
-  const path = join(dir, `${hash}.json`);
-  await writeFile(path, body);
-  return { hash, bytes: Buffer.byteLength(body) };
+  const blob=await putBlob(root,Buffer.from(JSON.stringify(ledger,null,2)));
+  return {hash:blob.hash,bytes:blob.bytes};
 };

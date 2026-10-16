@@ -45,6 +45,7 @@ export interface DedupeUrlsResult {
 const normalize = (raw: string, fuzzy: boolean): { key: string; url: URL } | null => {
   let u: URL;
   try { u = new URL(raw.trim()); } catch { return null; }
+  if (!/^https?:$/.test(u.protocol) || u.username || u.password || /[\x00-\x1f\x7f\\]/.test(raw)) return null;
   // fold trailing slash
   if (u.pathname.length > 1 && u.pathname.endsWith("/")) u.pathname = u.pathname.slice(0, -1);
   if (fuzzy) {
@@ -84,9 +85,9 @@ export const dedupeUrls = (input: DedupeUrlsInput): DedupeUrlsResult => {
       const ext = (trimmed.split("?")[0] ?? "").split(".").pop() ?? "";
       if (!wl.has(ext.toLowerCase())) continue;
     }
-    if (!input.keepContent && HUMAN_CONTENT_RE.test(new URL(trimmed).pathname)) continue;
     const n = normalize(trimmed, input.fuzzy ?? true);
     if (!n) continue;
+    if (!input.keepContent && HUMAN_CONTENT_RE.test(n.url.pathname)) continue;
     if (input.params === "has" && n.url.searchParams.size === 0) continue;
     if (input.params === "none" && n.url.searchParams.size > 0) continue;
     if (!seen.has(n.key)) seen.set(n.key, trimmed);
@@ -149,8 +150,10 @@ export const classifyUrls = (urls: readonly string[]): ClassifyUrlsResult => {
   const out: ClassifiedUrl[] = [];
   const byClass: Record<string, string[]> = {};
   for (const raw of urls) {
+    if (typeof raw !== "string") continue;
     let u: URL;
     try { u = new URL(raw.trim()); } catch { continue; }
+    if (!/^https?:$/.test(u.protocol) || u.username || u.password || /[\x00-\x1f\x7f\\]/.test(raw)) continue;
     const evidence: { cls: string; param: string }[] = [];
     const classes = new Set<string>();
     // path-shape classes first (no params needed)
