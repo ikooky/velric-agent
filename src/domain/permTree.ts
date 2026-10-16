@@ -17,6 +17,10 @@ export interface UserRouteAuthEntry {
   readonly code: string;
   readonly url: string;
   readonly control: string[];
+  /** D05 provenance: parsed heuristics are candidates, never confirmed routes. */
+  readonly confidence: "candidate";
+  readonly basis: string;
+  readonly evidence?: { source: string; excerpt: string; range: [number, number] };
 }
 
 export interface PermTreeNode {
@@ -24,6 +28,9 @@ export interface PermTreeNode {
   readonly position: string;
   readonly name?: string;
   readonly children?: PermTreeNode[];
+  /** D05 provenance: every node states why it is in the tree. */
+  readonly confidence?: "candidate";
+  readonly basis?: string;
 }
 export const extractRouteMap = (
   files: ReadonlyArray<{ path: string; text: string }>,
@@ -71,19 +78,30 @@ const resolveRef = (
 };
 
 const findRouteAuthBody = (text: string): string | null => {
-  const strict = text.match(/userRouteAuth=(\{MONITOR:.*?\})\}\),/s);
-  if (strict) return strict[1]!;
-  const loose = text.search(/userRouteAuth=\{MONITOR:/);
-  if (loose < 0) {
-    const alt = text.search(/userRouteAuth=\{[A-Z_0-9]+:\{url:/);
-    if (alt < 0) return null;
-    const body = text.slice(alt).replace(/^userRouteAuth=/, "");
-    const end = body.lastIndexOf("}");
-    return end > 0 ? body.slice(0, end + 1) : body;
+  // Brace-balanced extraction: walk from the opening brace after
+  // `userRouteAuth=` and stop when depth returns to zero. A trailing
+  // UNRELATED object after the literal must not be swallowed.
+  const start = text.search(/userRouteAuth\s*=\s*\{/);
+  if (start < 0) return null;
+  const openAt = text.indexOf("{", start + "userRouteAuth".length);
+  if (openAt < 0) return null;
+  let depth = 0;
+  let inStr: string | null = null;
+  for (let i = openAt; i < text.length; i++) {
+    const ch = text[i]!;
+    if (inStr) {
+      if (ch === "\\") { i++; continue; }
+      if (ch === inStr) inStr = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") { inStr = ch; continue; }
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) return text.slice(openAt, i + 1);
+    }
   }
-  const body = text.slice(loose).replace(/^userRouteAuth=/, "");
-  const end = body.lastIndexOf("}");
-  return end > 0 ? body.slice(0, end + 1) : body;
+  return null;
 };
 
 /** Parse the userRouteAuth object into code→{url,control}. */
@@ -91,10 +109,14 @@ export const parseUserRouteAuth = (
   text: string,
   routeMap: Record<string, RouteMapEntry>,
 ): Record<string, UserRouteAuthEntry> => {
+  const start = text.search(/userRouteAuth\s*=\s*\{/);
+  if (start < 0) return {};
   const objSrc = findRouteAuthBody(text);
   if (objSrc === null) return {};
-  const authIdx = text.indexOf("userRouteAuth");
-  const aliases = parseAliases(text.slice(authIdx, authIdx + 35000));
+  // Preceding aliases: `const x = o.HOME` binds BEFORE the object literal —
+  // scan the window AHEAD of the literal (declaration precedes use, D05),
+  // not after it.
+  const aliases = parseAliases(text.slice(Math.max(0, start - 8000), start));
 
   const entries: Record<string, UserRouteAuthEntry> = {};
   const re = /([A-Z_0-9]+):\{url:([^,}]+)(?:,control:(\[.*?\]|[^,}]+))?\}/g;
@@ -109,7 +131,17 @@ export const parseUserRouteAuth = (
         : [raw];
       for (const v of vars) controls.push(aliases[v] ?? v);
     }
-    entries[code] = { code, url, control: controls };
+    const mStart = text.indexOf(m[0], Math.max(0, start));
+    entries[code] = {
+      code, url, control: controls,
+      confidence: "candidate",
+      basis: "regex-extracted userRouteAuth entry",
+      evidence: {
+        source: "userRouteAuth",
+        excerpt: m[0].slice(0, 120),
+        range: [mStart, mStart + m[0].length] as [number, number],
+      },
+    };
   }
   return entries;
 };
@@ -161,7 +193,29 @@ export const buildPermTree = (
     .filter((c) => parentOf(c, h) === null && !h.roots.includes(c))
     .sort();
   for (const code of orphans) tree.push(makeNode(code));
-  return tree;
+  // Cycle members and broken-parent entries (extraParent pointing at a
+  // MISSING code, or A↔B cycles) are never silently dropped: everything
+  // not reachable from roots/orphans is appended with its reason.
+  const present = new Set(flatCodes(tree));
+  for (const code of Object.keys(entries).sort()) {
+    if (present.has(code)) continue;
+    const parent = parentOf(code, h);
+    tree.push({
+      ...makeNode(code),
+      confidence: "candidate",
+      basis: parent ? `unreachable via parent ${parent} (cycle or missing intermediate)` : "unreachable entry",
+    });
+    present.add(code);
+  }
+  // Every node must state its provenance — roots and structural
+  // children carry the generic basis when nothing more specific applies.
+  const annotate = (nodes: PermTreeNode[]): PermTreeNode[] => nodes.map((n) => ({
+    ...n,
+    confidence: n.confidence ?? "candidate",
+    basis: n.basis ?? "structural child of the permission tree",
+    ...(n.children ? { children: annotate(n.children) } : {}),
+  }));
+  return annotate(tree);
 };
 
 /** Flatten a permission tree to its code list. */

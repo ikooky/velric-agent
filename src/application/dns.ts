@@ -1,45 +1,13 @@
-import { promises as dns } from "node:dns";
-
-export interface DnsAnswer {
-  readonly type: "A" | "AAAA" | "CNAME";
-  readonly value: string;
-}
-
-export interface DnsResult {
-  readonly host: string;
-  readonly answers: DnsAnswer[];
-  readonly error?: string;
-}
-
-const dedupe = (values: string[]): string[] => [...new Set(values)].sort();
-
-/** Resolve A/AAAA/CNAME for one host. Pure lookup, no caching, no state. */
-export const resolveHost = async (host: string): Promise<DnsResult> => {
-  const answers: DnsAnswer[] = [];
-  const errors: string[] = [];
-  const jobs: readonly (readonly ["A" | "AAAA" | "CNAME", Promise<string[]>])[] = [
-    ["A", dns.resolve4(host).catch((e: NodeJS.ErrnoException) => {
-      if (e.code !== "ENODATA" && e.code !== "NOTFOUND") errors.push(`A: ${e.message}`);
-      return [];
-    })],
-    ["AAAA", dns.resolve6(host).catch((e: NodeJS.ErrnoException) => {
-      if (e.code !== "ENODATA" && e.code !== "NOTFOUND") errors.push(`AAAA: ${e.message}`);
-      return [];
-    })],
-    ["CNAME", dns.resolveCname(host).catch((e: NodeJS.ErrnoException) => {
-      if (e.code !== "ENODATA" && e.code !== "NOTFOUND") errors.push(`CNAME: ${e.message}`);
-      return [];
-    })],
+import { resolveWith } from "../domain/dnsResolve.js";
+export interface DnsAnswer { readonly type: "A" | "AAAA" | "CNAME"; readonly value: string }
+export interface DnsResult { readonly host: string; readonly answers: DnsAnswer[]; readonly error?: string }
+export const resolveHost = async (host: string, resolvers?: readonly string[]): Promise<DnsResult> => {
+  const r = await resolveWith(host, resolvers);
+  const answers: DnsAnswer[] = [
+    ...r.a.map(value => ({ type: "A" as const, value })),
+    ...r.aaaa.map(value => ({ type: "AAAA" as const, value })),
+    ...r.cname.map(value => ({ type: "CNAME" as const, value })),
   ];
-  const settled = await Promise.all(jobs.map(async ([type, p]) => [type, await p] as const));
-  for (const [type, values] of settled) {
-    for (const v of dedupe(values)) answers.push({ type, value: v });
-  }
-  return {
-    host,
-    answers,
-    // Partial failures (some types resolved, others timed out) must stay
-    // visible — the old gate dropped errors whenever ANY answer existed.
-    ...(errors.length > 0 ? { error: errors.join("; ") } : {}),
-  };
+  const errors = Object.entries(r.errors ?? {}).map(([type, error]) => `${type}: ${error}`);
+  return { host, answers, ...(errors.length ? { error: errors.join("; ") } : {}) };
 };

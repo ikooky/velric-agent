@@ -1,10 +1,6 @@
-import { fetchUrl } from "../adapters/http.js";
-import { writeFile, mkdir } from "node:fs/promises";
-import { join } from "node:path";
-
-/** Blocked-page archive recovery ladder: when the live fetch is blocked
- *  (403/429/WAF interstitial), try cheap third-party copies before giving
- *  up — Wayback availability API, then archive.today domain rotation. */
+import { fetchUrl, type FetchResult } from "../adapters/http.js";
+import { writeArtifact } from "../adapters/artifacts.js";
+import { createHash } from "node:crypto";
 
 export interface ArchiveRecoverInput {
   readonly url: string;
@@ -12,7 +8,6 @@ export interface ArchiveRecoverInput {
   readonly proxy?: string;
   readonly timeoutMs?: number;
 }
-
 export interface ArchiveRecoverResult {
   readonly url: string;
   readonly liveStatus: number;
@@ -23,61 +18,56 @@ export interface ArchiveRecoverResult {
   readonly bytes: number;
   readonly artifacts: { path: string; bytes: number }[];
 }
-
-const ARCHIVE_TODAY_HOSTS = ["archive.ph", "archive.md", "archive.li", "archive.is"];
-
-const isBlocked = (status: number, body: string): boolean => {
-  if (status === 403 || status === 429 || status === 503) return true;
-  if (status === 200 && /just a moment|cf-browser-verification|challenge-platform|attention required/i.test(body)) return true;
-  return false;
+const MIRRORS = ["archive.ph", "archive.md", "archive.li", "archive.is"];
+const challenge = (body: string): boolean => /just a moment|cf-browser-verification|challenge-platform|attention required|captcha|verify (?:you are|that you)|rate limit|snapshot (?:not found|unavailable)|no (?:results|snapshots) found/i.test(body);
+const blocked = (status: number, body: string): boolean => [403, 429, 503].includes(status) || status === 200 && challenge(body);
+const validPage = (r: FetchResult): boolean => r.status === 200 && r.complete !== false && !r.truncated && !r.error && r.body.trim().length > 0 && !challenge(r.body);
+const snapshotFor = (value: string, target: string): string | null => {
+  try {
+    const u = new URL(value);
+    if (!/^https?:$/.test(u.protocol) || u.hostname !== "web.archive.org" || u.username || u.password) return null;
+    const original = u.pathname.match(/^\/web\/\d{4,14}(?:[a-z_]+)?\/(https?:\/\/.*)$/i)?.[1];
+    return original && new URL(original + u.search).href === new URL(target).href ? u.href : null;
+  } catch { return null; }
 };
-
 export const recoverUrl = async (input: ArchiveRecoverInput): Promise<ArchiveRecoverResult> => {
-  await mkdir(input.outputRoot, { recursive: true });
-  const opts = { proxy: input.proxy, timeoutMs: input.timeoutMs ?? 12000 };
-
-  const live = await fetchUrl(input.url, opts);
-  if (!isBlocked(live.status, live.body)) {
-    return { url: input.url, liveStatus: live.status, blocked: false, recoveredFrom: null, snapshotUrl: null, contentSha256: live.sha256, bytes: live.bytes, artifacts: [] };
-  }
-
-  // Ladder 1: Wayback availability API (cheapest, JSON).
-  const wb = await fetchUrl(`https://archive.org/wayback/available?url=${encodeURIComponent(input.url)}`, opts);
-  if (wb.status === 200) {
+  const target = new URL(input.url);
+  if (!/^https?:$/.test(target.protocol) || target.username || target.password) throw new Error("invalid archive target");
+  const opts = { proxy: input.proxy, timeoutMs: input.timeoutMs ?? 12000, redirect: "manual" as const };
+  const live = await fetchUrl(target.href, opts);
+  const recoverable = [0, 404, 410].includes(live.status) || blocked(live.status, live.body);
+  if (!recoverable) return { url: input.url, liveStatus: live.status, blocked: false, recoveredFrom: null, snapshotUrl: null, contentSha256: live.sha256, bytes: live.bytes, artifacts: [] };
+  const saved = async (from: "wayback" | "archive-today", snapshotUrl: string, page: FetchResult): Promise<ArchiveRecoverResult> => {
+    const art = await writeArtifact(input.outputRoot, "recovered.html", page.body);
+    return { url: input.url, liveStatus: live.status, blocked: true, recoveredFrom: from, snapshotUrl, contentSha256: createHash("sha256").update(page.body).digest("hex"), bytes: art.bytes, artifacts: [art] };
+  };
+  const wb = await fetchUrl(`https://archive.org/wayback/available?url=${encodeURIComponent(target.href)}`, opts);
+  if (wb.status === 200 && wb.complete !== false && !wb.truncated && !wb.error) {
+    let snapshot: string | null = null;
     try {
-      const j = JSON.parse(wb.body) as { archived_snapshots?: { closest?: { available?: boolean; url?: string } } };
-      const snap = j.archived_snapshots?.closest;
-      if (snap?.available && snap.url) {
-        const page = await fetchUrl(snap.url, opts);
-        if (page.status === 200) {
-          const path = join(input.outputRoot, "recovered.html");
-          await writeFile(path, page.body);
-          return {
-            url: input.url, liveStatus: live.status, blocked: true,
-            recoveredFrom: "wayback", snapshotUrl: snap.url,
-            contentSha256: page.sha256, bytes: page.bytes,
-            artifacts: [{ path, bytes: page.bytes }],
-          };
-        }
-      }
-    } catch { /* malformed */ }
+      const data = JSON.parse(wb.body) as { archived_snapshots?: { closest?: { available?: boolean; url?: string } } };
+      const closest = data.archived_snapshots?.closest;
+      if (closest?.available && typeof closest.url === "string") snapshot = snapshotFor(closest.url, target.href);
+    } catch { /* malformed archive response */ }
+    if (snapshot) { const page = await fetchUrl(snapshot, opts); if (validPage(page)) return saved("wayback", snapshot, page); }
   }
-
-  // Ladder 2: archive.today host rotation.
-  for (const host of ARCHIVE_TODAY_HOSTS) {
-    const r = await fetchUrl(`https://${host}/${input.url.replace(/^https?:\/\//, "")}`, { ...opts, redirect: "manual" });
-    if (r.status === 200 && r.bytes > 500) {
-      const path = join(input.outputRoot, "recovered.html");
-      await writeFile(path, r.body);
-      return {
-        url: input.url, liveStatus: live.status, blocked: true,
-        recoveredFrom: "archive-today", snapshotUrl: `https://${host}`,
-        contentSha256: r.sha256, bytes: r.bytes,
-        artifacts: [{ path, bytes: r.bytes }],
-      };
+  for (const host of MIRRORS) {
+    const lookup = new URL(`/${target.href}`, `https://${host}`).href;
+    const r = await fetchUrl(lookup, opts);
+    if (r.complete === false || r.truncated || r.error || challenge(r.body)) continue;
+    const links = [r.headers.location, ...[...r.body.matchAll(/(?:href|url)=["']([^"']+)["']/gi)].map(m => m[1])];
+    let snapshot: string | null = null;
+    for (const link of links) {
+      if (!link) continue;
+      try {
+        const u = new URL(link, lookup);
+        if (u.origin === `https://${host}` && /^\/[A-Za-z0-9]{5,12}$/.test(u.pathname) && !u.username && !u.password) { snapshot = u.href; break; }
+      } catch { /* unrelated link */ }
     }
-    if (r.status === 302 || r.status === 301) continue; // try next mirror
+    if (!snapshot) continue;
+    const page = await fetchUrl(snapshot, opts);
+    const mentionsTarget = page.body.includes(target.hostname) || page.headers["x-archive-orig-host"] === target.hostname;
+    if (validPage(page) && mentionsTarget) return saved("archive-today", snapshot, page);
   }
-
   return { url: input.url, liveStatus: live.status, blocked: true, recoveredFrom: null, snapshotUrl: null, contentSha256: null, bytes: 0, artifacts: [] };
 };

@@ -1,5 +1,6 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, basename } from "node:path";
+import { readJson, writeJson, writeBytes, withRootLock } from "../core/storage.js";
+import { loadGraph, saveGraph } from "../application/graph.js";
 import { EvidenceStore } from "./graphs.js";
 
 /** Finding↔evidence binding lifecycle (velric 漏洞流量证据.md, deterministic
@@ -30,16 +31,28 @@ export interface BindingStore {
 
 const FILE = "evidence_bindings.json";
 
-const load = async (root: string): Promise<BindingStore> => {
-  try { return JSON.parse(await readFile(join(root, FILE), "utf8")) as BindingStore; }
-  catch { return { findings: {} }; }
-};
-
+const roles = new Set(["baseline","proof","verification","supporting"]);
+const load = (root: string): Promise<BindingStore> => readJson(root, FILE, () => ({findings:{}}), value => {
+  const st = value as BindingStore;
+  return !!st && !!st.findings && typeof st.findings === "object" && !Array.isArray(st.findings) &&
+    Object.entries(st.findings).every(([id,f])=>f?.findingId===id && Number.isSafeInteger(f.version) && f.version>=0 &&
+      Array.isArray(f.bindings) && new Set(f.bindings.map(b=>b.id)).size===f.bindings.length &&
+      f.bindings.every(b=>/^b[1-9][0-9]*$/.test(b.id) && /^[a-f0-9]{64}$/.test(b.hash) && roles.has(b.role)));
+});
 const persist = async (root: string, st: BindingStore): Promise<void> => {
-  await mkdir(root, { recursive: true });
-  const tmp = join(root, `${FILE}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`);
-  await writeFile(tmp, JSON.stringify(st, null, 2));
-  await import("node:fs/promises").then((fs) => fs.rename(tmp, join(root, FILE)));
+  // Canonical numeric graph IDs share the same evidence links as the binding store.
+  const graph = await loadGraph(root);
+  let changed = false;
+  for (const finding of graph.findings) {
+    const binding = st.findings[String(finding.id)];
+    if (!binding) continue;
+    const hashes = binding.bindings.map(b=>b.hash);
+    if (finding.evidenceVersion !== binding.version || JSON.stringify(finding.evidenceHashes)!==JSON.stringify(hashes)) {
+      finding.evidenceVersion=binding.version; finding.evidenceHashes=hashes; changed=true;
+    }
+  }
+  if (changed) await saveGraph(root,graph);
+  await writeJson(root, FILE, st);
 };
 
 export interface BindInput {
@@ -50,13 +63,14 @@ export interface BindInput {
   readonly refs: { hash: string; role: BindRole; note?: string }[];
 }
 
-export const bindEvidence = async (input: BindInput): Promise<{ version: number; bindings: Binding[] }> => {
+export const bindEvidence = async (input: BindInput): Promise<{ version: number; bindings: Binding[] }> => withRootLock(input.root, async () => {
   if (input.refs.length === 0) throw new Error("no refs");
   // Every hash must exist in the evidence store before binding (atomic: a
   // single missing hash rolls back the whole batch).
   const store = new EvidenceStore(input.root);
   await store.load();
   for (const r of input.refs) {
+    if (!roles.has(r.role)) throw new Error("invalid binding role");
     const blob = await store.get(r.hash);
     if (blob === null) throw new Error(`unknown evidence hash: ${r.hash}`);
   }
@@ -74,27 +88,28 @@ export const bindEvidence = async (input: BindInput): Promise<{ version: number;
   st.findings[input.findingId] = f;
   await persist(input.root, st);
   return { version: f.version, bindings: f.bindings };
-};
+});
 
 export const updateBinding = async (input: {
   root: string; findingId: string; bindingId: string; expectedVersion: number; role?: BindRole; note?: string;
-}): Promise<{ version: number }> => {
+}): Promise<{ version: number }> => withRootLock(input.root, async () => {
   const st = await load(input.root);
   const f = st.findings[input.findingId];
   if (!f) throw new Error("finding not bound");
   if (f.version !== input.expectedVersion) throw Object.assign(new Error(`version conflict: current ${f.version}`), { code: "version_conflict" });
   const b = f.bindings.find((x) => x.id === input.bindingId);
   if (!b) throw new Error("binding not found");
+  if (input.role && !roles.has(input.role)) throw new Error("invalid binding role");
   if (input.role) (b as { role: BindRole }).role = input.role;
   if (input.note !== undefined) (b as { note?: string }).note = input.note;
   f.version += 1;
   await persist(input.root, st);
   return { version: f.version };
-};
+});
 
 export const unbindEvidence = async (input: {
   root: string; findingId: string; bindingId: string; expectedVersion: number;
-}): Promise<{ version: number }> => {
+}): Promise<{ version: number }> => withRootLock(input.root, async () => {
   const st = await load(input.root);
   const f = st.findings[input.findingId];
   if (!f) throw new Error("finding not bound");
@@ -105,25 +120,25 @@ export const unbindEvidence = async (input: {
   f.version += 1;
   await persist(input.root, st);
   return { version: f.version };
-};
+});
 
 /** Full reorder — must list every binding id exactly once. */
 export const reorderBindings = async (input: {
   root: string; findingId: string; expectedVersion: number; order: string[];
-}): Promise<{ version: number }> => {
+}): Promise<{ version: number }> => withRootLock(input.root, async () => {
   const st = await load(input.root);
   const f = st.findings[input.findingId];
   if (!f) throw new Error("finding not bound");
   if (f.version !== input.expectedVersion) throw Object.assign(new Error(`version conflict: current ${f.version}`), { code: "version_conflict" });
   const have = new Set(f.bindings.map((b) => b.id));
-  if (input.order.length !== have.size || input.order.some((id) => !have.has(id))) {
+  if (input.order.length !== have.size || new Set(input.order).size !== have.size || input.order.some((id) => !have.has(id))) {
     throw new Error("order must be a complete permutation of binding ids");
   }
   f.bindings.sort((a, b) => input.order.indexOf(a.id) - input.order.indexOf(b.id));
   f.version += 1;
   await persist(input.root, st);
   return { version: f.version };
-};
+});
 
 export const getBindings = async (root: string, findingId: string): Promise<FindingBindings | null> => {
   const st = await load(root);
@@ -133,7 +148,7 @@ export const getBindings = async (root: string, findingId: string): Promise<Find
 /** md-zip export: manifest.json + blob sidecars + a Markdown index. */
 export const exportBindings = async (input: {
   root: string; findingId: string; zipPath: string;
-}): Promise<{ entries: number; zipBytes: number }> => {
+}): Promise<{ entries: number; zipBytes: number }> => withRootLock(input.root, async () => {
   const f = await getBindings(input.root, input.findingId);
   if (!f) throw new Error("finding not bound");
   const store = new EvidenceStore(input.root);
@@ -151,8 +166,6 @@ export const exportBindings = async (input: {
   files["manifest.json"] = new Uint8Array(Buffer.from(JSON.stringify({ findingId: input.findingId, version: f.version, bindings: f.bindings }, null, 2)));
   files["index.md"] = new Uint8Array(Buffer.from(md.join("\n")));
   const zipped = zipSync(files);
-  const { writeFile } = await import("node:fs/promises");
-  await import("node:fs/promises").then((fs) => fs.mkdir(dirname(input.zipPath), { recursive: true }));
-  await writeFile(input.zipPath, zipped);
+  await writeBytes(dirname(input.zipPath), basename(input.zipPath), zipped);
   return { entries: f.bindings.length, zipBytes: zipped.length };
-};
+});

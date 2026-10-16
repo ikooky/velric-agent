@@ -1,7 +1,10 @@
 import { fetchUrl } from "../adapters/http.js";
 import { writeFile, mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { join, dirname, resolve, relative, isAbsolute } from "node:path";
 import { readdir, readFile } from "node:fs/promises";
+import { writeArtifact } from "../adapters/artifacts.js";
+import { recoverMapContents, type MapContent } from "./sourceRecover.js";
+import { safePath } from "../core/storage.js";
 
 /** Source-map leak detection over the harvested JS corpus + Wayback Machine
  *  historical URL recovery. Both feed the endpoint pool. */
@@ -16,113 +19,96 @@ export interface SourceMapInput {
    *  outputRoot/sourcemap-recovered/ (sourcemapper discipline: per-source
    *  degradation, traversal-contained). */
   readonly recover?: boolean;
+  readonly bundles?: readonly { file: string; url: string }[];
 }
 
 export interface SourceMapResult {
   readonly checked: number;
-  readonly leaked: { file: string; mapUrl: string; sourceCount: number }[];
+  readonly leaked: { file: string; mapUrl: string; sourceCount: number; bundleUrl?: string }[];
   readonly recovered?: { maps: number; recovered: number; missing: number };
   readonly artifacts: { path: string; bytes: number }[];
 }
 
-const lastSegment = (url: string): string => {
+const validMap = (text: string): number | null => {
   try {
-    return new URL(url).pathname.split("/").filter(Boolean).pop() ?? "";
-  } catch {
-    return url;
-  }
+    const map: unknown = JSON.parse(text);
+    return map && typeof map === "object" && Array.isArray((map as { sources?: unknown }).sources) ? (map as { sources: unknown[] }).sources.length : null;
+  } catch { return null; }
+};
+const inlineText = (uri: string): string | null => {
+  if (uri.length > 24 * 1024 * 1024) return null;
+  const m = uri.match(/^data:application\/json((?:;[^,]*)?),(.*)$/is);
+  if (!m) return null;
+  try {
+    if (/;base64(?:;|$)/i.test(m[1]!)) {
+      if (!/^[A-Za-z0-9+/]*={0,2}$/.test(m[2]!)) return null;
+      return Buffer.from(m[2]!, "base64").toString("utf8");
+    }
+    return decodeURIComponent(m[2]!);
+  } catch { return null; }
+};
+const httpUrl = (value: string, base?: string): string | null => {
+  try { const u = new URL(value, base); return /^https?:$/.test(u.protocol) && !u.username && !u.password ? u.href : null; } catch { return null; }
 };
 
 export const detectSourceMaps = async (input: SourceMapInput): Promise<SourceMapResult> => {
-  const jsDir = input.jsDir ?? join(input.outputRoot, "js");
-  await mkdir(input.outputRoot, { recursive: true });
-  let files: string[] = [];
-  try {
-    files = (await readdir(jsDir)).filter((f) => f.endsWith(".js")).map((f) => join(jsDir, f));
-  } catch {
-    return { checked: 0, leaked: [], artifacts: [] };
+  const jsDir = resolve(input.jsDir ?? join(input.outputRoot, "js"));
+  const names = (await readdir(jsDir, { withFileTypes: true }).catch(() => [])).filter(e => e.isFile() && e.name.endsWith(".js")).map(e => join(jsDir, e.name));
+  const provenance = new Map<string, string>();
+  // The harvester may persist this same array; explicit call data wins.
+  const saved = await readFile(join(input.outputRoot, "bundle_manifest.json"), "utf8").then(s => JSON.parse(s) as unknown).catch(() => []);
+  for (const row of [...(Array.isArray(saved) ? saved : []), ...(input.bundles ?? [])]) {
+    if (!row || typeof row.file !== "string" || typeof row.url !== "string") continue;
+    const url = httpUrl(row.url);
+    if (url) provenance.set(resolve(input.outputRoot, row.file), url);
   }
-
-  const leaked: SourceMapResult["leaked"] = [];
-  const seen = new Set<string>();
-  for (const f of files.slice(0, 200)) {
-    const name = lastSegment(f);
-    if (seen.has(name)) continue;
-    seen.add(name);
-    // 1) explicit sourceMappingURL comment
-    let mapUrl: string | null = null;
-    try {
-      const text = await readFile(f, "utf8");
-      const m = text.match(/sourceMappingURL=([^\s*'"]+)/);
-      if (m) mapUrl = m[1]!;
-    } catch { /* unreadable */ }
-    // 2) probe <file>.map next to the JS — locally first, then remote when
-    //    baseUrl lets us reconstruct the original bundle URL.
-    let sourceCount = 0;
-    // data: URIs are INLINE maps (unwebpack-sourcemap): decode directly — no
-    // candidate probing needed. Many build setups inline small maps by default;
-    // skipping them (the old `!startsWith("data:")` filter) was a miss path.
-    let inlineSources = 0;
-    if (mapUrl?.startsWith("data:")) {
-      const b64 = mapUrl.slice(mapUrl.indexOf(",") + 1);
-      try {
-        const text = Buffer.from(b64, "base64").toString("utf8");
-        const parsed = JSON.parse(text) as { sources?: unknown[] };
-        inlineSources = parsed.sources?.length ?? 0;
-        leaked.push({ file: name, mapUrl: "data:inline", sourceCount: inlineSources });
-      } catch { /* malformed inline map */ }
-    }
-    const candidates = [mapUrl, `${name}.map`].filter((x): x is string => !!x && !x.startsWith("data:"));
-    for (const cand of candidates.slice(0, 2)) {
-      let localName = cand.replace(/^https?:\/\/[^/]+\//, "").replace(/^\//, "");
-      // The comment lives in untrusted harvested JS — the derived local file
-      // name must stay inside jsDir (no ../, no absolute, no drive letters).
-      if (localName.includes("..") || /^[a-zA-Z]:/.test(localName) || localName.includes("\0") || localName === "") continue;
-      let text: string | null = null;
-      let resolvedUrl = cand;
-      try {
-        text = await readFile(join(jsDir, localName), "utf8");
-      } catch {
-        if (input.baseUrl) {
-          const remote = new URL(localName, input.baseUrl).href;
-          const r = await fetchUrl(remote, { proxy: input.proxy, timeoutMs: input.timeoutMs ?? 8000 });
-          if (r.status === 200 && r.body.trimStart().startsWith("{")) {
-            text = r.body;
-            resolvedUrl = remote;
-          }
-        }
-      }
-      if (text) {
-        try {
-          const parsed = JSON.parse(text) as { sources?: unknown[] };
-          sourceCount = parsed.sources?.length ?? 0;
-          leaked.push({ file: name, mapUrl: resolvedUrl, sourceCount });
-          break;
-        } catch { /* malformed map */ }
+  const leaked: SourceMapResult["leaked"] = [], maps: MapContent[] = [];
+  for (const file of names.slice(0, 200)) {
+    const text = await readFile(file, "utf8").catch(() => null);
+    if (text === null) continue;
+    const bundleUrl = provenance.get(file) ?? httpUrl(file.slice(jsDir.length + 1), input.baseUrl);
+    const comments = [...text.matchAll(/sourceMappingURL\s*=\s*([^\s*'"]+)/g)];
+    const comment = comments.at(-1)?.[1];
+    let found = false;
+    if (comment?.startsWith("data:")) {
+      const decoded = inlineText(comment);
+      const count = decoded === null ? null : validMap(decoded);
+      if (count !== null) {
+        leaked.push({ file, bundleUrl: bundleUrl ?? undefined, mapUrl: "data:inline", sourceCount: count });
+        maps.push({ text: decoded!, from: `${file}#inline`, bundleUrl: bundleUrl ?? undefined }); found = true;
       }
     }
+    if (found) continue;
+    const fallback = bundleUrl ? (() => { const u = new URL(bundleUrl); u.pathname += ".map"; u.hash = ""; return u.href; })() : `${file.slice(jsDir.length + 1)}.map`;
+    for (const candidate of [...new Set([comment, fallback].filter((c): c is string => !!c && !c.startsWith("data:")))]) {
+      const remote = httpUrl(candidate, bundleUrl ?? input.baseUrl);
+      let local: string | null = null;
+      if (!/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(candidate) && !candidate.startsWith("/") && !candidate.includes("\\") && !candidate.includes("\0")) {
+        const path = resolve(dirname(file), candidate.split(/[?#]/)[0]!);
+        const rel = relative(jsDir, path);
+        if (rel && !rel.startsWith("..") && !isAbsolute(rel)) local = await safePath(jsDir, rel).catch(() => null);
+      } else if (candidate === fallback) local = `${file}.map`;
+      let mapText = local ? await readFile(local, "utf8").catch(() => null) : null;
+      let from = local ?? candidate;
+      if (mapText === null && remote) {
+        const r = await fetchUrl(remote, { proxy: input.proxy, timeoutMs: input.timeoutMs ?? 8000, redirect: "manual", maxBytes: 16 * 1024 * 1024 });
+        if (r.status === 200 && r.complete !== false && !r.truncated && !r.error) { mapText = r.body; from = remote; }
+      }
+      const count = mapText === null ? null : validMap(mapText);
+      if (count === null) continue;
+      leaked.push({ file, bundleUrl: bundleUrl ?? undefined, mapUrl: from, sourceCount: count });
+      maps.push({ text: mapText!, from, bundleUrl: bundleUrl ?? undefined }); break;
+    }
   }
-
-  let recovered: { maps: number; recovered: number; missing: number } | undefined;
+  const artifacts: SourceMapResult["artifacts"] = [];
+  let recovered: SourceMapResult["recovered"];
   if (input.recover) {
-    const { recoverSourceMaps, recoverInlineMap } = await import("./sourceRecover.js");
-    const r = await recoverSourceMaps({ mapDir: input.jsDir ?? input.outputRoot, outputRoot: input.outputRoot });
-    recovered = { maps: r.maps, recovered: r.recovered, missing: r.missing };
-    // Inline (data: URI) maps: decode + recover in the same pass.
-    for (const l of leaked) {
-      if (l.mapUrl !== "data:inline") continue;
-      // leaked[].file is the harvested file's FULL path already — read directly.
-      const fileText = await readFile(l.file, "utf8").catch(() => null);
-      const m = fileText?.match(/sourceMappingURL=data:application\/json;base64,([^\s*'"]+)/);
-      if (!m) continue;
-      const ir = await recoverInlineMap(Buffer.from(m[1]!, "base64").toString("utf8"), input.outputRoot);
-      recovered = { maps: recovered.maps + 1, recovered: recovered.recovered + ir.recovered, missing: recovered.missing + ir.missing };
-    }
+    const result = await recoverMapContents(maps, input.outputRoot);
+    recovered = { maps: result.maps, recovered: result.recovered, missing: result.missing };
+    artifacts.push(...result.artifacts);
   }
-  const path = join(input.outputRoot, "sourcemaps.txt");
-  const body = leaked.map((l) => `${l.file}\t${l.sourceCount} sources\t${l.mapUrl}`).join("\n");
-  if (leaked.length > 0) await writeFile(path, body);
-  return { checked: seen.size, leaked, recovered, artifacts: leaked.length > 0 ? [{ path, bytes: Buffer.byteLength(body) }] : [] };
+  artifacts.push(await writeArtifact(input.outputRoot, "sourcemaps.txt", leaked.map(m => `${m.file}\t${m.sourceCount} sources\t${m.mapUrl}`).join("\n")));
+  return { checked: Math.min(names.length, 200), leaked, recovered, artifacts };
 };
 
 // ---------- Wayback ----------

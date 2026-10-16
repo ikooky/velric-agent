@@ -1,199 +1,153 @@
-import { fetchUrl } from "../adapters/http.js";
-import { writeFile, mkdir, readFile } from "node:fs/promises";
+import { fetchUrl, type FetchResult } from "../adapters/http.js";
+import { ensureDir, writeArtifact } from "../adapters/artifacts.js";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-
-/** Session-keeping deep crawl: an authenticated crawler that maintains a
- *  LIVE session across the whole crawl — re-login on auth expiry (401/302
- *  to login), refreshes tokens from refresh_token responses, and keeps
- *  crawling the endpoint surface (from merged endpoints / site map) until
- *  depth or count budget runs out. Where spider_mpa/coverage stop at the
- *  first 401, this one keeps going.
- *
- *  Deterministic: fixed frontier order (BFS by depth), fixed re-login
- *  policy, response-hash dedupe. Zero LLM. */
+import { SessionJar, normalizeHeaders, sameOrigin } from "../core/credentials.js";
+import { executionRunId } from "../core/execution.js";
 
 export interface SessionCrawlInput {
   readonly baseUrl: string;
   readonly outputRoot: string;
-  /** login POST endpoint (form or json) */
   readonly loginUrl: string;
   readonly username: string;
   readonly password: string;
-  /** how the login body is sent */
   readonly loginMode?: "form" | "json";
-  /** username/password field names (default username/password) */
   readonly usernameField?: string;
   readonly passwordField?: string;
-  /** endpoints to crawl (absolute or root-relative); default: read merged.json from outputRoot */
   readonly endpoints?: readonly string[];
   readonly proxy?: string;
   readonly timeoutMs?: number;
   readonly maxPages?: number;
-  /** max re-login attempts over the whole crawl (default 5) */
   readonly maxRelogins?: number;
   readonly headers?: Record<string, string>;
-  /** ZAP-style content-signature liveness: when set, a response matching
-   *  loggedOutRegex means the session died (re-login), loggedInRegex means
-   *  alive. Overrides the 401/redirect heuristics for apps that answer 200
-   *  with a login page on expiry. */
   readonly loggedInRegex?: string;
   readonly loggedOutRegex?: string;
+  /** Known authenticated resource. A positive marker here verifies identity. */
+  readonly authCheckUrl?: string;
 }
-
 export interface SessionCrawlResult {
   readonly crawled: number;
-  readonly pages: { url: string; status: number; depth: number; authState: "anonymous" | "authenticated" | "expired" }[];
+  readonly pages: { url: string; status: number; depth: number; authState: "anonymous" | "authenticated" | "expired" | "unknown" }[];
   readonly relogins: number;
   readonly tokenRefreshes: number;
   readonly blocked: string[];
   readonly sessionCookieNames: string[];
+  readonly authentication: "verified" | "inconclusive";
   readonly artifacts: { path: string; bytes: number }[];
 }
 
-interface Session {
-  cookie: string;
-  bearer: string | null;
-}
-
-const extractSetCookies = (headers: Record<string, string>, setCookies?: readonly string[]): string[] => {
-  // Prefer the structured array from FetchResult.setCookies (every line,
-  // Expires-safe). Fallback: the flattened header may be comma-joined —
-  // split only between pairs (a naive split breaks expires dates).
-  if (setCookies && setCookies.length > 0) return setCookies.map((c) => c.split(";")[0]!);
-  const raw = headers["set-cookie"] ?? "";
-  if (!raw) return [];
-  const parts: string[] = [];
-  for (const piece of raw.split(/,(?=\s*[^;=,\s]+=)/)) {
-    const p = piece.trim();
-    if (p) parts.push(p.split(";")[0]!);
-  }
-  return parts;
+const setCookies = (r: FetchResult): readonly string[] => r.setCookies?.length ? r.setCookies : (r.headers["set-cookie"] ?? "").split(/,(?=\s*[^;=,\s]+=)/).filter(Boolean);
+const tokenFrom = (r: FetchResult): string | null => {
+  const header = r.headers.authorization?.replace(/^Bearer\s+/i, "") ?? r.headers["x-access-token"];
+  if (header) return header;
+  try {
+    const j = JSON.parse(r.body);
+    for (const node of [j, j?.data]) for (const name of ["access_token", "accessToken", "token", "jwt"]) {
+      if (typeof node?.[name] === "string" && node[name]) return node[name];
+    }
+  } catch { /* non-JSON responses can still rotate cookies */ }
+  return null;
 };
 
 export const crawlSession = async (input: SessionCrawlInput): Promise<SessionCrawlResult> => {
-  await mkdir(input.outputRoot, { recursive: true });
-  const opts = { proxy: input.proxy, timeoutMs: input.timeoutMs ?? 10000, headers: input.headers };
-  const uField = input.usernameField ?? "username";
-  const pField = input.passwordField ?? "password";
-  const mode = input.loginMode ?? "json";
-
-  // --- login ------------------------------------------------------------
-  const doLogin = async (): Promise<Session | null> => {
-    const body = mode === "json"
-      ? JSON.stringify({ [uField]: input.username, [pField]: input.password })
-      : `${encodeURIComponent(uField)}=${encodeURIComponent(input.username)}&${encodeURIComponent(pField)}=${encodeURIComponent(input.password)}`;
-    const r = await fetchUrl(input.loginUrl, {
-      ...opts,
-      method: "POST",
-      headers: { "content-type": mode === "json" ? "application/json" : "application/x-www-form-urlencoded", ...input.headers },
-      body,
-    });
-    if (r.status === 0 || r.status >= 400) return null;
-    const cookies = extractSetCookies(r.headers ?? {}, r.setCookies);
-    // bearer from json response
-    let bearer: string | null = null;
-    try {
-      const j = JSON.parse(r.body) as Record<string, unknown>;
-      const tok = j.token ?? j.access_token ?? j.accessToken ?? j.jwt ?? (j.data as Record<string, unknown> | undefined)?.token;
-      if (typeof tok === "string") bearer = tok;
-    } catch { /* not json */ }
-    if (cookies.length === 0 && !bearer) return null;
-    return { cookie: cookies.join("; "), bearer };
+  await ensureDir(input.outputRoot);
+  const base = new URL(input.baseUrl), loginUrl = new URL(input.loginUrl, base).href;
+  if (!/^https?:$/.test(base.protocol) || !sameOrigin(loginUrl, base.href)) throw new Error("login must be same-origin HTTP(S)");
+  const jar = new SessionJar(), headers = normalizeHeaders(input.headers);
+  if (headers.cookie) jar.update(base.href, headers.cookie.split(";").map(pair => `${pair.trim()}; Path=/`));
+  if (headers.authorization?.startsWith("Bearer ")) jar.setBearer(base.origin, headers.authorization.slice(7));
+  delete headers.cookie; delete headers.authorization;
+  let relogins = 0, tokenRefreshes = 0, bearer = "", verified = false;
+  const loggedIn = input.loggedInRegex ? new RegExp(input.loggedInRegex) : null;
+  const loggedOut = input.loggedOutRegex ? new RegExp(input.loggedOutRegex) : null;
+  const blocked = new Set<string>();
+  const state = (r: FetchResult): "authenticated" | "expired" | "unknown" => {
+    if (r.status === 0 || r.complete === false || r.status >= 500 || r.status === 429) return "unknown";
+    if (r.status === 401 || loggedOut?.test(r.body) || /<input\b[^>]*type\s*=\s*["']?password\b/i.test(r.body) || /session expired|please sign in/i.test(r.body)) return "expired";
+    if (r.status >= 300 && r.status < 400 && /login|signin|auth/i.test(r.headers.location ?? "")) return "expired";
+    if (r.status >= 200 && r.status < 300 && loggedIn?.test(r.body)) return "authenticated";
+    return "unknown";
   };
+  const update = (url: string, r: FetchResult): void => {
+    jar.update(url, setCookies(r));
+    if (r.complete === false || r.status < 200 || r.status >= 300) return;
+    const token = tokenFrom(r);
+    if (token && token !== bearer) { if (bearer) tokenRefreshes++; bearer = token; jar.setBearer(base.origin, token); }
+  };
+  // Redirects stay inside the declared origin, update the jar at every hop,
+  // and never forward a POST credential body to an unrelated destination.
+  const request = async (url: string, method = "GET", body?: string): Promise<FetchResult> => {
+    let current = url;
+    for (let hop = 0; ; hop++) {
+      if (!sameOrigin(current, base.href)) throw new Error("cross-origin session request refused");
+      const r = await fetchUrl(current, { proxy: input.proxy, timeoutMs: input.timeoutMs ?? 10000, redirect: "manual", method, body,
+        headers: { ...headers, ...jar.headers(current), ...(body === undefined ? {} : { "content-type": input.loginMode === "form" ? "application/x-www-form-urlencoded" : "application/json" }) } });
+      update(current, r);
+      if (![301, 302, 303, 307, 308].includes(r.status) || !r.headers.location || hop >= 5 || state(r) === "expired") return r;
+      const next = new URL(r.headers.location, current).href;
+      if (!sameOrigin(next, base.href)) { blocked.add(next); return r; }
+      if (r.status === 303 || ((r.status === 301 || r.status === 302) && method === "POST")) { method = "GET"; body = undefined; }
+      current = next;
+    }
+  };
+  const doLogin = async (): Promise<boolean> => {
+    verified = false;
+    const before = JSON.stringify(jar.headers(base.href));
+    const fields = { [input.usernameField ?? "username"]: input.username, [input.passwordField ?? "password"]: input.password };
+    const r = await request(loginUrl, "POST", input.loginMode === "form" ? new URLSearchParams(fields).toString() : JSON.stringify(fields));
+    if (r.status < 200 || r.status >= 400 || r.complete === false || state(r) === "expired") return false;
+    const credentials = jar.headers(base.href);
+    const changed = before !== JSON.stringify(credentials);
+    // Credential changes are candidates, not proof of authenticated access.
+    // CSRF/locale/guest cookies alone must not qualify even as candidates.
+    const candidate = changed && (!!credentials.authorization || /(?:^|;\s*)(?:[^=;]*(?:sess|auth|token|jwt|login)[^=;]*|sid)=/i.test(credentials.cookie ?? ""));
+    if (state(r) === "authenticated") verified = true;
+    if (input.authCheckUrl) {
+      const check = new URL(input.authCheckUrl, base).href;
+      if (!sameOrigin(check, base.href)) throw new Error("authCheckUrl must be same-origin");
+      const proof = await request(check);
+      if (state(proof) === "expired" || proof.status < 200 || proof.status >= 300) return false;
+      verified = state(proof) === "authenticated";
+    }
+    return verified || candidate;
+  };
+  if (!await doLogin()) throw new Error("login failed: no authenticated marker or changed session credential");
 
-  let session = await doLogin();
-  if (!session) throw new Error("login failed: no session cookie or token returned");
-  const sessionCookieNames = session.cookie.split(";").map((c) => c.split("=")[0]!).filter(Boolean);
-
-  // --- frontier ---------------------------------------------------------
-  let endpoints: string[] = [];
-  if (input.endpoints) {
-    endpoints = [...input.endpoints];
-  } else {
-    try {
-      const merged = JSON.parse(await readFile(join(input.outputRoot, "merged.json"), "utf8")) as { path?: string; url?: string }[];
-      endpoints = merged.map((e) => e.path ?? e.url ?? "").filter((p) => p.length > 0);
-    } catch { endpoints = []; }
+  let endpoints = [...(input.endpoints ?? [])];
+  if (!input.endpoints) {
+    try { const entries = JSON.parse(await readFile(join(input.outputRoot, "merged.json"), "utf8")) as { path?: string; url?: string }[]; endpoints = entries.map(e => e.url ?? e.path ?? "").filter(Boolean); }
+    catch (err) { if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err; }
   }
-  const base = input.baseUrl.replace(/\/+$/, "");
-  const queue = endpoints.map((e) => ({ url: e.startsWith("http") ? e : `${base}${e.startsWith("/") ? "" : "/"}${e}`, depth: 1 }));
-  const maxPages = input.maxPages ?? 60;
-  let relogins = 0;
-  let tokenRefreshes = 0;
-
-  const authHeaders = (): Record<string, string> => {
-    const h: Record<string, string> = { ...input.headers };
-    if (session!.cookie) h.cookie = session!.cookie;
-    if (session!.bearer) h.authorization = `Bearer ${session!.bearer}`;
-    return h;
+  const queue: { url: string; depth: number }[] = [];
+  const enqueue = (raw: string, depth: number, from = base.href): void => {
+    try { const u = new URL(raw, from); u.hash = ""; if (sameOrigin(u.href, base.href)) queue.push({ url: u.href, depth }); else blocked.add(u.href); } catch { blocked.add(raw); }
   };
-
-  const looksExpired = (status: number, location: string, body: string): boolean =>
-    status === 401 ||
-    (status >= 300 && status < 400 && /login|signin|auth/i.test(location)) ||
-    (status === 200 && /login|session expired|please sign in/i.test(body.slice(0, 2048)) && session!.bearer === null && session!.cookie.length > 0 && /<html/i.test(body.slice(0, 200)));
-
-  // ZAP-style liveness probing: when loggedInRegex/loggedOutRegex are given,
-  // they OVERRIDE the heuristics — some apps answer 200 with a login page on
-  // expiry (no 401, no redirect); only the content signature tells truth.
-  const loggedInRe = input.loggedInRegex ? new RegExp(input.loggedInRegex) : null;
-  const loggedOutRe = input.loggedOutRegex ? new RegExp(input.loggedOutRegex) : null;
-  const sessionAlive = (status: number, location: string, body: string): boolean => {
-    if (loggedOutRe && loggedOutRe.test(body.slice(0, 4096))) return false;
-    if (loggedInRe) return loggedInRe.test(body.slice(0, 4096));
-    return !looksExpired(status, location, body);
-  };
-
-  const pages: SessionCrawlResult["pages"] = [];
-  const blocked: string[] = [];
-  const seen = new Set<string>();
-
-  while (queue.length > 0 && pages.length < maxPages) {
+  endpoints.forEach(url => enqueue(url, 1));
+  const seen = new Set<string>(), pages: SessionCrawlResult["pages"] = [];
+  while (queue.length && seen.size < (input.maxPages ?? 60)) {
     const { url, depth } = queue.shift()!;
     if (seen.has(url)) continue;
     seen.add(url);
-
-    const r = await fetchUrl(url, { ...opts, method: "GET", headers: authHeaders() });
-    if (r.status === 0) { blocked.push(url); continue; }
-
-    const location = r.headers?.location ?? "";
-    let authState: "anonymous" | "authenticated" | "expired" = "authenticated";
-    if (!sessionAlive(r.status, location, r.body)) {
-      authState = "expired";
-      // --- re-login & retry once ----------------------------------------
+    let r = await request(url), authState = state(r);
+    if (authState === "expired") {
+      verified = false;
       if (relogins < (input.maxRelogins ?? 5)) {
-        relogins += 1;
-        const fresh = await doLogin();
-        if (fresh) {
-          if (fresh.bearer && fresh.bearer !== session!.bearer) tokenRefreshes += 1;
-          session = fresh;
-          const r2 = await fetchUrl(url, { ...opts, method: "GET", headers: authHeaders() });
-          if (r2.status > 0 && r2.status < 400) {
-            pages.push({ url, status: r2.status, depth, authState: "authenticated" });
-            continue;
-          }
-        }
+        relogins++;
+        if (await doLogin()) { r = await request(url); authState = state(r); }
       }
-      blocked.push(url);
-      continue;
+      if (authState === "expired") { blocked.add(url); continue; }
     }
-    if (r.status === 403) { authState = "anonymous"; }
-    pages.push({ url, status: r.status, depth, authState });
-
-    // extract same-origin links for BFS (depth+1)
-    if (depth < 3 && r.status >= 200 && r.status < 300) {
-      for (const m of r.body.matchAll(/href="([^"]+)"|src="([^"]+)"/g)) {
-        const href = (m[1] ?? m[2] ?? "").trim();
-        if (!href || href.startsWith("#") || /^(javascript:|data:|mailto:)/i.test(href)) continue;
-        let abs: string;
-        try { abs = new URL(href, url).href; } catch { continue; }
-        if (abs.startsWith(base) && !seen.has(abs)) queue.push({ url: abs, depth: depth + 1 });
-      }
+    if (r.status === 0 || r.complete === false) { blocked.add(url); continue; }
+    if (authState === "authenticated") verified = true;
+    pages.push({ url, status: r.status, depth, authState: r.status === 403 ? "anonymous" : authState });
+    if (depth < 3 && r.status >= 200 && r.status < 300) for (const m of r.body.matchAll(/(?:href|src)=["']([^"']+)["']/g)) {
+      const href = m[1]!;
+      if (!/^(?:#|javascript:|data:|mailto:|tel:)/i.test(href)) enqueue(href, depth + 1, r.finalUrl ?? url);
     }
   }
-
-  const bodyStr = JSON.stringify({ crawled: pages.length, pages, relogins, tokenRefreshes, blocked, sessionCookieNames }, null, 2);
-  const path = join(input.outputRoot, "session_crawl.json");
-  await writeFile(path, bodyStr, "utf8");
-  return { crawled: pages.length, pages, relogins, tokenRefreshes, blocked, sessionCookieNames, artifacts: [{ path, bytes: Buffer.byteLength(bodyStr) }] };
+  const sessionCookieNames = [...new Set(jar.header(base.href).split(/;\s*/).filter(Boolean).map(c => c.slice(0, c.indexOf("="))))];
+  const result: SessionCrawlResult = { crawled: pages.length, pages, relogins, tokenRefreshes, blocked: [...blocked], sessionCookieNames, authentication: verified ? "verified" : "inconclusive", artifacts: [] };
+  result.artifacts.push(await writeArtifact(input.outputRoot, "session_crawl.json", JSON.stringify(result, null, 2)));
+  result.artifacts.push(await writeArtifact(input.outputRoot, "session_crawl_manifest.json", JSON.stringify({ producer: "session-crawl", target: base.href, runId: executionRunId(), count: pages.length, artifacts: result.artifacts, authentication: result.authentication }, null, 2)));
+  return result;
 };

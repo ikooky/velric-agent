@@ -1,6 +1,6 @@
-import { fetchUrl } from "../adapters/http.js";
-import { writeFile, mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { fetchUrl, type FetchResult } from "../adapters/http.js";
+import { writeArtifact } from "../adapters/artifacts.js";
+import { randomUUID } from "node:crypto";
 
 /** Sensitive-path probing with soft-404 calibration: a random-path baseline is
  *  taken first; responses isomorphic to the baseline (same status + same body
@@ -23,7 +23,7 @@ export interface PathProbeResult {
   readonly found: { path: string; status: number; bytes: number; contentType: string; signature?: string }[];
   readonly soft404: { status: number; bytes: number } | null;
   /** Catch-all route clusters (same body signature across many probe paths). */
-  readonly catchAllClusters?: { signature: string; count: number; representative: string }[];
+  readonly catchAllClusters?: { signature: string; count: number; representative: string; members: string[] }[];
   readonly artifacts: { path: string; bytes: number }[];
 }
 
@@ -50,199 +50,66 @@ export const SENSITIVE_PATHS: readonly string[] = [
   "/saml/metadata",
 ];
 
-/** Body signature robust to embedded random tokens: bucket by length bands +
- *  structural markers (json/html/text) rather than exact bytes. */
-const bodySignature = (status: number, bytes: number, contentType: string, body: string): string => {
-  const kind = contentType.includes("json") ? "json" : contentType.includes("html") ? "html" : "other";
-  const band = bytes < 512 ? "s" : bytes < 2048 ? "m" : bytes < 16384 ? "l" : "xl";
-  const marker = kind === "json"
-    ? (body.match(/"(?:error|message|code|msg|status)"\s*:/) ?? [""])[0]
-    : kind === "html"
-      ? (body.match(/<(?:title|h1)[^>]*>([^<]{0,60})/) ?? [""])[0]
-      : "";
-  return `${status}:${kind}:${band}:${marker}`;
+/** Probe URLs are always resolved against the origin, never string-concatenated. */
+export const discoveryOrigin = (raw: string): string => {
+  const u = new URL(/^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : `https://${raw}`);
+  if (!/^https?:$/.test(u.protocol) || u.username || u.password) throw new Error("invalid discovery origin");
+  return u.origin;
+};
+export const discoveryUrl = (origin: string, path: string): string | null => {
+  if (typeof path !== "string" || !path || /[\\\x00-\x20\x7f]/.test(path)) return null;
+  try {
+    const u = new URL(path, `${origin}/`);
+    if (u.origin !== origin || u.username || u.password || u.hash) return null;
+    return u.href;
+  } catch { return null; }
+};
+
+/** Exact stable content plus transport/type/shape; similarity alone is not exclusion evidence. */
+export const discoverySignature = (r: FetchResult): string => JSON.stringify([
+  r.status, r.contentType.split(";")[0]!.trim().toLowerCase(), r.sha256, r.bytes,
+  r.body.trim() ? r.body.trim().split(/\s+/).length : 0, r.body.split("\n").length,
+  r.headers.location ?? "",
+]);
+export const stableDiscoverySignatures = (responses: readonly FetchResult[]): Set<string> => {
+  const counts = new Map<string, number>();
+  for (const r of responses) {
+    if (!r.status || r.complete === false || r.truncated || r.error) continue;
+    const sig = discoverySignature(r); counts.set(sig, (counts.get(sig) ?? 0) + 1);
+  }
+  return new Set([...counts].filter(([, n]) => n >= 2).map(([sig]) => sig));
 };
 
 export const probePaths = async (input: PathProbeInput): Promise<PathProbeResult> => {
-  const base = input.baseUrl.startsWith("http") ? input.baseUrl : `https://${input.baseUrl}`;
-  await mkdir(input.outputRoot, { recursive: true });
-  const opts = { cookie: input.cookie, proxy: input.proxy, timeoutMs: input.timeoutMs ?? 10000 };
-  // Signature tally for catch-all route clustering (post-hoc).
-  const sigCounts = new Map<string, number>();
-
-  // Soft-404 calibration: 3 random paths → consensus signature + real byte
-  // sizes (exact, not band midpoints — used for the size-proximity guard).
-  // Baseline pages can render in more than one shape: some platforms answer
-  // unknown top-level paths with a "not found" page but rewrite dot-file-ish
-  // names to the HOME page (Shopify: 430KB 404 title vs 715KB home title).
-  // Both shapes are catch-alls — collect the baseline <title> set as a second
-  // discriminator so a home-rewrite never scores as a sensitive-path hit.
-  const baselineSigs = new Set<string>();
-  const baselineTitles = new Set<string>();
-  let baselineBytes = 0;
-  let baselineN = 0;
-  const titleOf = (body: string): string =>
-    (body.match(/<title[^>]*>([^<]{0,120})<\/title>/i)?.[1] ?? "").trim().toLowerCase();
-  const BASELINE_RANDOM_PATHS = ["/zzqq-velric-404-a", "/zzqq-velric-404-b", "/zzqq-velric-404-c"];
-  for (const rnd of BASELINE_RANDOM_PATHS) {
-    const r = await fetchUrl(base + rnd, opts);
-    if (r.status > 0) {
-      baselineSigs.add(bodySignature(r.status, r.bytes, r.contentType, r.body));
-      const bt = titleOf(r.body);
-      if (bt !== "") baselineTitles.add(bt);
-      baselineBytes += r.bytes;
-      baselineN += 1;
-    }
-  }
-  // Direct home-page shape: fetch "/" once — a probe path whose body title
-  // equals the HOME title (and is HTML) is a home-rewrite catch-all too.
-  let siteBrand = "";
-  try {
-    const home = await fetchUrl(base + "/", opts);
-    const ht = titleOf(home.body);
-    if (home.status > 0 && ht !== "") baselineTitles.add(ht);
-    // Brand suffix from the home title ("GitLab", "Allbirds: ..."): probe
-    // paths whose page titles end in "· <brand>" are /{user} profile
-    // renderings (gitlab.com/.env → Dmitry Mityanin · GitLab).
-    // Brand = the LEADING word(s) of the home title ("GitLab - Speed...").
-    // Profile pages are titled "<user> · <brand>", so the brand must match
-    // the head, not the tail, of the home title.
-    const m = ht.match(/^([a-z0-9][a-z0-9 .&'-]{0,40}?)(?:\s*[-–|·:]|\s{2,}|$)/i);
-    if (m) siteBrand = m[1]!.trim().toLowerCase();
-  } catch { /* home fetch failure: title channel simply stays smaller */ }
-  const soft404Signature = baselineSigs.size > 0 ? [...baselineSigs] : null;
-  const soft404Bytes = baselineN > 0 ? Math.round(baselineBytes / baselineN) : null;
-  const soft404StatusBytes = soft404Signature
-    ? (() => {
-        const first = soft404Signature[0]!.split(":");
-        // Signature carries a size BAND (s/m/l/xl), not exact bytes — report
-        // the band midpoint so the artifact stops claiming a fake 0.
-        const band = first[2] ?? "m";
-        const bandBytes = band === "s" ? 256 : band === "m" ? 1024 : band === "l" ? 8192 : 32768;
-        return { status: Number(first[0]), bytes: bandBytes };
-      })()
-    : null;
-
+  const base = discoveryOrigin(input.baseUrl);
+  const opts = { cookie: input.cookie, proxy: input.proxy, timeoutMs: input.timeoutMs ?? 10000, redirect: "manual" as const };
+  const baselines: FetchResult[] = [];
+  for (let i = 0; i < 3; i++) baselines.push(await fetchUrl(new URL(`/zzqq-${randomUUID()}`, base).href, opts));
+  const stable = stableDiscoverySignatures(baselines);
+  const soft = baselines.find(r => stable.has(discoverySignature(r)));
   const paths = input.paths ?? SENSITIVE_PATHS;
-  const concurrency = input.concurrency ?? 8;
   const found: PathProbeResult["found"] = [];
-  const probed = { n: 0 };
-  let cursor = 0;
+  let probed = 0, cursor = 0;
   const worker = async (): Promise<void> => {
     while (cursor < paths.length) {
       const p = paths[cursor++];
-      if (p === undefined) continue;
-      const r = await fetchUrl(base + p, opts);
-      probed.n++;
-      if (r.status === 0) continue;
-      const respSig = bodySignature(r.status, r.bytes, r.contentType, r.body);
-      // Rule: 200-family that matches the soft-404 shape = not a finding —
-      // BUT only when the body LENGTH is also close (within 2.5x): the band
-      // signature intentionally coarsens sizes, so a 300B error JSON and a
-      // 12KB real endpoint page can share a signature. Size proximity keeps
-      // distinct real pages that merely share a band out of the drop.
-      if (r.status >= 200 && r.status < 300 && soft404Signature?.includes(respSig)
-        && soft404Bytes !== null && soft404Bytes > 0 && r.bytes > 0
-        && (r.bytes / soft404Bytes < 2.5 && soft404Bytes / r.bytes < 2.5)) continue;
-      // Second shape channel: HTML whose <title> matches a baseline page
-      // (random-404 or home) is that catch-all page wearing a different size
-      // band — the Shopify-style home rewrite. Real endpoints (JSON, XML,
-      // distinct titles) are never affected by this rule.
-      if (r.status >= 200 && r.status < 300 && r.contentType.includes("html") && baselineTitles.size > 0) {
-        const t = titleOf(r.body);
-        if (t !== "" && baselineTitles.has(t)) continue;
-      }
-      // Auth-walled variant: the fetch followed a redirect to a sign-in
-      // landing — the probed path exists but is access-controlled. Tag the
-      // row so report generation can count it as protected. Only when the
-      // landing path DIFFERS from the probe (a no-hop fetch whose URL merely
-      // contains "auth"/"oauth" is an ordinary 200, e.g. OIDC discovery).
-      let authFinalPath = "";
-      try { authFinalPath = new URL(r.finalUrl ?? "").pathname.replace(/\/$/, ""); } catch { /* not a URL */ }
-      const probedNorm = p.replace(/\/$/, "");
-      const authFinal = r.finalUrl ?? "";
-      if (authFinalPath !== "" && authFinalPath !== probedNorm && /sign[_-]?in\b|\blogin\b|signin|sso/i.test(authFinal) && r.status >= 200 && r.status < 400) {
-        const flagged = `${p}  [authwall: → ${authFinal.slice(0, 90)}]`;
-        sigCounts.set(respSig, (sigCounts.get(respSig) ?? 0) + 1);
-        found.push({ path: flagged, status: 302, bytes: r.bytes, contentType: r.contentType.slice(0, 60), signature: respSig });
-        continue;
-      }
-      // Third shape channel: redirect-followed responses that landed on a
-      // path OTHER than the probed one are rewrites (e.g.
-      // /dump.sql → 301 → /{username} profile). BUT an auth-redirect landing
-      // (sign_in / login / auth) means the probed path EXISTS and is access-
-      // controlled — that is a real protected-path signal, kept as-is.
-      if (r.finalUrl && !/sign[_-]?in|login|auth|sso/i.test(r.finalUrl)) {
-        let finalPath = "";
-        try { finalPath = new URL(r.finalUrl).pathname; } catch { /* keep */ }
-        const probedPath = p.replace(/\/$/, "");
-        if (finalPath !== "" && finalPath.replace(/\/$/, "") !== probedPath) {
-          // Tally the rewrite signature too: a whole-site auth wall (every
-          // probe path 302→sign_in) clusters into ONE row instead of 50.
-          sigCounts.set(respSig, (sigCounts.get(respSig) ?? 0) + 1);
-          found.push({ path: `${p}  [redirectrw: → ${finalPath}]`, status: r.status, bytes: r.bytes, contentType: r.contentType.slice(0, 60), signature: respSig });
-          continue;
-        }
-      }
-      if (r.status === 404 || r.status === 410) continue;
-      // 401/403 are interesting (path exists, protected) — record with flag
-      sigCounts.set(respSig, (sigCounts.get(respSig) ?? 0) + 1);
-      // Wildcard-route suspect: page <title> echoes the probed segment
-      // (e.g. a /{owner} route renders the segment as a profile page) —
-      // a /{owner}-style catch-all rendering this name, not the sensitive
-      // endpoint we probed for. Flag for review instead of dropping.
-      let flag = "";
-      const seg = p.replace(/\/$/, "").split("/").pop() ?? p;
-      const title = titleOf(r.body);
-      // Profile-page catch-all: title ends with the site brand ("· GitLab")
-      // but the title itself is NOT one of the baseline pages — this is the
-      // /{username} route rendering probe segments as user pages.
-      if (siteBrand !== "" && r.status >= 200 && r.status < 300
-        && r.contentType.includes("html") && !baselineTitles.has(title.toLowerCase())
-        && new RegExp(`·\\s*${siteBrand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`, "i").test(title)) {
-        flag = "  [profile-route: user page for probe segment]";
-      }
-      if (title.toLowerCase().includes(seg.toLowerCase())) {
-        flag = `  [wildcard-suspect: title echoes "${seg}" — likely /{param} route]`;
-      }
-      found.push({ path: p + flag, status: r.status, bytes: r.bytes, contentType: r.contentType.slice(0, 60), signature: respSig });
+      const url = p === undefined ? null : discoveryUrl(base, p);
+      if (!url) continue;
+      const r = await fetchUrl(url, opts); probed++;
+      if (!r.status || r.status === 404 || r.status === 410 || r.complete === false || r.truncated || r.error) continue;
+      const signature = discoverySignature(r);
+      if (r.status >= 200 && r.status < 300 && stable.has(signature)) continue;
+      const u = new URL(url);
+      found.push({ path: `${u.pathname}${u.search}`, status: r.status, bytes: r.bytes, contentType: r.contentType, signature });
     }
   };
+  const concurrency = Number.isFinite(input.concurrency) ? Math.max(1, Math.min(32, Math.floor(input.concurrency!))) : 8;
   await Promise.all(Array.from({ length: Math.min(concurrency, paths.length) }, worker));
-
-  // Wildcard/catch-all clustering: a body signature shared by >= 3 distinct
-  // probe paths is the same page for all of them — a catch-all route (/{owner}
-  // profile renderings) or a WAF's blanket block (every dot-file 403).
-  // Keep ONE representative + cluster note instead of N near-duplicate rows.
-  const CATCHALL_THRESHOLD = 3;
-  const catchAllSigs = new Set([...sigCounts.entries()].filter(([, n]) => n >= CATCHALL_THRESHOLD).map(([sig]) => sig));
-  const clusters: { signature: string; count: number; representative: string }[] = [];
-  if (catchAllSigs.size > 0) {
-    for (const sig of catchAllSigs) {
-      const members = found.filter((f) => f.signature === sig);
-      const rep = members[0]!;
-      clusters.push({ signature: sig, count: members.length, representative: rep.path });
-      // drop all members, re-add one flagged representative
-      for (const m of members) {
-        const idx = found.indexOf(m);
-        if (idx >= 0) found.splice(idx, 1);
-      }
-      found.push({ ...rep, path: `${rep.path}  [catch-all ×${members.length}: same page for ${members.length} probe paths]` });
-    }
-  }
-  // Keep f.signature in the RETURNED structure (scanPlatform assets read
-  // meta.signature); the .txt artifact below never included it anyway.
   found.sort((a, b) => a.path.localeCompare(b.path));
-
-  const path = join(input.outputRoot, "sensitive_paths.txt");
-  const body = found.map((f) => `${f.status}\t${f.path}\t${f.bytes}b\t${f.contentType}`).join("\n");
-  await writeFile(path, body);
-  return {
-    baseUrl: base,
-    probed: probed.n,
-    found,
-    soft404: soft404StatusBytes,
-    catchAllClusters: clusters,
-    artifacts: [{ path, bytes: Buffer.byteLength(body) }],
-  };
+  const groups = new Map<string, string[]>();
+  for (const f of found) { const members = groups.get(f.signature!) ?? []; members.push(f.path); groups.set(f.signature!, members); }
+  const clusters = [...groups].filter(([, members]) => members.length >= 3).map(([signature, members]) => ({ signature, count: members.length, representative: members[0]!, members }));
+  const body = found.map(f => `${f.status}\t${f.path}\t${f.bytes}b\t${f.contentType}`).join("\n");
+  const art = await writeArtifact(input.outputRoot, "sensitive_paths.txt", body);
+  return { baseUrl: base, probed, found, soft404: soft ? { status: soft.status, bytes: soft.bytes } : null, catchAllClusters: clusters, artifacts: [art] };
 };

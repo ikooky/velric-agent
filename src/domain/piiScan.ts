@@ -3,7 +3,7 @@ import { ensureDir, writeArtifact } from "../adapters/artifacts.js";
 import { join, relative } from "node:path";
 import { createHash } from "node:crypto";
 
-/** Sensitive-data-exposure scanner over recorded traffic (Akto-style): reads
+/** Sensitive-data-exposure scanner over recorded traffic: reads
  *  every response blob captured by traffic_record, scans for PII movement
  *  (emails/phones/cards/national IDs/JWTs) and credential pairs (jsluice
  *  pairing), then attributes each hit back to the exchange (method+URL) so

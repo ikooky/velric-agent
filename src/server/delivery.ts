@@ -56,9 +56,9 @@ export const deliver = async (
 ): Promise<CallToolResult> => {
   try {
     const value = await run();
-    // Output validation: the contract's outputSchema was previously declared
-    // but never enforced — schema drift shipped silently. A mismatch is now a
-    // structured contract_violation error naming the offending tool.
+    // Output validation: a mismatch against the contract's outputSchema is a
+    // structured contract_violation error naming the offending tool — schema
+    // drift must never ship silently.
     const parsed = contract.outputSchema.safeParse(value);
     if (!parsed.success) {
       return errorResult({
@@ -70,7 +70,10 @@ export const deliver = async (
         remediation: "the tool and its contract have drifted — report this to the toolset maintainer",
       });
     }
-    return successResult(parsed.data);
+    // A01: validation is a GATE, not a projector — the handler's original
+    // value is delivered; parsed.data would silently strip every field the
+    // summary-shaped outputSchema forgot to declare.
+    return successResult(value);
   } catch (cause) {
     const error =
       cause !== null &&

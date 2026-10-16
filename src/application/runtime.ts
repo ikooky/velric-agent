@@ -1,5 +1,8 @@
 import { join } from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
+import { chromium, type Page, type Request } from "playwright-core";
+import { hashRequest, hashResponse, recordReceipt, executionRunId } from "../core/execution.js";
+import { principalHash, sameOrigin } from "../core/credentials.js";
+import { mergeBrowserSamples, writeOwnedManifest } from "./harvest.js";
 
 import { ensureDir, writeArtifact } from "../adapters/artifacts.js";
 import {
@@ -7,6 +10,60 @@ import {
   buildPreloadScript,
   type HookConfig,
 } from "../domain/preload.js";
+
+export interface BrowserRequestObservation {
+  requestId: number; method: string; url: string; documentUrl: string;
+  resourceType: string; reqBody: string | null; reqHeaders: Record<string, string>;
+  status: number; complete: boolean; error?: string; responseHash?: string | null;
+  receiptId?: string; source: string;
+}
+/** Node-side request identity survives every document and does not trust hooks. */
+export const observeBrowserRequests = (page: Page) => {
+  let sequence = 0;
+  const requests: BrowserRequestObservation[] = [];
+  const entries = new Map<Request, BrowserRequestObservation>();
+  const pending = new Set<Promise<void>>();
+  let failure: unknown;
+  const start = (request: Request): void => {
+    let documentUrl = request.url();
+    try { if (!request.isNavigationRequest()) documentUrl = request.frame().url(); } catch {}
+    const row: BrowserRequestObservation = { requestId: ++sequence, method: request.method(), url: request.url(), documentUrl,
+      resourceType: request.resourceType(), reqBody: request.postData(), reqHeaders: request.headers(), status: 0, complete: false, source: "browser-network" };
+    entries.set(request, row); requests.push(row);
+  };
+  const finish = (request: Request, failed: boolean): void => {
+    const row = entries.get(request);
+    if (!row) return;
+    const work = (async () => {
+      row.reqHeaders = await request.allHeaders().catch(() => row.reqHeaders);
+      const response = await request.response();
+      row.status = response?.status() ?? 0;
+      row.complete = !failed && !!response && !(await response.finished());
+      if (failed) row.error = request.failure()?.errorText ?? "browser request failed";
+      if (response && row.complete && ["fetch", "xhr"].includes(row.resourceType)) {
+        const length = Number(response.headers()["content-length"]);
+        if (Number.isFinite(length) && length >= 0 && length <= 4 * 1024 * 1024) {
+          row.responseHash = await response.body().then(hashResponse).catch(() => null);
+        }
+      }
+      // A request event can describe an abort before any transport occurred.
+      // Only a browser response proves the network boundary was reached.
+      if (response && executionRunId() !== "unbound") {
+        const receipt = await recordReceipt({ url: row.url, method: row.method, status: row.status || null,
+          requestHash: hashRequest(request.postDataBuffer() ?? undefined, row.reqHeaders), responseHash: row.responseHash ?? null,
+          principal: principalHash(row.reqHeaders), complete: row.complete, finalUrl: response?.url() ?? null });
+        row.receiptId = receipt.id;
+      }
+    })();
+    pending.add(work); work.then(() => pending.delete(work), err => { failure = err; pending.delete(work); });
+  };
+  const success = (r: Request): void => finish(r, false);
+  const failed = (r: Request): void => finish(r, true);
+  page.on("request", start); page.on("requestfinished", success); page.on("requestfailed", failed);
+  return { requests, drain: async () => { await Promise.all([...pending]); if (failure) throw failure; }, close: () => {
+    page.off("request", start); page.off("requestfinished", success); page.off("requestfailed", failed);
+  } };
+};
 
 export interface RuntimeCaptureInput {
   readonly baseUrl: string;
@@ -25,6 +82,7 @@ export interface RuntimeCaptureInput {
   readonly recordWs?: boolean;
   readonly captureResponses?: boolean;
   readonly maxRoutes?: number;
+  readonly mode?: "passive" | "gate-defeat";
 }
 
 export interface RuntimeCaptureResult {
@@ -128,6 +186,7 @@ export const captureRuntime = async (
     ...DEFAULT_HOOK_CONFIG,
     ...input.hook,
     stubs: input.stubs ?? input.hook?.stubs ?? [],
+    mode: input.mode ?? input.hook?.mode ?? "passive",
   };
 
   const browser = await chromium.launch({
@@ -138,13 +197,15 @@ export const captureRuntime = async (
 
   try {
     const context = await browser.newContext({ ignoreHTTPSErrors: true });
+    await context.route("**/*", route => sameOrigin(route.request().url(), base) ? route.continue() : route.abort("blockedbyclient"));
     const page = await context.newPage();
+    const network = observeBrowserRequests(page);
 
     // document-start hook injection
     await page.addInitScript(buildPreloadScript(hook));
     if (input.localStorage) {
       await page.addInitScript(
-        `(() => { try { const kv = ${JSON.stringify(input.localStorage)}; for (const k in kv) localStorage.setItem(k, kv[k]); } catch {} })()`,
+        `(() => { try { if(location.origin !== ${JSON.stringify(origin)}) return; const kv = ${JSON.stringify(input.localStorage)}; for (const k in kv) localStorage.setItem(k, kv[k]); } catch {} })()`,
       );
     }
 
@@ -174,8 +235,7 @@ export const captureRuntime = async (
         input.cookies.map((c) => ({
           name: c.name,
           value: cookieValue(c.value),
-          domain: new URL(base).hostname,
-          path: c.path ?? "/",
+          url: origin + (c.path ?? "/"),
         })),
       );
     }
@@ -218,18 +278,21 @@ export const captureRuntime = async (
       }
     }
     const seedRoutes = [...new Set([...(input.routes ?? ["/"]), ...shellLinks, ...fallbackRoutes])];
-    const routes = seedRoutes.slice(0, maxRoutes);
+    const routes = seedRoutes.flatMap(raw => {
+      try { const u = new URL(raw, origin); return sameOrigin(u.href, base) ? [u.pathname + u.search + u.hash] : []; } catch { return []; }
+    }).slice(0, maxRoutes);
     const perRoute: Record<string, string[]> = {};
     const allApis = new Set<string>();
     const allDetail: {
       method: string; url: string; status: number;
-      reqBody: string | null; responseBody: string | null; source: string;
+      reqBody: string | null; responseBody: string | null; source: string; documentId?: string; requestId?: number;
     }[] = [];
     const allVueRoutes = new Set<string>();
     const observeAcc: { storage: unknown[]; headers: { name: string; url: string }[] } = {
       storage: [],
       headers: [],
     };
+    const collected = new Set<string>();
     // Read the live document's hook state and fold it into the totals. The hook
     // state resets on every navigation, so each document must be collected
     // while it is still the active page.
@@ -245,14 +308,17 @@ export const captureRuntime = async (
         };
       })()`) as {
         apis: string[];
-        detail: { method: string; url: string; status: number; reqBody: string | null; responseBody: string | null; source: string }[];
+        detail: { method: string; url: string; status: number; reqBody: string | null; responseBody: string | null; source: string; documentId?: string; requestId?: number }[];
         routes: string[];
         observe: { storage: unknown[]; headers: { name: string; url: string }[] };
       };
       const keptApis = fresh.apis.filter((a) => !isNoiseUrl(a.split(" ").slice(1).join(" ") || a, origin));
       perRoute[key] = [...new Set([...(perRoute[key] ?? []), ...keptApis])];
       for (const a of keptApis) allApis.add(a);
-      allDetail.push(...fresh.detail.filter((d) => !isNoiseUrl(String(d.url), origin)));
+      for (const detail of fresh.detail.filter(d => !isNoiseUrl(String(d.url), origin))) {
+        const id = `${detail.documentId}:${detail.requestId}`;
+        if (!collected.has(id)) { collected.add(id); allDetail.push(detail); }
+      }
       for (const r of fresh.routes) allVueRoutes.add(r);
       observeAcc.storage.push(...fresh.observe.storage);
       observeAcc.headers.push(...fresh.observe.headers);
@@ -273,6 +339,8 @@ export const captureRuntime = async (
       await collect(rt);
     }
 
+    await network.drain(); network.close();
+    for (const row of network.requests.filter(r => ["fetch", "xhr"].includes(r.resourceType) && !isNoiseUrl(r.url, origin))) allApis.add(`${row.method} ${row.url}`);
     const uniqueCalls = [...allApis].sort();
     const wsUniq = [...new Set(wsFrames.map((f) => f.url))].filter(Boolean).sort();
 
@@ -284,6 +352,9 @@ export const captureRuntime = async (
         JSON.stringify(
           {
             shell,
+            mode: hook.mode,
+            requests: network.requests,
+            limitations: ["same-origin capture; external requests blocked", ...(hook.mode === 'gate-defeat' ? ["hook responses may be modified; only transport receipts describe network observations"] : [])],
             uniqueCalls,
             perRoute,
             detail: allDetail.slice(-4000),
@@ -323,8 +394,8 @@ export const captureRuntime = async (
     // param_samples.json: bridge runtime detail → merge_params input, so the
     // recorded traffic feeds the parameter-matrix step without manual reshaping.
     {
-      const paramSamples = allDetail
-        .filter((d) => d.reqBody || String(d.url).includes("?"))
+      const paramSamples = network.requests
+        .filter(d => ["fetch", "xhr"].includes(d.resourceType) && (d.reqBody || d.url.includes("?")))
         .map((d) => ({
           method: d.method,
           url: String(d.url).startsWith("http")
@@ -333,14 +404,9 @@ export const captureRuntime = async (
           body: d.reqBody,
           query: String(d.url).includes("?") ? String(d.url).split("?")[1] ?? null : null,
         }));
-      artifacts.push(
-        await writeArtifact(
-          root,
-          "param_samples.json",
-          JSON.stringify(paramSamples, null, 2),
-        ),
-      );
+      artifacts.push(await mergeBrowserSamples(root, base, "runtime", paramSamples));
     }
+    artifacts.push(await writeOwnedManifest(root, "runtime_manifest.json", "runtime", base, artifacts, network.requests.filter(r => ["fetch", "xhr"].includes(r.resourceType)).length));
 
     return {
       shell: { url: shell.url, loginForm: shell.loginForm, links: shellLinks },

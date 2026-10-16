@@ -14,12 +14,14 @@ export interface FingerprintInput {
   readonly timeoutMs?: number;
   /** Opt in to the state-changing PUT probe (default: skipped). */
   readonly activeProbe?: boolean;
+  readonly rejectUnauthorized?: boolean;
+  readonly signal?: AbortSignal;
 }
 
 export interface FingerprintResult {
   readonly baseUrl: string;
   readonly waf: string[];
-  readonly methods: { allowed: string[]; putWorks: boolean; traceWorks: boolean };
+  readonly methods: { allowed: string[]; putWorks: boolean; traceWorks: boolean; putOutcome: "skipped" | "accepted" | "rejected" | "inconclusive"; traceOutcome: "accepted" | "rejected" | "inconclusive" };
   readonly cookies: {
     name: string;
     secure: boolean;
@@ -75,7 +77,7 @@ const parseSetCookie = (sc: string): { name: string; secure: boolean; httpOnly: 
 export const fingerprint = async (input: FingerprintInput): Promise<FingerprintResult> => {
   const base = input.baseUrl.startsWith("http") ? input.baseUrl : `https://${input.baseUrl}`;
   await mkdir(input.outputRoot, { recursive: true });
-  const opts = { cookie: input.cookie, proxy: input.proxy, timeoutMs: input.timeoutMs ?? 10000 };
+  const opts = { cookie: input.cookie, proxy: input.proxy, timeoutMs: input.timeoutMs ?? 10000, signal: input.signal, rejectUnauthorized: input.rejectUnauthorized, redirect: "manual" as const };
 
   const r = await fetchUrl(base, opts);
   const waf: string[] = [];
@@ -101,10 +103,7 @@ export const fingerprint = async (input: FingerprintInput): Promise<FingerprintR
   const traceWorks = traceProbe.status === 200 && traceAllows && traceEchoes;
 
   // Cookies from the main response
-  const sc = r.headers["set-cookie"];
-  const cookies = sc
-    ? (Array.isArray(sc) ? sc : [sc]).map(parseSetCookie)
-    : [];
+  const cookies = (r.setCookies ?? []).map(parseSetCookie);
 
   // Tech-stack headers (Server / X-Powered-By / CDN hints) — part of the
   // fingerprint deliverable.
@@ -154,10 +153,10 @@ export const fingerprint = async (input: FingerprintInput): Promise<FingerprintR
   let tls: FingerprintResult["tls"] = null;
   if (base.startsWith("https://")) {
     const { connectTlsAudit } = await import("./tlsAudit.js");
-    tls = await connectTlsAudit(new URL(base));
+    tls = await connectTlsAudit(new URL(base), opts);
   }
 
-  const result = { baseUrl: base, waf: [...new Set(waf)], methods: { allowed, putWorks, traceWorks }, cookies, techHeaders, securityHeaders, missingHeaders, cspFindings, tls };
+  const result = { baseUrl: base, waf: [...new Set(waf)], methods: { allowed, putWorks, traceWorks, putOutcome: !input.activeProbe ? "skipped" as const : putProbe.status === 0 ? "inconclusive" as const : putWorks ? "accepted" as const : "rejected" as const, traceOutcome: traceProbe.complete === false || traceProbe.status === 0 ? "inconclusive" as const : traceWorks ? "accepted" as const : "rejected" as const }, cookies, techHeaders, securityHeaders, missingHeaders, cspFindings, tls };
   const path = join(input.outputRoot, "fingerprint.json");
   const body = JSON.stringify(result, null, 2);
   await writeFile(path, body);

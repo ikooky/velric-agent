@@ -1,5 +1,9 @@
-import { readdir, readFile, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { readdir, readFile } from "node:fs/promises";
+import { basename, join, relative, dirname } from "node:path";
+import { createHash } from "node:crypto";
+import { SessionJar, sameOrigin } from "../core/credentials.js";
+import { executionRunId } from "../core/execution.js";
+import { readJson, withRootLock, writeJson } from "../core/storage.js";
 
 import { fetchUrl } from "../adapters/http.js";
 import { ensureDir, writeArtifact } from "../adapters/artifacts.js";
@@ -49,7 +53,7 @@ export interface HarvestSummary {
   readonly artifacts: { path: string; bytes: number }[];
 }
 
-const SCRIPT_SRC_RE = /<script[^>]+src=("([^"]+\.js[^"]*)"|([^"\s>]+\.js))/gi;
+const SCRIPT_SRC_RE = /<script[^>]+src=("(?:[^"]+\.js[^"]*)"|'((?:[^']+\.js[^']*))'|([^"\s>]+\.js))/gi;
 const LINK_JS_RE = /(?:src|href)=("([^"]*\.js)"|([^"\s>]+\.js))/gi;
 
 const normalizeBase = (raw: string): string =>
@@ -69,8 +73,19 @@ export const harvestStatic = async (
   const jsDir = join(root, "js");
   const concurrency = input.concurrency ?? 16;
   const timeoutMs = input.timeoutMs ?? 25000;
+  const jar = new SessionJar();
+  if (input.cookie) jar.update(base, input.cookie.split(";").map(c => `${c.trim()}; Path=/`));
+  const touched = new Set<string>();
+  const request = async (url: string, maxBytes?: number) => {
+    const parsed = new URL(url);
+    if (!/^https?:$/.test(parsed.protocol)) throw new Error("script URL must use HTTP(S)");
+    touched.add(parsed.href);
+    const result = await fetchUrl(parsed.href, { proxy: input.proxy, headers: sameOrigin(url, base) ? jar.headers(url) : {}, timeoutMs, maxBytes, redirect: "manual" });
+    if (sameOrigin(url, base)) jar.update(url, result.setCookies ?? []);
+    return result;
+  };
 
-  const entry = await fetchUrl(base, { proxy: input.proxy, cookie: input.cookie, timeoutMs });
+  const entry = await request(base);
   if (entry.status === 0) {
     throw { code: "fetch_failed", message: `entry unreachable: ${entry.error}` };
   }
@@ -80,7 +95,9 @@ export const harvestStatic = async (
   // and the extraction corpus (cheap: 2 requests, big coverage win).
   const robotsRoutes = new Set<string>();
   const fetchText = async (path: string): Promise<string | null> => {
-    const r = await fetchUrl(new URL(path, base).href, { proxy: input.proxy, cookie: input.cookie, timeoutMs });
+    const url = new URL(path, base).href;
+    if (!sameOrigin(url, base)) return null;
+    const r = await request(url);
     return r.status === 200 && !r.contentType.includes("html") && r.body.length < 2_000_000 ? r.body : null;
   };
   const robots = await fetchText("/robots.txt");
@@ -93,7 +110,7 @@ export const harvestStatic = async (
       const xml = await fetchText(sm.startsWith("http") ? sm : new URL(sm, base).href);
       if (xml) for (const loc of xml.matchAll(/<loc>(?:<!\[CDATA\[)?([^<\]]+)/g)) {
         const u = loc[1]!.trim();
-        try { robotsRoutes.add(new URL(u).pathname); } catch { /* skip */ }
+        try { if (sameOrigin(u, base)) robotsRoutes.add(new URL(u).pathname); } catch { /* skip */ }
       }
     }
   }
@@ -108,24 +125,15 @@ export const harvestStatic = async (
   }
 
   const have = new Map<string, string>(); // url -> local path
-  const nameCounts = new Map<string, number>(); // basename dedup: same-named JS from different URLs must not overwrite each other
+  const downloaded: { path: string; bytes: number }[] = [];
   const download = async (url: string): Promise<void> => {
     const base = basename(new URL(url).pathname);
     if (!base.endsWith(".js") || have.has(url)) return;
-    const n = (nameCounts.get(base) ?? 0) + 1;
-    nameCounts.set(base, n);
-    // Disambiguate collisions: second "main.js" lands as main-2.js —
-    // previously one silently overwrote the other (corpus loss).
-    const name = n === 1 ? base : `${base.replace(/\.js$/, "")}-${n}.js`;
-    const res = await fetchUrl(url, {
-      proxy: input.proxy,
-      cookie: input.cookie,
-      timeoutMs,
-      maxBytes: 32 * 1024 * 1024,
-    });
-    if (res.status !== 200 || res.bytes === 0 || res.body.trimStart().startsWith("<")) return;
+    const name = `${base.replace(/\.js$/, "")}-${createHash("sha256").update(url).digest("hex").slice(0, 16)}.js`;
+    const res = await request(url, 32 * 1024 * 1024);
+    if (res.status !== 200 || res.complete === false || res.bytes === 0 || res.body.trimStart().startsWith("<")) return;
     const local = join(jsDir, name);
-    await writeArtifact(input.outputRoot, `js/${name}`, res.body);
+    downloaded.push(await writeArtifact(input.outputRoot, `js/${name}`, res.body));
     have.set(url, local);
   };
 
@@ -179,23 +187,17 @@ export const harvestStatic = async (
   };
   consume(entry.body); // inline <script> API calls in the entry page
   for (const r of robotsRoutes) routes.add(r);
-  let files: string[] = [];
-  try {
-    files = await readdir(jsDir);
-  } catch {
-    files = [];
-  }
-  await pooled(files, concurrency, async (name) => {
+  await pooled([...have.values()], concurrency, async (local) => {
     let text: string;
     try {
-      text = await readFile(join(jsDir, name), "utf8");
+      text = await readFile(local, "utf8");
     } catch {
       return;
     }
     consume(text);
   });
 
-  const artifacts: { path: string; bytes: number }[] = [];
+  const artifacts: { path: string; bytes: number }[] = [...downloaded];
   const dump = async (name: string, lines: Iterable<string>) => {
     const body = [...lines].sort().join("\n");
     artifacts.push(await writeArtifact(input.outputRoot, name, body));
@@ -209,21 +211,12 @@ export const harvestStatic = async (
   );
 
   // Secret scan over the harvested JS corpus — pure local regex, zero cost.
-  const corpus = await readJsCorpus(jsDir);
+  const corpus = await Promise.all([...have.values()].map(async path => ({ path: basename(path), text: await readFile(path, "utf8") })));
   const { scanSecrets } = await import("../domain/secrets.js");
   const secretHits = scanSecrets(corpus);
-  if (secretHits.length > 0) {
-    artifacts.push(
-      await writeArtifact(
-        input.outputRoot,
-        "secrets.txt",
-        secretHits.map((h) => `${h.name}\t${h.file}\t${h.match}`).join("\n"),
-      ),
-    );
-  }
-
-  const touched = new Set<string>([base, ...seeds, ...allManifest]);
-  if (robots) touched.add(new URL("/robots.txt", base).href);
+  artifacts.push(await writeArtifact(root, "secrets.txt", secretHits.map(h => `${h.name}\t${h.file}\t${h.match}`).join("\n")));
+  await ownCorpus(root, "harvest-static", base, [...have.values()]);
+  artifacts.push(await writeOwnedManifest(root, "harvest_manifest.json", "harvest-static", base, artifacts, have.size));
 
   return {
     entryUrl: base,
@@ -241,12 +234,60 @@ export const harvestStatic = async (
   };
 };
 
+export const writeOwnedManifest = async (root: string, name: string, producer: string, target: string, artifacts: readonly { path: string; bytes: number }[], count: number) => {
+  const files = await Promise.all(artifacts.map(async a => ({ path: relative(root, a.path), bytes: a.bytes, sha256: createHash("sha256").update(await readFile(a.path)).digest("hex") })));
+  return writeArtifact(root, name, JSON.stringify({ producer, target: new URL(target).href, runId: executionRunId(), count, files }, null, 2));
+};
+
+/** Only the currently owned corpus is visible, without deleting user files. */
+export const ownCorpus = async (root: string, producer: string, target: string, files: readonly string[]): Promise<void> => {
+  await withRootLock(root, async () => {
+    type Ownership = { target: string; owners: Record<string, { path: string; sha256: string }[]> };
+    const old = await readJson<Ownership>(root, "js/corpus_manifest.json", () => ({ target, owners: {} }));
+    const owners = old.target === target ? old.owners : {};
+    owners[producer] = await Promise.all(files.map(async path => ({ path: basename(path), sha256: createHash("sha256").update(await readFile(path)).digest("hex") })));
+    await writeJson(root, "js/corpus_manifest.json", { target, owners });
+  });
+};
+
+export interface BrowserParamSample { method: string; url: string; body?: string | null; query?: string | null; sources?: string[]; action?: string; [key: string]: unknown }
+/** Replace one producer's samples, preserving and coalescing the others. */
+export const mergeBrowserSamples = async (root: string, target: string, producer: string, fresh: readonly BrowserParamSample[]) => withRootLock(root, async () => {
+  const owner = await readJson<{ target: string } | null>(root, "param_samples_manifest.json", () => null);
+  const old = await readJson<BrowserParamSample[]>(root, "param_samples.json", () => []);
+  if (!Array.isArray(old)) throw new Error("invalid param_samples.json");
+  const retained = owner && owner.target !== new URL(target).href ? [] : old.map(row => ({ ...row, sources: (row.sources ?? ["runtime"]).filter(s => s !== producer) })).filter(row => row.sources.length);
+  const merged = new Map<string, BrowserParamSample>();
+  for (const row of [...retained, ...fresh.map(row => ({ ...row, sources: [producer] }))]) {
+    const normalized = { ...row, method: row.method.toUpperCase(), url: new URL(row.url, target).href };
+    const key = JSON.stringify([normalized.method, normalized.url, normalized.body ?? null]);
+    const prev = merged.get(key);
+    merged.set(key, { ...normalized, sources: [...new Set([...(prev?.sources ?? []), ...(normalized.sources ?? [])])] });
+  }
+  const artifact = await writeArtifact(root, "param_samples.json", JSON.stringify([...merged.values()], null, 2));
+  await writeJson(root, "param_samples_manifest.json", { producer: "browser-samples", target: new URL(target).href, runId: executionRunId(), count: merged.size, sources: [...new Set([...merged.values()].flatMap(row => row.sources ?? []))] });
+  return artifact;
+});
+
 export const listJsFiles = async (jsDir: string): Promise<string[]> => {
   try {
+    const manifest = await readJson<{ owners: Record<string, { path: string; sha256: string }[]> } | null>(dirname(jsDir), "js/corpus_manifest.json", () => null);
+    if (manifest) {
+      const files = new Map(Object.values(manifest.owners).flat().map(row => [row.path, row.sha256]));
+      const out: string[] = [];
+      for (const [name, hash] of files) {
+        if (basename(name) !== name || !name.endsWith('.js')) throw new Error('invalid corpus path');
+        const path = join(jsDir, name);
+        if (createHash('sha256').update(await readFile(path)).digest('hex') !== hash) throw new Error('corpus integrity mismatch');
+        out.push(path);
+      }
+      return out;
+    }
     const names = await readdir(jsDir);
     return names.filter((n) => n.endsWith(".js")).map((n) => join(jsDir, n));
-  } catch {
-    return [];
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw err;
   }
 };
 

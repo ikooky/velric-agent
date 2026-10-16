@@ -1,4 +1,6 @@
-import { readFile, writeFile, mkdir, rename } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { readJson, writeJson, safePath, withRootLock as withLock } from "../core/storage.js";
+import { withExecution } from "../core/execution.js";
 import { join } from "node:path";
 import { AssetStore, type AssetNode } from "./graphs.js";
 
@@ -40,6 +42,10 @@ export interface TaskRecord {
   readonly targets: string[];
   /** Resolve targets from the AssetStore by this task's tag (two-phase). */
   readonly sourceTask?: string;
+  readonly sourceTasks?: string[];
+  runId?: string;
+  lease?: {owner:string;runId:string;pid:number;heartbeatAt:string;expiresAt:string};
+  checkpoint?: {targets:string[];inputHash?:string;completed:Record<string,{module:string;target:string;status:"ok"|"fail"|"skip";detail:string}>};
   status: TaskStatus;
   readonly createdAt: string;
   startedAt?: string;
@@ -49,43 +55,25 @@ export interface TaskRecord {
 }
 
 interface PlatformStore {
+  version?: number;
   projects: Record<string, ProjectRecord>;
   tasks: Record<string, TaskRecord>;
 }
 
 const STORE = "scan_platform.json";
 
-/** Per-root in-process mutex: every store mutation (create/run) serializes
- *  through a promise chain — concurrent runTask on different tasks can no
- *  longer interleave load→mutate→persist cycles and lose updates. */
-const locks = new Map<string, Promise<unknown>>();
-async function withLock<T>(root: string, fn: () => Promise<T>): Promise<T> {
-  const prev = locks.get(root) ?? Promise.resolve();
-  const run = prev.then(fn, fn);
-  locks.set(root, run.catch(() => {}));
-  return run;
-}
-
-const load = async (root: string): Promise<PlatformStore> => {
-  try { return JSON.parse(await readFile(join(root, STORE), "utf8")) as PlatformStore; }
-  catch (err) {
-    const notFound = (err as NodeJS.ErrnoException).code === "ENOENT";
-    if (notFound) return { projects: {}, tasks: {} };
-    // A corrupt store must NEVER fail-open into an empty object: the next
-    // persist() would overwrite and silently destroy every project/task.
-    // Quarantine the bad file and surface the loss.
-    try { await rename(join(root, STORE), join(root, STORE + ".corrupt")); } catch { /* nothing to quarantine */ }
-    return { projects: {}, tasks: {} };
-  }
-};
-
-const persist = async (root: string, st: PlatformStore): Promise<void> => {
-  await mkdir(root, { recursive: true });
-  // tmp name carries pid+random: two concurrent process instances writing a
-  // fixed .tmp name clobber each other mid-write.
-  const tmp = join(root, `${STORE}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`);
-  await writeFile(tmp, JSON.stringify(st, null, 2));
-  await rename(tmp, join(root, STORE));
+const load = (root:string):Promise<PlatformStore> => readJson(root,STORE,()=>({projects:{},tasks:{},version:0}),value=>{
+  const st=value as PlatformStore;
+  return !!st && !!st.projects && !!st.tasks && typeof st.projects==="object" && !Array.isArray(st.projects) && typeof st.tasks==="object" && !Array.isArray(st.tasks) &&
+    (st.version===undefined || Number.isSafeInteger(st.version) && st.version>=0) &&
+    Object.entries(st.projects).every(([id,p])=>p?.id===id && typeof p.name==="string" && Array.isArray(p.targets) && p.targets.every(t=>typeof t==="string")) &&
+    Object.entries(st.tasks).every(([id,t])=>t?.id===id && !!st.projects[t.projectId] && Array.isArray(t.targets) && Array.isArray(t.modules) &&
+      t.modules.every(m=>MODULES.includes(m as ModuleName)) && ["pending","running","done","failed"].includes(t.status) && Array.isArray(t.stageLog) &&
+      (!t.lease || typeof t.lease.owner==="string" && Number.isFinite(Date.parse(t.lease.expiresAt)) && Number.isFinite(Date.parse(t.lease.heartbeatAt))) &&
+      (!t.checkpoint || Array.isArray(t.checkpoint.targets) && !!t.checkpoint.completed && typeof t.checkpoint.completed==="object"));
+});
+const persist = async (root:string,st:PlatformStore):Promise<void> => {
+  st.version=(st.version??0)+1;await writeJson(root,STORE,st);
 };
 
 // ---------------- module registry ----------------
@@ -205,7 +193,7 @@ export const createProject = async (root: string, input: { name: string; targets
   });
 
 export const createTask = async (root: string, input: {
-  projectId: string; name: string; modules: string[]; targets?: string[]; sourceTask?: string;
+  projectId: string; name: string; modules: string[]; targets?: string[]; sourceTask?: string; sourceTasks?: string[];
 }): Promise<TaskRecord> =>
   withLock<TaskRecord>(root, async () => {
   const st = await load(root);
@@ -214,15 +202,16 @@ export const createTask = async (root: string, input: {
   const bad = input.modules.filter((m) => !MODULES.includes(m as ModuleName));
   if (bad.length > 0) throw new Error(`unknown modules: ${bad.join(",")} (valid: ${MODULES.join(",")})`);
   if (input.modules.length === 0) throw new Error("task needs at least one module");
-  if (input.sourceTask) {
-    const src = st.tasks[input.sourceTask];
-    if (!src) throw new Error(`unknown sourceTask: ${input.sourceTask}`);
+  const sourceTasks=[...new Set([...(input.sourceTasks??[]),...(input.sourceTask?[input.sourceTask]:[])])];
+  for(const id of sourceTasks){
+    const src=st.tasks[id]; if(!src)throw new Error(`unknown sourceTask: ${id}`);
+    if(src.projectId!==input.projectId)throw new Error("sourceTask must belong to the same project");
   }
-  const targets = input.sourceTask ? [] : [...new Set(input.targets ?? project.targets)];
-  if (!input.sourceTask && targets.length === 0) throw new Error("task needs targets or sourceTask");
+  const targets = sourceTasks.length ? [] : [...new Set(input.targets ?? project.targets)];
+  if (!sourceTasks.length && targets.length === 0) throw new Error("task needs targets or sourceTask");
   const rec: TaskRecord = {
     id: nextId("t", st), projectId: input.projectId, name: input.name,
-    modules: input.modules, targets, sourceTask: input.sourceTask,
+    modules: [...input.modules], targets, sourceTask: input.sourceTask, sourceTasks: sourceTasks.length ? sourceTasks : undefined,
     status: "pending", createdAt: new Date().toISOString(), stageLog: [],
   };
   st.tasks[rec.id] = rec;
@@ -233,85 +222,100 @@ export const createTask = async (root: string, input: {
 /** Resolve a task's effective targets: literal, or from the source task's
  *  assets in the shared AssetStore (two-phase chaining). */
 const resolveTargets = async (root: string, task: TaskRecord, st: PlatformStore): Promise<string[]> => {
-  if (!task.sourceTask) return task.targets;
-  const src = st.tasks[task.sourceTask];
-  if (!src) throw new Error(`unknown sourceTask: ${task.sourceTask}`);
-  if (src.status !== "done") throw new Error(`sourceTask ${task.sourceTask} is ${src.status}, must be done`);
-  const store = new AssetStore(root);
-  await store.load();
-  const tag = `task:${task.sourceTask}`;
-  return store.all().filter((a) => a.taskTag === tag && a.type === "subdomain").map((a) => a.value);
+  if(task.checkpoint)return [...task.checkpoint.targets];
+  const sources=task.sourceTasks??(task.sourceTask?[task.sourceTask]:[]);
+  if(!sources.length)return [...task.targets];
+  for(const id of sources){const src=st.tasks[id];if(!src)throw new Error(`unknown sourceTask: ${id}`);if(src.status!=="done")throw new Error(`sourceTask ${id} is ${src.status}, must be done`);}
+  const store=new AssetStore(root);await store.load();const tags=new Set(sources.map(id=>`task:${id}`));
+  return [...new Set(store.all().filter(a=>a.type==="subdomain" && [...(a.taskTags??[]),...(a.taskTag?[a.taskTag]:[])].some(tag=>tags.has(tag))).map(a=>a.value))];
 };
 
-/** Execute a task: modules in order, assets upserted with the task tag,
- *  per-module stage log, status transitions. Deterministic — same inputs,
- *  same module calls; network variance is captured in stageLog detail. */
-export const runTask = async (root: string, input: { taskId: string; proxy?: string; cookie?: string; timeoutMs?: number }): Promise<TaskRecord> =>
-  withLock<TaskRecord>(root, async () => {
-  const st = await load(root);
-  const task = st.tasks[input.taskId];
-  if (!task) throw new Error(`unknown task: ${input.taskId}`);
-  if (task.status === "running") throw new Error("task already running");
-  if (task.status === "done") return task; // idempotent re-run
-
-  const targets = await resolveTargets(root, task, st);
-  if (targets.length === 0) {
-    task.status = "failed";
-    task.stageLog.push({ module: "_resolve", status: "fail", detail: "no targets resolved (empty sourceTask result?)" });
-    await persist(root, st);
-    return task;
-  }
-
-  task.status = "running";
-  task.startedAt = new Date().toISOString();
-  task.stageLog = [];
-  await persist(root, st);
-
-  // Crash recovery: a mid-run throw (persist failure, OOM-adjacent module
-  // crash) previously stranded the task at "running" FOREVER — every re-run
-  // hit "task already running". Flip to failed on the way out.
-  try {
-    const store = new AssetStore(root);
-    await store.load();
-    const ctx: ModuleCtx = { root, proxy: input.proxy, cookie: input.cookie, timeoutMs: input.timeoutMs };
-    const tag = `task:${task.id}`;
-    let failed = 0;
-
-    for (const mod of task.modules) {
-      let ok = 0, fail = 0, skip = 0;
-      const details: string[] = [];
-      for (const target of targets) {
-        try {
-          const r = await runModule(mod as ModuleName, target, ctx);
-          if (r.detail.startsWith("skip:")) { skip += 1; details.push(`${target}: skip`); continue; }
-          for (const a of r.assets) {
-            store.upsert({ type: a.type as never, value: a.value, parent: a.parent, taskTag: tag, meta: a.meta });
-          }
-          ok += 1;
-          details.push(`${target}: ${r.detail}`);
-        } catch (e) {
-          fail += 1;
-          details.push(`${target}: ${String((e as Error).message ?? e).slice(0, 100)}`);
-        }
-      }
-      if (fail > 0 && ok === 0 && skip === 0) failed += 1;
-      task.stageLog.push({ module: mod, status: fail === 0 ? "ok" : ok + skip > 0 ? "skip" : "fail", detail: `ok=${ok} fail=${fail} skip=${skip} | ${details.slice(0, 3).join(" ; ").slice(0, 200)}` });
-      await store.save();
-      await persist(root, st);
-    }
-
-    task.status = failed === task.modules.length ? "failed" : "done";
-  } catch (err) {
-    task.status = "failed";
-    task.stageLog.push({ module: "_runner", status: "fail", detail: String((err as Error).message ?? err).slice(0, 200) });
-    task.finishedAt = new Date().toISOString();
-    await persist(root, st).catch(() => {});
-    throw err;
-  }
-  task.finishedAt = new Date().toISOString();
-  await persist(root, st).catch(() => {});
-  return task;
+/** Short claim/checkpoint transactions fence long-running workers by lease token. */
+export const runTask = async (root:string,input:{
+  taskId:string;proxy?:string;cookie?:string;timeoutMs?:number;runId?:string;leaseMs?:number;signal?:AbortSignal;
+  onCheckpoint?:(task:TaskRecord)=>Promise<void>|void;
+}):Promise<TaskRecord> => {
+  const leaseMs=Math.max(1000,input.leaseMs??30000);
+  if(!Number.isFinite(leaseMs)||leaseMs>3600000)throw new Error("invalid lease duration");
+  const owner=randomUUID();
+  const refresh=(task:TaskRecord):void=>{const now=Date.now();task.lease={owner,runId:task.runId!,pid:process.pid,heartbeatAt:new Date(now).toISOString(),expiresAt:new Date(now+leaseMs).toISOString()};};
+  const claimed=await withLock(root,async()=>{
+    const st=await load(root),task=st.tasks[input.taskId];
+    if(!task)throw new Error(`unknown task: ${input.taskId}`);
+    if(task.status==="done")return task;
+    if(task.status==="running" && task.lease && Date.parse(task.lease.expiresAt)>Date.now())throw new Error("task already running");
+    const targets=await resolveTargets(root,task,st);
+    const inputHash=createHash("sha256").update(JSON.stringify({modules:task.modules,targets,sourceTasks:task.sourceTasks??(task.sourceTask?[task.sourceTask]:[]),
+      credentialHash:createHash("sha256").update(input.cookie??"").digest("hex"),proxyHash:createHash("sha256").update(input.proxy??"").digest("hex")})).digest("hex");
+    if(task.checkpoint?.inputHash && task.checkpoint.inputHash!==inputHash)throw new Error("checkpoint input changed; use a new task");
+    if(task.runId && input.runId && task.runId!==input.runId)throw new Error("task runId mismatch");
+    task.checkpoint??={targets:[...targets],inputHash,completed:{}};
+    task.checkpoint.inputHash??=inputHash;
+    task.runId??=input.runId??randomUUID();
+    task.startedAt??=new Date().toISOString();delete task.finishedAt;
+    if(!targets.length){task.status="failed";delete task.lease;task.finishedAt=new Date().toISOString();task.stageLog=[{module:"_resolve",status:"fail",detail:"no targets resolved (empty sourceTask result?)"}];}
+    else {task.status="running";refresh(task);}
+    await persist(root,st);return task;
   });
+  if(claimed.status!=="running")return claimed;
+  const runId=claimed.runId!,targets=claimed.checkpoint!.targets;
+  const own=(st:PlatformStore):TaskRecord=>{
+    const task=st.tasks[input.taskId];
+    if(!task || task.status!=="running" || task.runId!==runId || task.lease?.owner!==owner)throw Object.assign(new Error("task lease lost"),{code:"lease_lost"});
+    return task;
+  };
+  const abort=new AbortController();const signal=input.signal?AbortSignal.any([input.signal,abort.signal]):abort.signal;
+  let heartbeatError:unknown;let pending=Promise.resolve();
+  const heartbeat=setInterval(()=>{
+    pending=pending.then(()=>withLock(root,async()=>{const st=await load(root),task=own(st);refresh(task);await persist(root,st);})).catch(error=>{heartbeatError=error;abort.abort(error);});
+  },Math.max(250,Math.floor(leaseMs/3)));
+  heartbeat.unref();
+  const assertActive=():void=>{if(heartbeatError)throw heartbeatError;if(signal.aborted)throw Object.assign(new Error("task cancelled"),{code:"cancelled"});};
+  const summarize=(task:TaskRecord):void=>{
+    task.stageLog=task.modules.flatMap((module,index)=>{
+      const rows=Object.entries(task.checkpoint!.completed).filter(([key])=>key.startsWith(`${index}:`)).map(([,row])=>row);
+      if(rows.length!==targets.length)return [];
+      const ok=rows.filter(x=>x.status==="ok").length,fail=rows.filter(x=>x.status==="fail").length,skip=rows.filter(x=>x.status==="skip").length;
+      return [{module,status:fail===0?"ok" as const:ok+skip>0?"skip" as const:"fail" as const,detail:`ok=${ok} fail=${fail} skip=${skip} | ${rows.slice(0,3).map(x=>`${x.target}: ${x.detail}`).join(" ; ").slice(0,200)}`}];
+    });
+  };
+  try {
+    for(let mi=0;mi<claimed.modules.length;mi++)for(let ti=0;ti<targets.length;ti++){
+      assertActive();const key=`${mi}:${ti}`,module=claimed.modules[mi]!,target=targets[ti]!;
+      const latest=await withLock(root,async()=>own(await load(root)));
+      if(latest.checkpoint!.completed[key])continue;
+      const artifactRoot=await safePath(root,`tasks/${input.taskId}/${createHash("sha256").update(runId).digest("hex")}/targets/${createHash("sha256").update(target).digest("hex")}/${mi}-${module}`);
+      let result:Awaited<ReturnType<typeof runModule>>={detail:"",assets:[]};let status:"ok"|"fail"|"skip"="ok";
+      try {
+        result=await withExecution({tool:`scan_platform:${module}`,runId,ledgerRoot:root,signal},()=>runModule(module as ModuleName,target,{root:artifactRoot,proxy:input.proxy,cookie:input.cookie,timeoutMs:input.timeoutMs}));
+        if(result.detail.startsWith("skip:"))status="skip";
+      }catch(error){assertActive();status="fail";result={detail:String((error as Error).message??error).slice(0,200),assets:[]};}
+      assertActive();
+      const snapshot=await withLock(root,async()=>{
+        const st=await load(root),task=own(st),assets=new AssetStore(root);await assets.load();
+        for(const asset of result.assets)assets.upsert({type:asset.type as never,value:asset.value,parent:asset.parent,taskTag:`task:${task.id}`,meta:asset.meta});
+        if(result.assets.length)await assets.save();
+        task.checkpoint!.completed[key]={module,target,status,detail:result.detail};summarize(task);refresh(task);await persist(root,st);return task;
+      });
+      await input.onCheckpoint?.(structuredClone(snapshot));
+    }
+    clearInterval(heartbeat);await pending;assertActive();
+    return await withLock(root,async()=>{
+      const st=await load(root),task=own(st);summarize(task);
+      task.status=task.stageLog.every(x=>x.status==="fail")?"failed":"done";task.finishedAt=new Date().toISOString();delete task.lease;
+      await persist(root,st);return task;
+    });
+  } catch(error) {
+    clearInterval(heartbeat);await pending;
+    // Never overwrite a successor's ownership or swallow a failed terminal commit.
+    await withLock(root,async()=>{
+      const st=await load(root),task=st.tasks[input.taskId];if(task?.lease?.owner!==owner)return;
+      task.status="failed";task.finishedAt=new Date().toISOString();delete task.lease;
+      task.stageLog.push({module:"_runner",status:"fail",detail:String((error as Error).message??error).slice(0,200)});await persist(root,st);
+    });
+    throw error;
+  } finally {clearInterval(heartbeat);}
+};
 
 // ---------------- local retrieval (ScopeSentry list/count parity) ----------------
 
@@ -327,7 +331,7 @@ export const listAssets = async (root: string, q: AssetQuery, page = 1, pageSize
   await store.load();
   let items = store.all();
   if (q.type) items = items.filter((a) => a.type === q.type);
-  if (q.taskTag) items = items.filter((a) => a.taskTag === q.taskTag);
+  if (q.taskTag) items = items.filter((a) => a.taskTag === q.taskTag || a.taskTags?.includes(q.taskTag!));
   if (q.valuePrefix) items = items.filter((a) => a.value.toLowerCase().startsWith(q.valuePrefix!.toLowerCase()));
   if (q.valueRegex) {
     // Caller-supplied pattern: cap length and compile defensively — an

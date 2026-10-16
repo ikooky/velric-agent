@@ -20,7 +20,7 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `sourcemaps` — 生产 .map 泄漏检测
 - `wayback` — 历史端点回收
 - `url_refine` — URL 池零请求精炼: action=dedupe(uro 式清洗) / classify(gf 式六类攻击候选分流)
-- `dir-fuzz` — ffuf 式词表内容发现(FUZZ 关键字+soft-404 自动校准+扩展名变异+递归)
+- `dir-fuzz` — 词表内容发现(FUZZ 关键字+soft-404 自动校准+扩展名变异+递归)
 - `screenshot` — gowitness 式截图取证(PNG+sha256+同模板聚类)
 
 **运行时捕获**
@@ -79,7 +79,7 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `--proxy`(http/socks5)/ `--proxy-pool FILE`(轮换+失败剔除)/ `--rps N`(全局限速)
 - 外部请求默认 3 次重试
 
-## 工具面分层 (REA 式能力门控)
+## 工具面分层（能力门控）
 
 目录完整、注册按条件 —— 67 个契约始终在 `ALL_CONTRACTS`，按环境变量裁剪注册面：
 
@@ -87,7 +87,7 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - **`VELRIC_PROFILE=lean`**：63 个 —— 隐藏 4 个内部簿记工具(`asset_graph`/`exploration_graph`/`traffic_query`/`finding_retest`，audience=internal，由 auto 管道与 hunt 循环在进程内消费)
 - **`VELRIC_TOOLS=a,b,c`**：显式白名单，覆盖两档 profile
 
-方法论引导不占工具位：workflow 全文在 MCP resource `velric://workflow-guide` 与 prompt `hunt-driver`（`workflow_guide` 工具已退位）。
+方法论引导不占工具位：workflow 全文在 MCP resource `velric://workflow-guide` 与 prompt `hunt-driver`。
 
 
 ## 安装

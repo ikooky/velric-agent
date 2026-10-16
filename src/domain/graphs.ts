@@ -1,6 +1,5 @@
-import { readFile, writeFile, mkdir, rename } from "node:fs/promises";
-import { join } from "node:path";
 import { createHash } from "node:crypto";
+import { assertHash, putBlob, readBlob, readJson, writeJson, withRootLock } from "../core/storage.js";
 
 /** Dual-graph persistence (velric platform layer, deterministic file-based
  *  port): the asset graph is a global shared truth store (root_domain →
@@ -19,11 +18,13 @@ export interface AssetNode {
   readonly value: string;
   parent?: string;
   taskTag?: string;
+  taskTags?: string[];
   readonly firstSeen: string;
   meta?: Record<string, unknown>;
 }
 
 export interface AssetGraph {
+  version?: number;
   assets: Record<string, AssetNode>;
 }
 
@@ -32,27 +33,25 @@ const assetKey = (type: AssetType, value: string): string =>
 
 export class AssetStore {
   private graph: AssetGraph = { assets: {} };
-  private readonly file: string;
-
-  constructor(root: string) { this.file = join(root, "asset_graph.json"); }
-
-  async load(): Promise<void> {
-    try { this.graph = JSON.parse(await readFile(this.file, "utf8")) as AssetGraph; }
-    catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-        // Quarantine a corrupt file instead of fail-open-reset: the next
-        // save() would otherwise overwrite and lose the whole asset graph.
-        try { await rename(this.file, this.file + ".corrupt"); } catch { /* gone */ }
-      }
-      this.graph = { assets: {} };
-    }
+  constructor(private readonly root: string) {}
+  private async read(): Promise<AssetGraph> {
+    return readJson(this.root,"asset_graph.json",()=>({assets:{},version:0}),value=>{
+      const g=value as AssetGraph;
+      return !!g && !!g.assets && typeof g.assets==="object" && !Array.isArray(g.assets) &&
+        (g.version===undefined || Number.isSafeInteger(g.version) && g.version>=0) &&
+        Object.entries(g.assets).every(([key,a])=>a?.key===key && typeof a.value==="string" &&
+          ["root_domain","subdomain","ip","service","app","endpoint"].includes(a.type) && typeof a.firstSeen==="string" &&
+          (a.taskTags===undefined || Array.isArray(a.taskTags) && a.taskTags.every(t=>typeof t==="string")));
+    });
   }
-
+  async load(): Promise<void> { this.graph=await this.read(); }
   async save(): Promise<void> {
-    await mkdir(join(this.file, ".."), { recursive: true });
-    const tmp = `${this.file}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`;
-    await writeFile(tmp, JSON.stringify(this.graph, null, 2));
-    await rename(tmp, this.file);
+    await withRootLock(this.root,async()=>{
+      const disk=await this.read();
+      if((disk.version??0)!==(this.graph.version??0))throw Object.assign(new Error("asset graph version conflict"),{code:"version_conflict"});
+      const next={...this.graph,version:(disk.version??0)+1};
+      await writeJson(this.root,"asset_graph.json",next); this.graph=next;
+    });
   }
 
   /** Read-only snapshot for retrieval layers (scan platform list/count). */
@@ -63,12 +62,14 @@ export class AssetStore {
     const existing = this.graph.assets[key];
     if (existing) {
       if (input.meta) existing.meta = { ...(existing.meta ?? {}), ...input.meta };
-      if (input.taskTag && existing.taskTag !== input.taskTag) existing.taskTag = input.taskTag;
+      const tags=[...new Set([...(existing.taskTags??[]),...(existing.taskTag?[existing.taskTag]:[]),...(input.taskTag?[input.taskTag]:[])])];
+      if(tags.length)existing.taskTags=tags;
+      if(!existing.taskTag && input.taskTag)existing.taskTag=input.taskTag;
       return existing;
     }
     const node: AssetNode = {
       key, type: input.type, value: input.value, parent: input.parent,
-      taskTag: input.taskTag, firstSeen: new Date().toISOString(), meta: input.meta,
+      taskTag: input.taskTag, taskTags: input.taskTag ? [input.taskTag] : [], firstSeen: new Date().toISOString(), meta: input.meta,
     };
     this.graph.assets[key] = node;
     return node;
@@ -137,6 +138,8 @@ export interface ExpNode {
   state: NodeState;
   payload?: Record<string, unknown>;
   ts: string;
+  version?: number;
+  touchVersion?: number;
 }
 
 export interface ExpEdge {
@@ -155,35 +158,36 @@ export class ExplorationGraph {
   private edges: ExpEdge[] = [];
   private anchors: Anchor[] = [];
   private counter = 0;
-  private readonly file: string;
-
-  constructor(root: string) { this.file = join(root, "exploration_graph.json"); }
-
-  async load(): Promise<void> {
-    try {
-      const raw = JSON.parse(await readFile(this.file, "utf8")) as { nodes: ExpNode[]; edges: ExpEdge[]; anchors: Anchor[] };
-      this.nodes = new Map(raw.nodes.map((n) => [n.id, n]));
-      this.edges = raw.edges ?? [];
-      this.anchors = raw.anchors ?? [];
-      this.counter = raw.nodes.reduce((mx, n) => Math.max(mx, Number(n.id.replace(/^n/, "")) || 0), 0);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-        try { await rename(this.file, this.file + ".corrupt"); } catch { /* gone */ }
-      }
-      /* fresh */
-    }
+  private version = 0;
+  constructor(private readonly root: string) {}
+  private async read(): Promise<{nodes:ExpNode[];edges:ExpEdge[];anchors:Anchor[];version?:number;counter?:number}> {
+    return readJson(this.root,"exploration_graph.json",()=>({nodes:[],edges:[],anchors:[],version:0}),value=>{
+      const g=value as {nodes:ExpNode[];edges:ExpEdge[];anchors:Anchor[];version?:number;counter?:number};
+      if(!g || !Array.isArray(g.nodes) || !Array.isArray(g.edges) || !Array.isArray(g.anchors) ||
+        g.version!==undefined && (!Number.isSafeInteger(g.version)||g.version<0))return false;
+      const ids=new Set(g.nodes.map(n=>n?.id));
+      return ids.size===g.nodes.length && g.nodes.every(n=>n && typeof n.id==="string" && typeof n.summary==="string" &&
+        ["goal","intent","fact","finding","hint"].includes(n.kind) && ["open","met","dead","pending"].includes(n.state) && typeof n.ts==="string") &&
+        g.edges.every(e=>ids.has(e.from)&&ids.has(e.to)&&["spawns","derived_from","yields","proves"].includes(e.rel)) &&
+        g.anchors.every(a=>ids.has(a.nodeId)&&typeof a.assetKey==="string");
+    });
   }
-
+  async load(): Promise<void> {
+    const raw=await this.read(); this.nodes=new Map(raw.nodes.map(n=>[n.id,n])); this.edges=raw.edges;this.anchors=raw.anchors;
+    this.version=raw.version??0;
+    this.counter=Math.max(raw.counter??0,...raw.nodes.map(n=>Number(n.id.replace(/^n/,""))||0),0);
+  }
   async save(): Promise<void> {
-    await mkdir(join(this.file, ".."), { recursive: true });
-    const tmp = `${this.file}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`;
-    await writeFile(tmp, JSON.stringify({ nodes: [...this.nodes.values()], edges: this.edges, anchors: this.anchors }, null, 2));
-    await rename(tmp, this.file);
+    await withRootLock(this.root,async()=>{
+      const disk=await this.read();if((disk.version??0)!==this.version)throw Object.assign(new Error("exploration graph version conflict"),{code:"version_conflict"});
+      const next=this.version+1;
+      await writeJson(this.root,"exploration_graph.json",{nodes:[...this.nodes.values()],edges:this.edges,anchors:this.anchors,counter:this.counter,version:next});this.version=next;
+    });
   }
 
   addNode(kind: NodeKind, summary: string, payload?: Record<string, unknown>): ExpNode {
     const id = `n${++this.counter}`;
-    const node: ExpNode = { id, kind, summary, state: kind === "goal" ? "open" : "pending", payload, ts: new Date().toISOString() };
+    const node: ExpNode = { id, kind, summary, state: kind === "goal" ? "open" : "pending", payload, version:0, touchVersion:0, ts: new Date().toISOString() };
     this.nodes.set(id, node);
     return node;
   }
@@ -198,11 +202,14 @@ export class ExplorationGraph {
 
   setState(id: string, state: NodeState): void {
     const n = this.nodes.get(id);
-    if (n) n.state = state;
+    if (n && n.state!==state) { n.state=state; n.version=(n.version??0)+1; }
   }
+
+  touch(id: string): void { const n=this.nodes.get(id); if(n)n.touchVersion=(n.touchVersion??0)+1; }
 
   /** Lineage: upstream parents and downstream yields of a node. */
   lineage(id: string): { parents: string[]; yields: string[] } {
+    this.touch(id);
     return {
       parents: this.edges.filter((e) => e.to === id).map((e) => e.from),
       yields: this.edges.filter((e) => e.from === id && (e.rel === "yields" || e.rel === "proves")).map((e) => e.to),
@@ -211,7 +218,8 @@ export class ExplorationGraph {
 
   /** Which assets has an exploration direction touched (anchor-driven). */
   assetsOf(nodeId: string): string[] {
-    return this.anchors.filter((a) => a.assetKey && isDownstream(this, nodeId, a.nodeId)).map((a) => a.assetKey);
+    this.touch(nodeId);
+    return [...new Set(this.anchors.filter((a) => a.assetKey && isDownstream(this, nodeId, a.nodeId)).map((a) => a.assetKey))];
   }
 
   overview(): { goals: number; intents: number; facts: number; findings: number; hints: number; anchors: number } {
@@ -252,38 +260,42 @@ export class EvidenceStore {
   }
 
   async load(): Promise<void> {
-    try { this.index = JSON.parse(await readFile(join(this.root, "evidence_index.json"), "utf8")); }
-    catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-        try { await rename(join(this.root, "evidence_index.json"), join(this.root, "evidence_index.json.corrupt")); } catch { /* gone */ }
-      }
-      this.index = {};
-    }
+    this.index = await readJson(this.root, "evidence_index.json", () => ({}), (value) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+      return Object.entries(value).every(([hash, blob]) => /^[a-f0-9]{64}$/.test(hash) && blob &&
+        blob.hash === hash && Number.isSafeInteger(blob.bytes) && blob.bytes >= 0 && typeof blob.storedAt === "string");
+    });
   }
 
-  async save(): Promise<void> {
-    await mkdir(this.root, { recursive: true });
-    const tmp = join(this.root, `evidence_index.json.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`);
-    await writeFile(tmp, JSON.stringify(this.index, null, 2));
-    await rename(tmp, join(this.root, "evidence_index.json"));
-  }
+  /** put commits its index in the same transaction; save refreshes a detached view. */
+  async save(): Promise<void> { await withRootLock(this.root, () => this.load()); }
 
-  /** Store raw bytes, sha256-addressed, deduped across findings. */
   async put(data: Buffer, tag?: string): Promise<EvidenceBlob> {
-    const hash = createHash("sha256").update(data).digest("hex");
-    const existing = this.index[hash];
-    if (existing) return existing;
-    const dir = join(this.root, "blobs", hash.slice(0, 2));
-    await mkdir(dir, { recursive: true });
-    await writeFile(join(dir, hash + ".bin"), data);
-    const blob: EvidenceBlob = { hash, bytes: data.length, storedAt: new Date().toISOString(), tag };
-    this.index[hash] = blob;
-    return blob;
+    return withRootLock(this.root, async () => {
+      await this.load();
+      const hash = createHash("sha256").update(data).digest("hex");
+      const previous = this.index[hash];
+      const bytes = await readBlob(this.root, hash);
+      if (previous && (!bytes || bytes.length !== previous.bytes)) {
+        throw Object.assign(new Error("indexed evidence length mismatch or missing blob"), {code:"evidence_integrity"});
+      }
+      await putBlob(this.root, data);
+      const blob: EvidenceBlob = previous ?? { hash, bytes: data.length, storedAt: new Date().toISOString(), tag };
+      this.index[hash] = blob;
+      await writeJson(this.root, "evidence_index.json", this.index);
+      return blob;
+    });
   }
 
   async get(hash: string): Promise<Buffer | null> {
-    try { return await readFile(join(this.root, "blobs", hash.slice(0, 2), hash + ".bin")); }
-    catch { return null; }
+    assertHash(hash);
+    await this.load();
+    const data = await readBlob(this.root, hash);
+    const entry = this.index[hash];
+    if (entry && (!data || data.length !== entry.bytes)) {
+      throw Object.assign(new Error("indexed evidence length mismatch or missing blob"), {code:"evidence_integrity"});
+    }
+    return data;
   }
 
   entries(): EvidenceBlob[] { return Object.values(this.index); }

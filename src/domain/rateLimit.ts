@@ -5,73 +5,44 @@ import { join } from "node:path";
  *  Shared process-wide so every recon module slows down together when the
  *  target pushes back. */
 
+interface Waiter { resolve: () => void; reject: (e: Error) => void; cleanup: () => void }
+interface Bucket { interval: number; lastAt: number; queue: Waiter[]; timer?: ReturnType<typeof setTimeout> }
 const buckets = new Map<string, Bucket>();
-
-// Idle-prune sweeper: the drain-path prune only fires when NEW acquires
-// queue up, so a host probed once leaks its bucket forever. A 60s sweep
-// keeps the map bounded without timers per bucket.
-if (typeof setInterval === "function" && !(globalThis as { __velricRateSweep?: boolean }).__velricRateSweep) {
-  (globalThis as { __velricRateSweep?: boolean }).__velricRateSweep = true;
-  const sweep = setInterval((): void => {
-    const now = Date.now();
-    for (const [k, b] of buckets) {
-      if (b.queue.length === 0 && !b.draining && now - b.lastAt > 60000) buckets.delete(k);
-    }
-  }, 60000);
-  sweep.unref?.();
-}
-
-interface Bucket {
-  readonly interval: number;
-  lastAt: number;
-  queue: Array<() => void>;
-  draining: boolean;
-}
-
-/** Per-key min-interval gate. Single scheduled timer per bucket guarantees the
- *  configured interval is enforced even under concurrent acquire() bursts
- *  (previously each acquire scheduled its own drain, letting two waiters
- *  release back-to-back in one tick). */
-export interface RateLimitOptions { rps?: number }
-
-export const acquire = (key: string, limit: number | { rps?: number }): { promise: Promise<void>; cancel: () => void } => {
-  const intervalMs = typeof limit === "number" ? limit : 1000 / Math.max(limit.rps ?? 0, 0.001);
+export interface RateLimitOptions { rps?: number; signal?: AbortSignal }
+const abortError = (): Error => Object.assign(new Error("Rate-limit acquisition cancelled"), { name: "AbortError" });
+const schedule = (key: string, b: Bucket): void => {
+  if (b.timer) clearTimeout(b.timer);
+  b.timer = undefined;
+  if (!b.queue.length) return;
+  const wait = b.lastAt + b.interval - Date.now();
+  if (wait > 0) { b.timer = setTimeout(() => schedule(key, b), wait); return; }
+  const next = b.queue.shift()!;
+  b.lastAt = Date.now(); next.cleanup(); next.resolve();
+  schedule(key, b);
+};
+export const acquire = (key: string, limit: number | RateLimitOptions): { promise: Promise<void>; cancel: () => void } => {
+  const interval = typeof limit === "number" ? Math.max(0, limit) : (limit.rps && limit.rps > 0 ? 1000 / limit.rps : 0);
   let b = buckets.get(key);
-  if (!b) { b = { interval: intervalMs, lastAt: 0, queue: [], draining: false }; buckets.set(key, b); }
-  const bucket = b;
-  let cancelled = false;
-  const promise = new Promise<void>((resolve) => {
-    const tryRun = (): void => {
-      if (cancelled) { resolve(); return; }
-      const now = Date.now();
-      if (now - bucket.lastAt >= bucket.interval) {
-        bucket.lastAt = now;
-        resolve();
-        return;
-      }
-      bucket.queue.push(resolve);
-      if (!bucket.draining) {
-        bucket.draining = true;
-        const drain = (): void => {
-          bucket.draining = false;
-          const next = bucket.queue.shift();
-          if (next) {
-            bucket.lastAt = Date.now();
-            next();
-            if (bucket.queue.length > 0) {
-              bucket.draining = true;
-              setTimeout(drain, bucket.interval);
-            }
-          }
-          if (bucket.queue.length === 0 && Date.now() - bucket.lastAt > 60000) buckets.delete(key); // idle prune
-        };
-        const wait = bucket.interval - (Date.now() - bucket.lastAt);
-        setTimeout(drain, Math.max(wait, 0));
-      }
-    };
-    tryRun();
+  if (!b) {
+    for (const [k, idle] of buckets) if (!idle.queue.length && Date.now() - idle.lastAt > 60000) buckets.delete(k);
+    b = { interval, lastAt: -Infinity, queue: [] }; buckets.set(key, b);
+  }
+  b.interval = interval;
+  const bucket = b; const signal = typeof limit === "number" ? undefined : limit.signal;
+  let waiter: Waiter | undefined;
+  const cancel = (): void => {
+    if (!waiter) return;
+    const i = bucket.queue.indexOf(waiter);
+    if (i < 0) return;
+    bucket.queue.splice(i, 1); waiter.cleanup(); waiter.reject(abortError()); schedule(key, bucket);
+  };
+  const promise = new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) { reject(abortError()); return; }
+    waiter = { resolve, reject, cleanup: () => signal?.removeEventListener("abort", cancel) };
+    signal?.addEventListener("abort", cancel, { once: true });
+    bucket.queue.push(waiter); schedule(key, bucket);
   });
-  return { promise, cancel: () => { cancelled = true; } };
+  return { promise, cancel };
 };
 
 export const throttledMap = async <T>(

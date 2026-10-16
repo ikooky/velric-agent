@@ -159,7 +159,7 @@ export const runNucleiLite = async (input: NucleiLiteInput): Promise<NucleiLiteR
         const calibRegexOk = job.tpl.match.regex ? job.tpl.match.regex.some((re) => new RegExp(re, "i").test(calib.body)) : false;
         // Normalize away per-request tokens (hex ids, base64 nonces) before
         // comparing — a catch-all SPA shell whose body differs ONLY by an
-        // embedded nonce previously bypassed the calibration drop.
+        // embedded nonce must not bypass the calibration drop.
         const norm = (t: string): string => t.replace(/\b[0-9a-f]{16,}\b/g, "N").replace(/\b[A-Za-z0-9+/=]{24,}\b/g, "B");
         const calibSame = calibStatusOk && norm(calib.body.trim()) === norm(r.body.trim()) && (calibWordsOk || calibRegexOk);
         if (calibSame) continue;

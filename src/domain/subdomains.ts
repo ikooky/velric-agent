@@ -1,5 +1,6 @@
 import { fetchUrl } from "../adapters/http.js";
-import { resolveWith } from "./dnsResolve.js";
+import { resolveWith, type ResolveResult } from "./dnsResolve.js";
+import { randomUUID } from "node:crypto";
 
 /** Subdomain enumeration: certificate transparency (crt.sh) + CNAME chain
  *  walking + small high-frequency wordlist brute force. All deterministic,
@@ -19,7 +20,7 @@ export interface SubdomainResult {
   readonly crtSh: string[];
   readonly cnameChain: { from: string; to: string }[];
   readonly bruteFound: { host: string; ips: string[] }[];
-  /** True when a random label resolved — wildcard DNS; brute results dropped. */
+  /** Multiple random labels resolve; only matching wildcard answers are filtered. */
   readonly wildcardDns: boolean;
   /** dangling-CNAME takeover candidates (service fingerprint matches). */
   readonly takeovers?: { host: string; cname: string; service: string; note: string }[];
@@ -112,19 +113,34 @@ const crtShQuery = async (domain: string, timeoutMs?: number, proxy?: string): P
   }
 };
 
-interface DnsAnswer { type: string; value: string }
-
-const resolve = (host: string, resolvers?: string[]): Promise<{ a: string[]; cname: string[] }> =>
+const resolve = (host: string, resolvers?: string[]): Promise<ResolveResult> =>
   resolveWith(host, resolvers);
+
+export const validDiscoveryHost = (host: string): boolean => host.length <= 253 && host.split(".").every(label => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label));
+const dnsValues = (answer: ResolveResult): string[] => [
+  ...answer.a.map(ip => `A:${ip}`), ...(answer.aaaa ?? []).map(ip => `AAAA:${ip}`),
+  ...answer.cname.map(name => `CNAME:${name.toLowerCase().replace(/\.$/, "")}`),
+];
+export interface WildcardCalibration { readonly detected: boolean; readonly values: ReadonlySet<string> }
+export const calibrateWildcard = async (domain: string, resolvers?: readonly string[]): Promise<WildcardCalibration> => {
+  const answers = await Promise.all(Array.from({ length: 3 }, () => resolveWith(`zz-${randomUUID()}.${domain}`, resolvers)));
+  const successful = answers.filter(a => !a.errors && dnsValues(a).length > 0);
+  return { detected: successful.length >= 2, values: new Set(successful.flatMap(dnsValues)) };
+};
+export const matchesWildcard = (answer: ResolveResult, baseline: WildcardCalibration): boolean => {
+  const values = dnsValues(answer);
+  return baseline.detected && !answer.errors && values.length > 0 && values.every(v => baseline.values.has(v));
+};
 
 export const discoverSubdomains = async (
   input: SubdomainInput,
 ): Promise<SubdomainResult> => {
   const domain = input.domain.replace(/^\*\*\./, "").replace(/^\*\./, "").trim().toLowerCase();
+  if (!validDiscoveryHost(domain)) throw new Error("invalid discovery domain");
   await mkdir(input.outputRoot, { recursive: true });
 
   // 1) Certificate transparency
-  const crtSh = await crtShQuery(domain, input.timeoutMs, input.proxy);
+  const crtSh = [...new Set((await crtShQuery(domain, input.timeoutMs, input.proxy)).map(h => h.replace(/^\*\./, "").toLowerCase()).filter(h => validDiscoveryHost(h) && (h === domain || h.endsWith(`.${domain}`))))];
 
   // 2) CNAME chain from the apex + www
   const cnameChain: { from: string; to: string }[] = [];
@@ -150,16 +166,21 @@ export const discoverSubdomains = async (
   //  and drop brute results entirely instead of ~100 phantom hosts.
   const wordlist = input.wordlist ?? SUBDOMAIN_WORDLIST;
   const bruteFound: { host: string; ips: string[] }[] = [];
-  const wildcardProbe = `${Math.random().toString(36).slice(2, 10)}.${domain}`;
-  const wildcardHit = (await resolve(wildcardProbe, input.resolvers)).a.length > 0;
-  if (!wildcardHit) {
-    const queue = [...wordlist];
+  const wildcard = await calibrateWildcard(domain, input.resolvers);
+  {
+    const queue = [...wordlist].filter(w => typeof w === "string" && validDiscoveryHost(w)).slice(0, 2000);
     const worker = async (): Promise<void> => {
       while (queue.length > 0) {
         const w = queue.shift()!;
         const host = `${w}.${domain}`;
-        const { a } = await resolve(host, input.resolvers);
-        if (a.length > 0) bruteFound.push({ host, ips: a });
+        const answer = await resolve(host, input.resolvers);
+        if (matchesWildcard(answer, wildcard)) continue;
+        const ips = [...answer.a, ...(answer.aaaa ?? [])];
+        if (ips.length > 0 || answer.cname.length > 0) bruteFound.push({ host, ips });
+        for (const target of answer.cname) {
+          const to = target.toLowerCase().replace(/\.$/, "");
+          if (!cnameChain.some(edge => edge.from === host && edge.to === to)) cnameChain.push({ from: host, to });
+        }
       }
     };
     await Promise.all(Array.from({ length: 12 }, worker));
@@ -180,7 +201,7 @@ export const discoverSubdomains = async (
     crtSh: crtSh.sort(),
     cnameChain,
     bruteFound: bruteFound.sort((x, y) => x.host.localeCompare(y.host)),
-    wildcardDns: wildcardHit,
+    wildcardDns: wildcard.detected,
     takeovers,
     total,
     artifacts: [{ path, bytes: Buffer.byteLength(body) }],

@@ -1,109 +1,55 @@
-import { writeFile, mkdir } from "node:fs/promises";
-import { join } from "node:path";
-import { randomBytes } from "node:crypto";
-import { connect as tlsConnect } from "node:tls";
-import { connect as netConnect } from "node:net";
-
-/** WebSocket cross-origin upgrade probe (CSWSH prescreen). The undici
- *  browser-style WebSocket ignores a headers option and undici's Client
- *  rejects upgrade handshakes, so the hostile Origin is delivered via a
- *  RAW socket handshake — the only transport that actually puts the
- *  header on the wire. */
+import { createHash, randomBytes } from "node:crypto";
+import { openTunnel, readSocket } from "../adapters/rawTunnel.js";
+import { writeArtifact } from "../adapters/artifacts.js";
+import { executionRunId, executionSignal, recordReceipt } from "../core/execution.js";
+import { principalHash } from "../core/credentials.js";
 
 export interface WsOriginInput {
-  readonly url: string;
-  readonly outputRoot: string;
-  readonly headers?: Record<string, string>;
-  readonly timeoutMs?: number;
+  readonly url: string; readonly outputRoot: string; readonly headers?: Record<string, string>;
+  readonly timeoutMs?: number; readonly proxy?: string; readonly rejectUnauthorized?: boolean; readonly signal?: AbortSignal;
 }
-
+interface UpgradeResult { upgraded: boolean; status: number; err: string | null; complete: boolean; requestHash?: string; responseHash?: string; receiptId?: string }
 export interface WsOriginResult {
-  readonly url: string;
-  readonly vulnerable: boolean;
-  readonly authCarried: "query-param" | "none-visible";
-  readonly variants: { origin: string | null; upgraded: boolean; status: number; err: string | null }[];
+  readonly url: string; readonly vulnerable: boolean;
+  readonly crossOriginAccepted: boolean; readonly outcome: "candidate" | "not-accepted" | "inconclusive";
+  readonly authCarried: "query-param" | "header" | "none-visible";
+  readonly variants: ({ origin: string | null } & UpgradeResult)[];
   readonly artifacts: { path: string; bytes: number }[];
 }
-
-const tryUpgrade = (
-  url: string,
-  origin: string | null,
-  timeoutMs: number,
-  extraHeaders: Record<string, string>,
-): Promise<{ upgraded: boolean; status: number; err: string | null }> =>
-  new Promise((resolve) => {
-    let u: URL;
-    try { u = new URL(url); } catch { resolve({ upgraded: false, status: 0, err: "bad-url" }); return; }
-    const secure = u.protocol === "wss:" || u.protocol === "https:";
-    const port = Number(u.port) || (secure ? 443 : 80);
-    const key = randomBytes(16).toString("base64");
-    const reqLines = [
-      `GET ${u.pathname}${u.search} HTTP/1.1`,
-      `Host: ${u.host}`,
-      "Upgrade: websocket",
-      "Connection: Upgrade",
-      `Sec-WebSocket-Key: ${key}`,
-      "Sec-WebSocket-Version: 13",
-      ...(origin !== null ? [`Origin: ${origin}`] : []),
-      // CRLF injection guard: header lines are hand-composed onto the wire.
-      ...Object.entries(extraHeaders)
-        .filter(([k, v]) => !/[\r\n]/.test(k) && !/[\r\n]/.test(v) && !/^\s/.test(k))
-        .map(([k, v]) => `${k}: ${v}`),
-      "",
-      "",
-    ];
-    const raw = reqLines.join("\r\n");
-
-    let settled = false;
-    const done = (r: { upgraded: boolean; status: number; err: string | null }): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      try { sock.destroy(); } catch { /* gone */ }
-      resolve(r);
-    };
-    const timer = setTimeout(() => done({ upgraded: false, status: 0, err: "timeout" }), timeoutMs);
-
-    const onData = (chunk: Buffer): void => {
-      const head = chunk.toString("latin1").split("\r\n")[0] ?? "";
-      const status = Number(head.split(" ")[1] ?? 0);
-      if (status === 101) done({ upgraded: true, status, err: null });
-      else done({ upgraded: false, status, err: null });
-    };
-
-    let sock: import("node:net").Socket;
-    if (secure) {
-      sock = tlsConnect({ host: u.hostname, port, rejectUnauthorized: false, servername: u.hostname }, () => { sock.write(raw); });
-    } else {
-      sock = netConnect({ host: u.hostname, port }, () => { sock.write(raw); });
-    }
-    sock.once("data", onData);
-    sock.once("error", (e: Error) => done({ upgraded: false, status: 0, err: String(e.message).slice(0, 120) }));
-  });
-
+const hash = (b: string | Buffer): string => createHash("sha256").update(b).digest("hex");
+const tryUpgrade = async (input: WsOriginInput, origin: string | null): Promise<UpgradeResult> => {
+  const u = new URL(input.url); const secure = ["wss:", "https:"].includes(u.protocol); const key = randomBytes(16).toString("base64");
+  const headers: Record<string, string> = {};
+  for (const [name, value] of Object.entries(input.headers ?? {})) {
+    if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name) || /[\r\n]/.test(value)) throw new Error("invalid WebSocket header");
+    if (!/^(host|connection|upgrade|origin|sec-websocket-.*|proxy-authorization)$/i.test(name)) headers[name.toLowerCase()] = value;
+  }
+  const request = [`GET ${u.pathname}${u.search} HTTP/1.1`, `Host: ${u.host}`, "Upgrade: websocket", "Connection: Upgrade", `Sec-WebSocket-Key: ${key}`, "Sec-WebSocket-Version: 13", ...(origin === null ? [] : [`Origin: ${origin}`]), ...Object.entries(headers).map(([k, v]) => `${k}: ${v}`), "", ""].join("\r\n");
+  let socket: import("node:net").Socket | undefined; let sent = false; let response: Buffer = Buffer.alloc(0); let result: UpgradeResult;
+  try {
+    socket = await openTunnel({ host: u.hostname.replace(/^\[|\]$/g, ""), port: Number(u.port) || (secure ? 443 : 80), secure, proxy: input.proxy, rejectUnauthorized: input.rejectUnauthorized, timeoutMs: input.timeoutMs, signal: input.signal });
+    const receive = readSocket(socket, b => { const i = b.indexOf("\r\n\r\n"); return i < 0 ? -1 : i + 4; }, input.timeoutMs ?? 8000, 32768, input.signal ?? executionSignal());
+    socket.write(request); sent = true; response = await receive;
+    const lines = response.toString("latin1").split("\r\n"); const status = Number(lines.shift()?.match(/^HTTP\/1\.[01] (\d{3})\b/)?.[1] ?? 0);
+    const responseHeaders = new Map<string, string[]>();
+    for (const line of lines) { const i = line.indexOf(":"); if (i > 0) { const k = line.slice(0, i).toLowerCase(); responseHeaders.set(k, [...responseHeaders.get(k) ?? [], line.slice(i + 1).trim()]); } }
+    const one = (name: string): string => (responseHeaders.get(name) ?? []).join(",");
+    const accept = createHash("sha1").update(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest("base64");
+    const valid = status === 101 && one("upgrade").toLowerCase() === "websocket" && one("connection").toLowerCase().split(/\s*,\s*/).includes("upgrade") && responseHeaders.get("sec-websocket-accept")?.length === 1 && one("sec-websocket-accept") === accept;
+    result = { status, upgraded: valid, complete: status > 0, err: status === 101 && !valid ? "invalid-websocket-handshake" : status === 0 ? "invalid-http-response" : null };
+  } catch (e) { result = { status: 0, upgraded: false, complete: false, err: e instanceof Error ? e.message : String(e) }; }
+  finally { socket?.destroy(); }
+  result.requestHash = hash(request); result.responseHash = hash(response);
+  if (sent && executionRunId() !== "unbound") result.receiptId = (await recordReceipt({ url: input.url, method: "GET", status: result.status, requestHash: result.requestHash, responseHash: result.responseHash, complete: result.complete, principal: principalHash(headers) })).id;
+  return result;
+};
 export const probeWsOrigin = async (input: WsOriginInput): Promise<WsOriginResult> => {
-  await mkdir(input.outputRoot, { recursive: true });
-  const timeout = input.timeoutMs ?? 8000;
-  const u = new URL(input.url);
-  const hasTokenQuery = [...u.searchParams.keys()].some((k) => /token|auth|key|sig|ticket/i.test(k));
-  const authCarried: WsOriginResult["authCarried"] = hasTokenQuery ? "query-param" : "none-visible";
-
-  const evilOrigin = "https://evil-velric.example.com";
-  const extra = input.headers ?? {};
-  const evil = await tryUpgrade(input.url, evilOrigin, timeout, extra);
-  const none = await tryUpgrade(input.url, null, timeout, extra);
-
-  // Vulnerable prescreen: hostile-origin upgrade accepted. A query-param
-  // token raises impact (cookie-less sites often put auth in the URL).
-  const vulnerable = evil.upgraded;
-  const variants: WsOriginResult["variants"] = [
-    { origin: evilOrigin, ...evil },
-    { origin: null, ...none },
-  ];
-
-  const result: WsOriginResult = { url: input.url, vulnerable, authCarried, variants, artifacts: [] };
-  const body = JSON.stringify(result, null, 2);
-  const path = join(input.outputRoot, "ws_origin.json");
-  await writeFile(path, body);
-  return { ...result, artifacts: [{ path, bytes: Buffer.byteLength(body) }] };
+  const u = new URL(input.url); if (!["ws:", "wss:", "http:", "https:"].includes(u.protocol)) throw new Error("unsupported WebSocket URL");
+  const queryAuth = [...u.searchParams.keys()].some(k => /token|auth|key|sig|ticket/i.test(k));
+  const headerAuth = Object.keys(input.headers ?? {}).some(k => /cookie|authorization|api-key/i.test(k));
+  const hostile = "https://cross-origin.invalid";
+  const variants = [{ origin: hostile, ...await tryUpgrade(input, hostile) }, { origin: null, ...await tryUpgrade(input, null) }];
+  const crossOriginAccepted = variants[0]!.upgraded;
+  const result: WsOriginResult = { url: input.url, vulnerable: false, crossOriginAccepted, outcome: crossOriginAccepted ? "candidate" : variants.some(v => v.err) ? "inconclusive" : "not-accepted", authCarried: queryAuth ? "query-param" : headerAuth ? "header" : "none-visible", variants, artifacts: [] };
+  return { ...result, artifacts: [await writeArtifact(input.outputRoot, "ws_origin.json", JSON.stringify(result, null, 2))] };
 };

@@ -1,119 +1,59 @@
-/**
- * Parameter-diff / merge logic: read multiple recorded samples of the same
- * endpoint and produce merged field sets with confidence, per api-recon J7.
- */
+import { parameterSlots, type ParameterRequest } from "./parameterModel.js";
 
 export interface ParamSample {
-  readonly method: string;
-  readonly url: string;
-  readonly action?: string;
-  readonly body?: string | null;
-  readonly query?: string | null;
+  readonly method:string;
+  readonly url:string;
+  readonly action?:string;
+  readonly body?:string|null;
+  readonly query?:string|null;
+  readonly headers?:Record<string,string>;
+  readonly status?:number|null;
 }
-
 export interface MergedParam {
-  readonly name: string;
-  readonly in: "body" | "query";
-  readonly samples: number;
-  readonly confidence: "high" | "medium" | "low" | "pending";
+  readonly name:string;
+  readonly in:"body"|"query";
+  /** Exact request samples containing this field; duplicates in one sample count once. */
+  readonly samples:number;
+  readonly totalSamples:number;
+  readonly confidence:"high"|"medium"|"low"|"pending";
 }
-
 export interface MergedEndpoint {
-  readonly method: string;
-  readonly path: string;
-  readonly fields: MergedParam[];
+  readonly method:string;
+  readonly path:string;
+  readonly fields:MergedParam[];
+  readonly sampleCount:number;
+  /** Original co-occurring values are retained; never synthesize a union baseline. */
+  readonly requestSamples:ParamSample[];
 }
-
-const pathOf = (url: string): string => url.split("?")[0] ?? url;
-
-const collectKeys = (
-  raw: string | null | undefined,
-  into: Map<string, Set<number>>,
-  sampleIdx: number,
-): void => {
-  if (!raw) return;
-  const text = raw.trim();
-  if (text.startsWith("{") || text.startsWith("[")) {
-    try {
-      const parsed = JSON.parse(text) as unknown;
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        for (const k of Object.keys(parsed)) {
-          (into.get(k) ?? into.set(k, new Set()).get(k)!).add(sampleIdx);
-        }
+const confidenceFor=(hits:number,total:number):MergedParam["confidence"]=>total>=2&&hits===total?"high":hits>0?"medium":"pending";
+export function paramRequestSample(sample:ParamSample):ParameterRequest {
+  let url=sample.url;
+  if(!url.includes("?")&&sample.query){const hash=url.indexOf("#");url=url.slice(0,hash<0?undefined:hash)+"?"+sample.query.replace(/^\?/,"")+(hash<0?"":url.slice(hash));}
+  const headers={...sample.headers};
+  if(sample.body && !Object.keys(headers).some(k=>k.toLowerCase()==="content-type") && !/^[\s]*[\[{]/.test(sample.body)&&sample.body.includes("="))headers["content-type"]="application/x-www-form-urlencoded";
+  return {url,method:sample.method.toUpperCase(),body:sample.body,headers};
+}
+export const mergeParams = (samples:readonly ParamSample[]):MergedEndpoint[] => {
+  interface Aggregate {method:string;path:string;body:Map<string,Set<number>>;query:Map<string,Set<number>>;requestSamples:ParamSample[];}
+  const byEndpoint=new Map<string,Aggregate>();
+  samples.forEach((sample,index)=>{
+    if(!sample||typeof sample.url!=="string"||!sample.url||typeof sample.method!=="string"||!sample.method)return;
+    const request=paramRequestSample(sample);
+    const path=request.url.split(/[?#]/)[0]!; const method=request.method;
+    const key=method+" "+path;
+    let agg=byEndpoint.get(key);
+    if(!agg){agg={method,path,body:new Map(),query:new Map(),requestSamples:[]};byEndpoint.set(key,agg);}
+    agg.requestSamples.push({...sample,url:request.url});
+    for(const where of ["body","query"] as const){
+      for(const slot of parameterSlots(request,where)){
+        // The merge inventory exposes top-level JSON/form/query fields; mutation has exact nested slots.
+        if(where==="body"&&slot.path.startsWith("/")&&slot.path.slice(1).includes("/"))continue;
+        const map=agg[where]; let hits=map.get(slot.name); if(!hits){hits=new Set();map.set(slot.name,hits);}hits.add(index);
       }
-      return;
-    } catch {
-      /* fall through to form-encoding */
     }
-  }
-  for (const pair of text.split("&")) {
-    const k = pair.split("=")[0];
-    if (k) (into.get(k) ?? into.set(k, new Set()).get(k)!).add(sampleIdx);
-  }
-};
-
-const confidenceFor = (hits: number, samples: number): MergedParam["confidence"] => {
-  if (samples >= 2 && hits >= 2) return "high";
-  if (hits >= 1) return "medium";
-  return "pending";
-};
-
-/**
- * Merge parameter samples grouped by endpoint. A field seen in every sample is
- * high confidence; a field seen once is medium; the count is always reported so
- * a single sample never silently implies required/optional.
- */
-export const mergeParams = (samples: readonly ParamSample[]): MergedEndpoint[] => {
-  interface Agg {
-    method: string;
-    path: string;
-    body: Map<string, Set<number>>;
-    query: Map<string, Set<number>>;
-    seen: number;
-  }
-  const byEndpoint = new Map<string, Agg>();
-  samples.forEach((s, idx) => {
-    // Be tolerant of partial captures: a sample without method+url carries no
-    // endpoint identity — skip it instead of crashing on undefined.
-    if (!s || typeof s.url !== "string" || !s.url || !s.method) return;
-    const path = pathOf(s.url);
-    const key = `${s.method.toUpperCase()} ${path}`;
-    const agg =
-      byEndpoint.get(key) ??
-      byEndpoint
-        .set(key, {
-          method: s.method.toUpperCase(),
-          path,
-          body: new Map(),
-          query: new Map(),
-          seen: 0,
-        })
-        .get(key)!;
-    agg.seen += 1;
-    collectKeys(s.body, agg.body, idx);
-    const q = s.query ?? (s.url.includes("?") ? s.url.split("?")[1] : null);
-    collectKeys(q, agg.query, idx);
   });
-
-  const out: MergedEndpoint[] = [];
-  for (const agg of byEndpoint.values()) {
-    const fields: MergedParam[] = [];
-    for (const [where, m] of [
-      ["body", agg.body],
-      ["query", agg.query],
-    ] as const) {
-      for (const [name, hits] of m) {
-        fields.push({
-          name,
-          in: where,
-          samples: hits.size,
-          confidence: confidenceFor(hits.size, agg.seen),
-        });
-      }
-    }
-    fields.sort((a, b) => a.name.localeCompare(b.name));
-    out.push({ method: agg.method, path: agg.path, fields });
-  }
-  out.sort((a, b) => `${a.path}`.localeCompare(`${b.path}`));
-  return out;
+  return [...byEndpoint.values()].map(agg=>({
+    method:agg.method,path:agg.path,sampleCount:agg.requestSamples.length,requestSamples:agg.requestSamples,
+    fields:(["body","query"] as const).flatMap(where=>[...agg[where]].map(([name,hits])=>({name,in:where,samples:hits.size,totalSamples:agg.requestSamples.length,confidence:confidenceFor(hits.size,agg.requestSamples.length)}))).sort((a,b)=>a.name.localeCompare(b.name)||a.in.localeCompare(b.in)),
+  })).sort((a,b)=>a.path.localeCompare(b.path)||a.method.localeCompare(b.method));
 };

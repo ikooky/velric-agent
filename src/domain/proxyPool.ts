@@ -1,4 +1,7 @@
 import { readFile } from "node:fs/promises";
+let globalPool: ProxyPool | undefined;
+export const setProxyPool = (pool?: ProxyPool): void => { globalPool = pool; };
+export const getProxyPool = (): ProxyPool | undefined => globalPool;
 
 /** Proxy pool: round-robin rotation with failure tracking and ejection.
  *  Supports http(s):// and socks5:// URIs (socks via undici socks-dispatcher

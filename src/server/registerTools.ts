@@ -831,7 +831,7 @@ const extractTouchedUrls = (
   return urls;
 };
 
-/** Capability gating (REA-style: catalog complete, registration conditional).
+/** Capability gating: catalog complete, registration conditional.
  *  VELRIC_PROFILE=lean hides audience:"internal" bookkeeping tools;
  *  VELRIC_PROFILE=full (default) registers everything. VELRIC_TOOLS=a,b,c
  *  is an explicit allowlist overriding both profiles. */
@@ -849,8 +849,8 @@ const visibleContracts = (): readonly ToolContract[] => {
 export const registerAllTools = (server: McpServer): void => {
   for (const contract of visibleContracts()) {
     const handler = handlers[contract.name];
-    // Fail loud at startup: a contract without a handler once shipped silently
-    // (workflow_guide) and masked the regression for days.
+    // Fail loud at startup: a contract without a handler would silently
+    // vanish from the tool surface and mask the regression.
     if (!handler) throw new Error(`no handler registered for contract: ${contract.name}`);
     server.registerTool(
       contract.name,
@@ -858,6 +858,13 @@ export const registerAllTools = (server: McpServer): void => {
         title: contract.title,
         description: `${PHASE_TAGS[contract.name] ? PHASE_TAGS[contract.name] + " — " : ""}${contract.description}`,
         inputSchema: contract.inputSchema as z.ZodType<Record<string, unknown>>,
+        outputSchema: contract.outputSchema as z.ZodType<Record<string, unknown>>,
+        annotations: {
+          readOnlyHint: contract.annotations.readOnlyHint,
+          destructiveHint: contract.annotations.destructiveHint,
+          idempotentHint: contract.annotations.idempotentHint,
+          openWorldHint: contract.annotations.openWorldHint,
+        },
       },
       async (input) =>
         deliver(contract, async () => {

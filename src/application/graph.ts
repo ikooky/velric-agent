@@ -1,6 +1,5 @@
 /** File-backed exploration graph. */
-import { readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readJson, writeJson, withRootLock } from "../core/storage.js";
 
 export interface Goal {
   readonly id: number;
@@ -22,6 +21,7 @@ export interface Fact {
   detail?: string;
   evidence?: string;
   confidence: "observed" | "inferred";
+  observationIds?: string[];
 }
 
 export interface Finding {
@@ -38,6 +38,11 @@ export interface Finding {
   evidenceHashes?: string[];
   /** Bump on evidence changes — reports must read the current version. */
   evidenceVersion?: number;
+  observationIds?: string[];
+  proofKind?: string;
+  outcome?: string;
+  validated?: boolean;
+  proof?: Record<string, unknown>;
 }
 
 export interface Intent {
@@ -56,6 +61,9 @@ export interface AssetRec {
 }
 
 export interface Graph {
+  version?: number;
+  runId?: string;
+  huntBudget?: { runId?: string; startedAt: string; rounds: number; cost: number; caps?: {maxRounds?:number;maxCost?:number;maxDurationMin?:number} };
   goal: string;
   constraints: Constraint[];
   goals: Goal[];
@@ -77,32 +85,38 @@ export const emptyGraph = (goal: string): Graph => ({
   nextId: 1,
 });
 
-const PATH = (root: string) => join(root, "graph.json");
-
-export const loadGraph = async (root: string): Promise<Graph> => {
-  try {
-    return JSON.parse(await readFile(PATH(root), "utf8")) as Graph;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-      // Corrupt graph.json must not fail-open: the next saveGraph() would
-      // overwrite it and silently destroy every recorded finding. Quarantine.
-      try { const { rename } = await import("node:fs/promises"); await rename(PATH(root), PATH(root) + ".corrupt"); } catch { /* gone */ }
-    }
-    return emptyGraph("");
-  }
+const natural=(value:unknown):boolean=>Number.isSafeInteger(value) && Number(value)>=0;
+const strings=(value:unknown):boolean=>Array.isArray(value) && value.every(x=>typeof x==="string");
+const validGraph=(value:unknown):boolean=>{
+  const g=value as Graph;
+  if(!g || typeof g.goal!=="string" || !natural(g.nextId) || g.nextId<1 ||
+    ![g.goals,g.intents,g.facts,g.findings,g.assets,g.constraints].every(Array.isArray) ||
+    g.version!==undefined && !natural(g.version) || g.runId!==undefined && (typeof g.runId!=="string" || !g.runId.trim()))return false;
+  const records=[...g.goals,...g.intents,...g.facts,...g.findings];
+  if(!records.every(x=>x && natural(x.id) && x.id>0) || new Set(records.map(x=>x.id)).size!==records.length)return false;
+  if(!g.goals.every(x=>typeof x.summary==="string" && typeof x.vulnclass==="string" && typeof x.met==="boolean") ||
+    !g.intents.every(x=>typeof x.summary==="string" && ["open","running","done","blocked","exhausted"].includes(x.state) &&
+      Array.isArray(x.parentIds) && x.parentIds.every(n=>natural(n) && n>0) && Array.isArray(x.yields) && x.yields.every(n=>natural(n) && n>0)) ||
+    !g.facts.every(x=>typeof x.summary==="string" && ["observed","inferred"].includes(x.confidence) && (x.intentId===null || natural(x.intentId)) && (x.observationIds===undefined || strings(x.observationIds))) ||
+    !g.findings.every(x=>typeof x.name==="string" && typeof x.summary==="string" && typeof x.poc==="string" && ["low","medium","high","critical"].includes(x.severity) &&
+      (x.evidenceVersion===undefined || natural(x.evidenceVersion)) && (x.evidenceHashes===undefined || Array.isArray(x.evidenceHashes) && x.evidenceHashes.every(h=>/^[a-f0-9]{64}$/.test(h)))) ||
+    !g.constraints.every(x=>x && ["allow","deny"].includes(x.type) && typeof x.rule==="string") ||
+    !g.assets.every(x=>x && typeof x.type==="string" && typeof x.key==="string"))return false;
+  const b=g.huntBudget;
+  if(b && (!natural(b.rounds) || !Number.isFinite(b.cost) || b.cost<0 || !Number.isFinite(Date.parse(b.startedAt)) || b.runId!==undefined && b.runId!==g.runId ||
+    b.caps && Object.entries(b.caps).some(([key,v])=>!["maxRounds","maxCost","maxDurationMin"].includes(key) || v!==undefined && (!Number.isFinite(v) || v<0 || key==="maxRounds" && !natural(v)))))return false;
+  return true;
 };
+export const loadGraph = (root:string):Promise<Graph> => readJson(root,"graph.json",()=>emptyGraph(""),validGraph);
 
-export const saveGraph = async (root: string, g: Graph): Promise<void> => {
-  g.nextId = Math.max(
-    g.nextId,
-    ...g.goals.map((x) => x.id + 1),
-    ...g.intents.map((x) => x.id + 1),
-    ...g.facts.map((x) => x.id + 1),
-    ...g.findings.map((x) => x.id + 1),
-    1,
-  );
-  await writeFile(PATH(root), JSON.stringify(g, null, 2), "utf8");
-};
+/** Detached snapshots must not overwrite a newer successful mutation. */
+export const saveGraph = async (root: string, g: Graph): Promise<void> => withRootLock(root, async () => {
+  const disk = await loadGraph(root);
+  if ((disk.version ?? 0) !== (g.version ?? 0)) throw Object.assign(new Error("graph version conflict"), {code:"version_conflict"});
+  const next={...g,nextId:Math.max(g.nextId,...[...g.goals,...g.intents,...g.facts,...g.findings].map(x=>x.id+1),1),version:(disk.version??0)+1};
+  if(!validGraph(next))throw Object.assign(new Error("invalid graph state"),{code:"corrupt_state"});
+  await writeJson(root,"graph.json",next);g.nextId=next.nextId;g.version=next.version;
+});
 
 /** The situational overview handed to the planner each round (graph_overview). */
 export const graphOverview = (g: Graph): string => {

@@ -1,171 +1,133 @@
-import { writeFile, mkdir } from "node:fs/promises";
-import { join } from "node:path";
-import { unzipSync } from "fflate";
-import zlib from "node:zlib";
-import tarStream from "tar-stream";
+import { inflateRawSync, gunzipSync } from "node:zlib";
+import { fetchUrl } from "../adapters/http.js";
+import { writeArtifact } from "../adapters/artifacts.js";
 import { scanSecrets } from "./secrets.js";
-
-/** Cap-bounded gunzip: the ISIZE trailer is attacker-controlled and
- *  multi-member gzip makes it lie outright. zlib's maxOutputLength aborts
- *  inflation the moment the output would exceed the cap — no full-size
- *  buffer is ever allocated. */
-const gunzipCapped = (buf: Buffer): Buffer =>
-  zlib.gunzipSync(buf, { maxOutputLength: MAX_DECOMPRESSED });
-
-/** Backup/dump unpack + secret scan: paths-stage discoveries (.zip/.tar.gz/
- *  .sql/.json dumps) are downloaded, unpacked in memory, and every text
- *  entry runs through the secret scanner. */
 
 export interface BackupUnpackInput {
   readonly urls: string[];
   readonly outputRoot: string;
   readonly proxy?: string;
   readonly timeoutMs?: number;
+  readonly maxDecompressedBytes?: number;
+  readonly maxEntryBytes?: number;
+  readonly maxEntries?: number;
 }
-
 export interface BackupUnpackResult {
   readonly processed: number;
   readonly unpacked: { url: string; kind: string; entries: string[]; bytes: number }[];
   readonly secrets: { source: string; line: string }[];
+  readonly failures: { url: string; reason: string }[];
+  readonly decompressedBytes: number;
   readonly artifacts: { path: string; bytes: number }[];
 }
-
-const fetchBinary = async (url: string, opts: { proxy?: string; timeoutMs?: number }): Promise<Buffer | null> => {
-  const { fetchUrl } = await import("../adapters/http.js");
-  const r = await fetchUrl(url, { ...opts, raw: true, maxBytes: 32 * 1024 * 1024 });
-  if (r.status !== 200 || !r.rawBuffer) return null;
-  return r.rawBuffer;
+interface Budget { remaining: number; consumed: number; entries: number; entryLimit: number }
+const limit = (value: number | undefined, fallback: number): number => value === undefined ? fallback : Number.isSafeInteger(value) && value >= 0 ? Math.min(value, fallback) : 0;
+const consume = (budget: Budget, bytes: number): void => {
+  if (bytes > budget.remaining) throw new Error("decompressed output budget exceeded");
+  budget.remaining -= bytes; budget.consumed += bytes;
+};
+const boundedInflate = (buf: Buffer, budget: Budget, gzip: boolean): Buffer => {
+  const cap = gzip ? budget.remaining : Math.min(budget.entryLimit, budget.remaining);
+  if (cap <= 0) throw new Error("decompressed output budget exhausted");
+  try {
+    const out = gzip ? gunzipSync(buf, { maxOutputLength: cap }) : inflateRawSync(buf, { maxOutputLength: cap });
+    consume(budget, out.length); return out;
+  } catch (error) {
+    // A failed native inflater may already have emitted its entire allowance.
+    // Charge that allowance too: retries/other archives cannot reset the budget.
+    consume(budget, Math.min(cap, budget.remaining)); throw error;
+  }
+};
+const safeName = (name: string): boolean => !!name && !/[\\\x00-\x1f]/.test(name) && !name.startsWith("/") && !/^[a-z]:/i.test(name) && !name.split("/").includes("..");
+const crc32 = (data: Uint8Array): number => {
+  let crc = 0xffffffff;
+  for (const value of data) { crc ^= value; for (let i = 0; i < 8; i++) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0); }
+  return (crc ^ 0xffffffff) >>> 0;
 };
 
-const MAX_DECOMPRESSED = 256 * 1024 * 1024; // 256 MB total decompressed cap
-
-const listZip = (buf: Buffer): { names: string[]; read: (name: string) => Buffer | null } => {
-  // Pre-decompression cap: fflate's filter runs BEFORE each entry inflates.
-  // The counter accumulates DECLARED sizes and skips entries once the total
-  // passes the cap — decompressed bytes stay bounded even for hostile zips.
-  let declaredTotal = 0;
-  const files = unzipSync(new Uint8Array(buf), {
-    filter: (file) => {
-      declaredTotal += file.originalSize;
-      return declaredTotal <= MAX_DECOMPRESSED;
-    },
-  });
-  const safeNames: string[] = [];
-  let total = 0;
-  for (const [k, v] of Object.entries(files)) {
-    if (/^(?:__proto__|constructor|prototype)$/.test(k)) continue; // hostile archive key guard
-    total += v.length;
-    if (total > MAX_DECOMPRESSED) throw new Error("decompressed size exceeds cap");
-    safeNames.push(k);
+/** Central sizes locate compressed input only; zlib's actual output is bounded independently. */
+const unzip = (buf: Buffer, budget: Budget): Map<string, Buffer> => {
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= Math.max(0, buf.length - 65557); i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50 && i + 22 + buf.readUInt16LE(i + 20) === buf.length) { eocd = i; break; }
   }
-  return {
-    names: safeNames,
-    read: (name: string): Buffer | null => {
-      const f = files[name];
-      return f ? Buffer.from(f) : null;
-    },
-  };
+  if (eocd < 0 || buf.readUInt16LE(eocd + 4) !== 0 || buf.readUInt16LE(eocd + 6) !== 0) throw new Error("invalid or multi-disk ZIP");
+  const count = buf.readUInt16LE(eocd + 10), size = buf.readUInt32LE(eocd + 12), start = buf.readUInt32LE(eocd + 16);
+  if (count !== buf.readUInt16LE(eocd + 8) || start + size !== eocd || count > budget.entries) throw new Error("ZIP directory or entry budget invalid");
+  const files = new Map<string, Buffer>(); let cursor = start;
+  for (let n = 0; n < count; n++) {
+    if (cursor + 46 > eocd || buf.readUInt32LE(cursor) !== 0x02014b50) throw new Error("invalid ZIP central entry");
+    const flags = buf.readUInt16LE(cursor + 8), method = buf.readUInt16LE(cursor + 10), crc = buf.readUInt32LE(cursor + 16);
+    const compressed = buf.readUInt32LE(cursor + 20), original = buf.readUInt32LE(cursor + 24);
+    const nameLength = buf.readUInt16LE(cursor + 28), extra = buf.readUInt16LE(cursor + 30), comment = buf.readUInt16LE(cursor + 32), offset = buf.readUInt32LE(cursor + 42);
+    const next = cursor + 46 + nameLength + extra + comment;
+    if (next > eocd || offset + 30 > start || buf.readUInt32LE(offset) !== 0x04034b50 || flags & 1 || ![0, 8].includes(method)) throw new Error("unsupported or invalid ZIP entry");
+    const localNameLength = buf.readUInt16LE(offset + 26), localExtra = buf.readUInt16LE(offset + 28), dataStart = offset + 30 + localNameLength + localExtra;
+    const name = buf.subarray(cursor + 46, cursor + 46 + nameLength).toString("utf8");
+    if (dataStart + compressed > start || buf.readUInt16LE(offset + 8) !== method || buf.readUInt16LE(offset + 6) !== flags || !buf.subarray(offset + 30, offset + 30 + localNameLength).equals(buf.subarray(cursor + 46, cursor + 46 + nameLength))) throw new Error("ZIP local metadata mismatch");
+    if (!(flags & 8) && (buf.readUInt32LE(offset + 18) !== compressed || buf.readUInt32LE(offset + 22) !== original || buf.readUInt32LE(offset + 14) !== crc)) throw new Error("ZIP size/CRC metadata mismatch");
+    if (original > budget.entryLimit || original > budget.remaining) throw new Error("ZIP declared size exceeds budget");
+    budget.entries--; cursor = next;
+    const input = buf.subarray(dataStart, dataStart + compressed);
+    const data = method === 8 ? boundedInflate(input, budget, false) : (() => { if (input.length > budget.entryLimit) throw new Error("ZIP entry too large"); consume(budget, input.length); return input; })();
+    if (data.length !== original || crc32(data) !== crc) throw new Error("ZIP actual size/CRC mismatch");
+    if (!safeName(name)) throw new Error("unsafe ZIP entry path");
+    if (!name.endsWith("/")) { if (files.has(name)) throw new Error("duplicate ZIP entry"); files.set(name, data); }
+  }
+  if (cursor !== eocd) throw new Error("ZIP directory size mismatch");
+  return files;
 };
 
-const MAX_ENTRY = 64 * 1024 * 1024; // per-entry decompressed cap
-
-const listTarGz = async (buf: Buffer): Promise<{ names: string[]; read: (name: string) => Buffer | null }> => {
-  // Bomb guard 1: the gzip ISIZE trailer (last 4 bytes, mod 2^32) declares
-  // the decompressed size — refuse anything implausibly large BEFORE
-  // inflating (fflate gunzipSync grows its output buffer unboundedly).
-  if (buf.length < 18) throw new Error("not a gzip stream");
-  // ISIZE is one member's declared size — multi-member gzip stores the LAST
-  // member's (often 0), so a bare 0 must not reject the whole archive. The
-  // real bound is gunzipCapped's maxOutputLength + per-entry caps below.
-  const isize = buf.readUInt32LE(buf.length - 4);
-  if (isize > MAX_DECOMPRESSED) {
-    // ISIZE is mod 2^32 — a declared size over the cap refuses BEFORE
-    // inflating.
-    throw new Error("gzip declared size implausible — refusing");
+const untar = (plain: Buffer, budget: Budget): Map<string, Buffer> => {
+  const entries = new Map<string, Buffer>(); let cursor = 0;
+  const field = (start: number, bytes: number): string => plain.subarray(start, start + bytes).toString("utf8").split("\0")[0]!;
+  while (cursor + 512 <= plain.length) {
+    if (plain.subarray(cursor, cursor + 512).every(v => v === 0)) return entries;
+    if (budget.entries-- <= 0) throw new Error("TAR entry budget exhausted");
+    const sizeText = field(cursor + 124, 12).trim(), checksumText = field(cursor + 148, 8).trim();
+    if (!/^[0-7]+$/.test(sizeText) || !/^[0-7]+$/.test(checksumText)) throw new Error("invalid TAR numeric metadata");
+    const bytes = Number.parseInt(sizeText, 8), checksum = Number.parseInt(checksumText, 8);
+    let actual = 0; for (let i = 0; i < 512; i++) actual += i >= 148 && i < 156 ? 32 : plain[cursor + i]!;
+    if (actual !== checksum || bytes > budget.entryLimit || cursor + 512 + bytes > plain.length) throw new Error("TAR checksum/length or output limit invalid");
+    const name = [field(cursor + 345, 155), field(cursor, 100)].filter(Boolean).join("/");
+    const type = plain[cursor + 156]!;
+    if (!safeName(name)) throw new Error("unsafe TAR entry path");
+    if (type === 0 || type === 48) {
+      if (entries.has(name)) throw new Error("duplicate TAR entry");
+      entries.set(name, plain.subarray(cursor + 512, cursor + 512 + bytes));
+    } else if (type !== 53) throw new Error("unsupported TAR link or extension entry");
+    cursor += 512 + Math.ceil(bytes / 512) * 512;
   }
-  const plain = gunzipCapped(buf);
-  const extract = tarStream.extract();
-  const entries = new Map<string, Buffer>();
-  let held = 0;
-  const done = new Promise<void>((resolve, reject) => {
-    extract.on("entry", ((header: { name: string }, stream: { on: (ev: string, fn: (c?: unknown) => void) => void }, next: (err?: Error | null) => void) => {
-      const chunks: Buffer[] = [];
-      let entryLen = 0;
-      let oversize = false;
-      stream.on("data", (c?: unknown) => {
-        if (!Buffer.isBuffer(c)) return;
-        entryLen += c.length;
-        // Bomb guard 2: per-entry + total caps while buffering.
-        if (entryLen > MAX_ENTRY || held + entryLen > MAX_DECOMPRESSED) { oversize = true; return; }
-        chunks.push(c);
-      });
-      stream.on("end", () => {
-        if (!oversize && !header.name.endsWith("/")) {
-          entries.set(header.name, Buffer.concat(chunks));
-          held += entryLen;
-        }
-        next();
-      });
-    }) as unknown as (...a: unknown[]) => void);
-    extract.on("finish", () => resolve());
-    extract.on("error", (e: Error) => reject(e));
-  });
-  extract.write(plain);
-  extract.end(() => {});
-  await done;
-  return {
-    names: [...entries.keys()],
-    read: (name: string): Buffer | null => entries.get(name) ?? null,
-  };
+  throw new Error("truncated TAR archive");
 };
 
 export const unpackBackups = async (input: BackupUnpackInput): Promise<BackupUnpackResult> => {
-  await mkdir(input.outputRoot, { recursive: true });
-  const opts = { proxy: input.proxy, timeoutMs: input.timeoutMs ?? 20000 };
-  const unpacked: BackupUnpackResult["unpacked"] = [];
-  const secrets: BackupUnpackResult["secrets"] = [];
-  let processed = 0;
-
-  for (const url of input.urls.slice(0, 20)) {
-    const buf = await fetchBinary(url, opts);
-    if (!buf) continue;
+  const budget: Budget = { remaining: limit(input.maxDecompressedBytes, 256 * 1024 * 1024), consumed: 0, entries: limit(input.maxEntries, 2000), entryLimit: limit(input.maxEntryBytes, 64 * 1024 * 1024) };
+  const unpacked: BackupUnpackResult["unpacked"] = [], secrets: BackupUnpackResult["secrets"] = [], failures: BackupUnpackResult["failures"] = [];
+  let processed = 0, downloaded = 0;
+  for (const raw of input.urls.slice(0, 20)) {
+    let url: URL;
+    try { url = new URL(raw); if (!/^https?:$/.test(url.protocol) || url.username || url.password) continue; } catch { continue; }
+    const r = await fetchUrl(url.href, { proxy: input.proxy, timeoutMs: input.timeoutMs ?? 20000, raw: true, redirect: "manual", maxBytes: Math.min(32 * 1024 * 1024, 128 * 1024 * 1024 - downloaded) });
+    downloaded += r.bytes;
+    if (r.status !== 200 || r.complete === false || r.truncated || r.error || !r.rawBuffer) { failures.push({ url: raw, reason: r.error ?? "download incomplete or non-200" }); continue; }
     processed++;
-
-    let archive: { names: string[]; read: (name: string) => Buffer | null } | null = null;
-    let kind = "";
-    const pathLower = url.toLowerCase();
-    if (pathLower.endsWith(".zip") || (buf.length > 4 && buf[0] === 0x50 && buf[1] === 0x4b)) {
-      try { archive = listZip(buf); kind = "zip"; } catch { /* not a zip */ }
-    } else if (pathLower.endsWith(".tar.gz") || pathLower.endsWith(".tgz") || (buf.length > 2 && buf[0] === 0x1f && buf[1] === 0x8b)) {
-      try { archive = await listTarGz(buf); kind = "tar.gz"; } catch { /* not a tgz */ }
-    }
-
-    if (archive) {
-      const textEntries = archive.names.filter((n) => /\.(?:txt|json|sql|env|ya?ml|toml|ini|conf|cfg|properties|js|py|php|java|xml|md)$/i.test(n) || /(?:^|\/)\.env/.test(n)).slice(0, 200);
-      for (const name of textEntries) {
-        const data = archive.read(name);
-        if (!data) continue;
-        const text = data.toString("utf8");
-        const hits = scanSecrets([{ path: name, text }]);
-        for (const h of hits) secrets.push({ source: `${url}::${name}`, line: `${h.name}: ${h.match.slice(0, 80)}` });
+    const buf = r.rawBuffer, path = url.pathname.toLowerCase();
+    try {
+      let entries: Map<string, Buffer>, kind: string;
+      if (path.endsWith(".zip") || buf.subarray(0, 2).toString() === "PK") { entries = unzip(buf, budget); kind = "zip"; }
+      else if (/\.(?:tgz|tar\.gz)$/.test(path) || buf[0] === 31 && buf[1] === 139) { entries = untar(boundedInflate(buf, budget, true), budget); kind = "tar.gz"; }
+      else if (path.endsWith(".tar")) { consume(budget, buf.length); entries = untar(buf, budget); kind = "tar"; }
+      else if (/\.(?:sql|json|txt|csv)$/.test(path)) { if (buf.length > budget.entryLimit) throw new Error("dump entry too large"); consume(budget, buf.length); entries = new Map([[url.pathname, buf]]); kind = "text-dump"; }
+      else throw new Error("unsupported backup format");
+      for (const [name, data] of entries) {
+        if (!/\.(?:txt|json|sql|env|ya?ml|toml|ini|conf|cfg|properties|js|py|php|java|xml|md|csv)$/i.test(name) && !/(?:^|\/)\.env/.test(name)) continue;
+        for (const hit of scanSecrets([{ path: name, text: data.toString("utf8") }])) secrets.push({ source: `${raw}::${name}`, line: `${hit.name}: ${hit.match.slice(0, 80)}` });
       }
-      unpacked.push({ url, kind, entries: archive.names.slice(0, 500), bytes: buf.length });
-      continue;
-    }
-
-    // Plain text dump (.sql/.json/...): scan directly.
-    if (/\.(?:sql|json|txt|csv)$/i.test(pathLower) || buf.subarray(0, 64).toString("latin1").match(/(?:CREATE TABLE|INSERT INTO|password|secret)/i)) {
-      const text = buf.toString("utf8");
-      const hits = scanSecrets([{ path: url, text }]);
-      for (const h of hits) secrets.push({ source: url, line: `${h.name}: ${h.match.slice(0, 80)}` });
-      unpacked.push({ url, kind: "text-dump", entries: [], bytes: buf.length });
-    }
+      unpacked.push({ url: raw, kind, entries: [...entries.keys()], bytes: buf.length });
+    } catch (error) { failures.push({ url: raw, reason: error instanceof Error ? error.message : String(error) }); }
   }
-
-  const result: BackupUnpackResult = { processed, unpacked, secrets, artifacts: [] };
-  const body = JSON.stringify(result, null, 2);
-  const path = join(input.outputRoot, "backup_unpack.json");
-  await writeFile(path, body);
-  result.artifacts.push({ path, bytes: Buffer.byteLength(body) });
+  const result: BackupUnpackResult = { processed, unpacked, secrets, failures, decompressedBytes: budget.consumed, artifacts: [] };
+  result.artifacts.push(await writeArtifact(input.outputRoot, "backup_unpack.json", JSON.stringify(result, null, 2)));
   return result;
 };
