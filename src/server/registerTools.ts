@@ -612,7 +612,7 @@ export const handlers: Readonly<Record<string, Handler>> = {
     return probeRoleMatrix(p);
   },
   authz_replay: async (raw) => {
-    const p = z.object({ recordRoot: z.string(), outputRoot: z.string(), roles: z.record(z.string(), z.string()), roleHeaders: z.record(z.string(), z.record(z.string(), z.string())).optional(), exchangeIds: z.array(z.string()).optional(), methods: z.array(z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxExchanges: z.number().optional(), denyFingerprints: z.array(z.string()).optional(), readOnly: z.boolean().optional(), apply: z.boolean().optional() }).parse(raw);
+    const p = z.object({ recordRoot: z.string(), outputRoot: z.string(), roles: z.record(z.string(), z.string()), roleHeaders: z.record(z.string(), z.record(z.string(), z.string())).optional(), markers: z.record(z.string(), z.array(z.string())).optional(), anonymous: z.boolean().optional(), exchangeIds: z.array(z.string()).optional(), methods: z.array(z.string()).optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxExchanges: z.number().optional(), denyFingerprints: z.array(z.string()).optional(), readOnly: z.boolean().optional(), apply: z.boolean().optional() }).parse(raw);
     const { replayAuthz } = await import("../domain/authzReplay.js");
     const r = await replayAuthz(p);
     return { replayed: r.replayed, bypassed: r.bypassed.map((c) => ({ url: c.url, role: c.role, note: c.note })), enforced: r.enforced.length, unknown: r.unknown.length, artifacts: r.artifacts };
@@ -635,7 +635,7 @@ export const handlers: Readonly<Record<string, Handler>> = {
     };
   },
   mine_hidden_params: async (raw) => {
-    const p = z.object({ action: z.enum(["name-guess", "remove-diff"]).optional(), mergedFile: z.string().optional(), baseUrl: z.string().optional(), maxEndpoints: z.number().optional(), url: z.string().optional(), outputRoot: z.string(), in: z.enum(["query", "cookie", "header"]).optional(), words: z.array(z.string()).optional(), learn: z.boolean().optional(), method: z.string().optional(), body: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), cookie: z.string().optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxWords: z.number().optional() }).parse(raw);
+    const p = z.object({ action: z.enum(["name-guess", "remove-diff"]).optional(), mergedFile: z.string().optional(), baseUrl: z.string().optional(), maxEndpoints: z.number().optional(), url: z.string().optional(), outputRoot: z.string(), in: z.enum(["query", "cookie", "header"]).optional(), words: z.array(z.string()).optional(), learn: z.boolean().optional(), method: z.string().optional(), body: z.string().optional(), headers: z.record(z.string(), z.string()).optional(), cookie: z.string().optional(), proxy: z.string().optional(), timeoutMs: z.number().optional(), maxWords: z.number().optional(), bucketSize: z.number().optional() }).parse(raw);
     if (p.action === "remove-diff") {
       if (!p.mergedFile) throw new Error("mergedFile required for remove-diff");
       const { probeParams } = await import("../application/paramProbe.js");

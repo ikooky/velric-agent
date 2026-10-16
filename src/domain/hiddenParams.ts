@@ -33,6 +33,11 @@ export interface HiddenParamInput {
   readonly proxy?: string;
   readonly timeoutMs?: number;
   readonly maxWords?: number;
+  /** Bucket-bisection mode (param-miner): submit bucketSize candidate names
+   *  per request; a response that differs from baseline halves the bucket and
+   *  recurses — logarithmic requests for the same coverage. Default false
+   *  (one-by-one with paired confirmation). */
+  readonly bucketSize?: number;
 }
 
 export interface HiddenParamResult {
@@ -123,6 +128,50 @@ export const mineHiddenParams = async (input: HiddenParamInput): Promise<HiddenP
 
   const found: HiddenParamResult["found"] = [];
   let probed = 0;
+
+  if (input.bucketSize !== undefined && input.bucketSize > 1 && where === "query") {
+    // ---- bucket bisection (param-miner guessParams) ----
+    // One request carries `bucketSize` candidate names at once. A response
+    // that differs from the stable baseline means SOME name in the bucket is
+    // read → split and recurse. Converges to single names in log2 requests.
+    const inject = (names: string[]): string => {
+      const u = new URL(input.url);
+      u.searchParams.set(CACHE_BUSTER, String(Math.random()).slice(2, 10));
+      for (const n of names) u.searchParams.set(n, "1");
+      return u.toString();
+    };
+    const differs = async (names: string[]): Promise<boolean> => {
+      const r = await fetchUrl(inject(names), opts);
+      probed++;
+      if (r.status === 0) return false;
+      return fp(r) !== b1.fp;
+    };
+    const permute = (w: string): string => w.split("").sort().reverse().join("");
+    const queue: string[][] = [];
+    for (let i = 0; i < candidates.length; i += input.bucketSize) queue.push(candidates.slice(i, i + input.bucketSize));
+    while (queue.length > 0) {
+      const bucket = queue.shift()!;
+      if (bucket.length === 0) continue;
+      if (!(await differs(bucket))) continue; // whole bucket dead — one request cleared N names
+      if (bucket.length === 1) {
+        const w = bucket[0]!;
+        // negative control (param-miner permute): the letter-shuffled junk name
+        // must NOT reproduce the diff, else the endpoint reacts to ANY extra
+        // input and every candidate would false-positive.
+        const junk = permute(w);
+        if (junk !== w && (await differs([junk]))) continue;
+        const ev = await differs([w]);
+        found.push({ param: w, in: where, evidence: `bucket-bisect: response differs with param, junk-anagram does not (status ${b1.fp.split(":")[0]} base)` });
+        if (!ev) break;
+        continue;
+      }
+      const mid = Math.floor(bucket.length / 2);
+      queue.push(bucket.slice(0, mid), bucket.slice(mid));
+    }
+    const bodyStr = JSON.stringify({ probed, found, where, learnedWords: learned.length, mode: "bucket-bisect" }, null, 2);
+    const art = await writeArtifact(input.outputRoot, "hidden_params.json", bodyStr);
+    return { probed, found, artifacts: [art] };
+  }
 
   for (const w of candidates) {
     // paired probe with distinct cache busters on BOTH sides

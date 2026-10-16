@@ -125,13 +125,19 @@ describe("authz_replay (Autorize-style)", () => {
     const cell = (id: string, role: string) => r.cells.find((c) => c.exchangeId === id && c.role === role)!;
     // /admin/data: user -> 403 enforced
     expect(cell("e1", "user").verdict).toBe("enforced");
-    // /shared/data: user gets identical 200 = bypass (shared by design, but the DIFFERENTIAL is what we report)
-    expect(cell("e2", "user").verdict).toBe("bypassed");
+    // /shared/data answers 200 to EVERYONE including anonymous (the mock has no
+    // auth on it) — the anonymous third state correctly downgrades the user
+    // bypass to unknown-public: this is a PUBLIC endpoint, not an authz gap.
+    expect(cell("e2", "__anonymous__").verdict).toBe("bypassed");
+    expect(cell("e2", "user").verdict).toBe("unknown");
+    expect(cell("e2", "user").note).toContain("public");
     // /sneaky/data: 200 denial-shaped body = enforced (content, not status)
     expect(cell("e3", "user").verdict).toBe("enforced");
-    // POST /profile replayed by user: identical 200 body as the admin
-    // baseline (any session can edit this record) = bypass differential
-    expect(cell("e4", "user").verdict).toBe("bypassed");
+    // POST /profile is writable by ANY session in the mock — including
+    // anonymous (no auth on the route). The anonymous third state correctly
+    // downgrades user's bypass to unknown-public: publicly writable endpoint.
+    expect(cell("e4", "__anonymous__").verdict).toBe("bypassed");
+    expect(cell("e4", "user").verdict).toBe("unknown");
     // credential headers replaced, not stacked: recorded cookie must NOT leak
     expect(cell("e1", "user").replayStatus).toBe(403);
   }, 20000);

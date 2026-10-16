@@ -74,6 +74,33 @@ export const tokenSimilarity = (a: string, b: string): number => {
   return union === 0 ? 1 : inter / union;
 };
 
+/** Character-sequence similarity (python SequenceMatcher语义, deterministic
+ *  LCS-ratio approximation): right metric for small JSON bodies where a
+ *  couple of owner-field tokens dominate the token space. Capped inputs. */
+export const charSimilarity = (a: string, b: string): number => {
+  const CAP = 20000;
+  const x = a.slice(0, CAP);
+  const y = b.slice(0, CAP);
+  if (x === y) return 1;
+  // LCS length via space-rolled DP on capped inputs
+  const n = x.length;
+  const m = y.length;
+  if (n === 0 || m === 0) return 0;
+  let prev = new Uint16Array(m + 1);
+  let cur = new Uint16Array(m + 1);
+  for (let i = 1; i <= n; i++) {
+    const xi = x.charCodeAt(i - 1);
+    for (let j = 1; j <= m; j++) {
+      const diag = prev[j - 1] ?? 0;
+      const up = prev[j] ?? 0;
+      const left = cur[j - 1] ?? 0;
+      cur[j] = xi === y.charCodeAt(j - 1) ? diag + 1 : Math.max(up, left);
+    }
+    const t = prev; prev = cur; cur = t;
+  }
+  return (2 * (prev[m] ?? 0)) / (n + m);
+};
+
 /** Structural (schema) similarity for JSON bodies: key-set Jaccard, ignoring
  *  values — detects "same object type, different owner" (rescoped candidates). */
 export const schemaSimilarity = (a: string, b: string): number => {

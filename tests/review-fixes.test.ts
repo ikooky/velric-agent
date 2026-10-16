@@ -172,6 +172,91 @@ describe("review fixes: behavioral both-polarity fixtures", () => {
     expect(rec).toBe("const a=1;");
   });
 
+  it("P1: authz canary marker leak = content-level bypass proof", async () => {
+    // victim marker in low-priv response body → bypassed with marker note
+    const { mkdtempSync: mk, writeFileSync: wf2 } = await import("node:fs");
+    const { createHash: ch } = await import("node:crypto");
+    const H = (x: string) => ch("sha256").update(x).digest("hex");
+    const victimBody = JSON.stringify({ tenant: "ACME-CORP-VICTIM", rows: [1, 2, 3] });
+    const attackerBody = JSON.stringify({ tenant: "user-tenant", rows: [1, 2, 3] });
+    const srv2 = createServer((req, res) => {
+      const cookie = req.headers.cookie ?? "";
+      if (cookie.includes("admin")) { res.writeHead(200, { "content-type": "application/json" }); res.end(victimBody); }
+      else { res.writeHead(200, { "content-type": "application/json" }); res.end(attackerBody); }
+    });
+    await new Promise<void>((r) => srv2.listen(0, "127.0.0.1", r));
+    const b2 = `http://127.0.0.1:${(srv2.address() as { port: number }).port}/tenants/77`;
+    const root2 = mk(join(tmpdir(), "p1-canary-"));
+    const rbh = H(victimBody);
+    await mkdir(join(root2, "blobs", rbh.slice(0, 2)), { recursive: true });
+    await writeFile(join(root2, "blobs", rbh.slice(0, 2), rbh + ".bin"), victimBody);
+    wf2(join(root2, "traffic.ndjson"), JSON.stringify({ id: "c1", ts: "t", client: "c", method: "GET", url: b2, status: 200, reqHeaders: { cookie: "sid=admin" }, reqBodyHash: null, respBodyHash: rbh, respContentType: "application/json" }) + "\n");
+    const { replayAuthz } = await import("../src/domain/authzReplay.js");
+    // mock with NO canary semantics: admin gets victim body, user gets own —
+    // WITHOUT markers this is unknown (bodies differ). With a leaking mock:
+    const srv3 = createServer((req, res) => {
+      const cookie = req.headers.cookie ?? "";
+      if (cookie.includes("admin")) { res.writeHead(200, { "content-type": "application/json" }); res.end(victimBody); }
+      else { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ tenant: "ACME-CORP-VICTIM", leaked: true })); } // LEAK
+    });
+    await new Promise<void>((r) => srv3.listen(0, "127.0.0.1", r));
+    const b3 = `http://127.0.0.1:${(srv3.address() as { port: number }).port}/tenants/77`;
+    wf2(join(root2, "traffic.ndjson"), JSON.stringify({ id: "c2", ts: "t", client: "c", method: "GET", url: b3, status: 200, reqHeaders: { cookie: "sid=admin" }, reqBodyHash: null, respBodyHash: rbh, respContentType: "application/json" }) + "\n", { flag: "a" });
+    const out2 = await replayAuthz({ recordRoot: root2, outputRoot: root2, roles: { user: "Cookie: sid=user" }, markers: { admin: ["ACME-CORP-VICTIM"] }, exchangeIds: ["c1", "c2"], anonymous: false, timeoutMs: 5000 });
+    const c1 = out2.cells.find((c) => c.exchangeId === "c1" && c.role === "user")!;
+    const c2 = out2.cells.find((c) => c.exchangeId === "c2" && c.role === "user")!;
+    expect(c1.verdict).toBe("unknown"); // no marker in response → structural unknown
+    expect(c2.verdict).toBe("bypassed"); // marker leak → content-level proof
+    expect(c2.note).toContain("marker leak");
+    srv2.close(); srv3.close();
+  });
+
+  it("P1: hiddenParams bucket bisection finds param in log requests + junk control", async () => {
+    let n = 0;
+    const srv2 = createServer((req, res) => {
+      n++;
+      const u = new URL(req.url ?? "/", "http://x");
+      if (u.searchParams.has("debug")) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ debug: true, extra: 1 }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    await new Promise<void>((r) => srv2.listen(0, "127.0.0.1", r));
+    const b2 = `http://127.0.0.1:${(srv2.address() as { port: number }).port}/x`;
+    const root2 = mkdtempSync(join(tmpdir(), "p1-bucket-"));
+    const { mineHiddenParams } = await import("../src/domain/hiddenParams.js");
+    const out = await mineHiddenParams({ url: b2, outputRoot: root2, bucketSize: 8, words: ["alpha", "beta", "gamma", "debug", "delta", "eps", "zeta", "eta", "theta", "iota"], learn: false, timeoutMs: 3000 } as never);
+    expect(out.found.some((f: { param: string }) => f.param === "debug")).toBe(true);
+    // log2-ish coverage: 10 candidates in buckets of 8 → 2 buckets + bisections
+    expect(n).toBeLessThan(35); // one-by-one paired probes would be ~40 for 10 words
+    srv2.close();
+  });
+
+  it("P1: idorDeep three-reference oracle confirms with identity field", async () => {
+    // /orders/<id>: owner id=100 → own data; id=101 → OTHER user's data (200, different email); anonymous → 401
+    const srv2 = createServer((req, res) => {
+      const m = (req.url ?? "").match(/^\/orders\/(\d+)$/);
+      if (!m) { res.writeHead(404); res.end(); return; }
+      if (!req.headers.cookie) { res.writeHead(401); res.end("login"); return; }
+      const id = m[1];
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ id: Number(id), email: id === "100" ? "owner@x.com" : "other@y.com", total: 42 }));
+    });
+    await new Promise<void>((r) => srv2.listen(0, "127.0.0.1", r));
+    const b2 = `http://127.0.0.1:${(srv2.address() as { port: number }).port}`;
+    const root2 = mkdtempSync(join(tmpdir(), "p1-idor-"));
+    const { probeIdorDeep } = await import("../src/domain/idorDeep.js");
+    const out = await probeIdorDeep({ endpoints: [{ method: "GET", path: "/orders/100", fields: [] }], baseUrl: b2, cookie: "sid=me", outputRoot: root2 } as never);
+    const conf = out.candidates.find((c) => c.verdict === "idor-confirmed-identity");
+    expect(conf).toBeTruthy();
+    expect(conf?.identityEvidence).toContain("email");
+    // attacker response ≈ denied(401 body) case: public mock returns 200 to anon too
+    srv2.close();
+  });
+
   it("E1: paramProbe aborts endpoint on unstable baseline", async () => {
     let n = 0;
     const srv2 = createServer((req, res) => {

@@ -1,4 +1,5 @@
 import { fetchUrl } from "../adapters/http.js";
+import { normalizeBody, charSimilarity } from "./normalize.js";
 import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -32,7 +33,13 @@ export interface IdorDeepCandidate {
   readonly variantStatus: number;
   /** content differential (sha256 prefix) — same status but different body = data leak */
   readonly contentDiff: boolean;
-  readonly verdict: "idor-suspect" | "same-response" | "not-found" | "denied" | "skip";
+  readonly verdict: "idor-suspect" | "idor-confirmed" | "idor-confirmed-identity" | "public-or-unprotected" | "same-response" | "not-found" | "denied" | "skip";
+  /** Three-reference oracle detail (owner/attacker/denied): similarity to
+   *  baseline and to the anonymous reference. */
+  readonly oracle?: { simOwner: number; simDenied: number };
+  /** Identity-field evidence: distinct owner-marker values across variant
+   *  responses proves cross-principal data (email/username/phone). */
+  readonly identityEvidence?: string;
 }
 
 export interface IdorDeepResult {
@@ -58,9 +65,74 @@ const variantsOf = (value: string, objectIds: readonly string[]): string[] => {
   return [...new Set(out)].slice(0, 6);
 };
 
+/** Encoded-ID variants (Auto-IDor ENCODINGS registry): when a slot value looks
+ *  like base64/hex WRAPPING a meaningful id (eyJpZCI6MTB9 = {"id":10}), blind
+ *  substitution of the encoded string can never hit a valid object — decode,
+ *  swap the inner id, re-encode in the same shape. */
+const B64_RE = /^[A-Za-z0-9+/]{8,}={0,2}$/;
+const decodeMaybe = (v: string): { kind: "raw" | "base64" | "hex"; inner: string } | null => {
+  if (B64_RE.test(v) && v.length >= 12) {
+    try {
+      const inner = Buffer.from(v, "base64").toString("utf8");
+      if (inner && /[\"{[]/.test(inner) && /[0-9a-z]/i.test(inner)) return { kind: "base64", inner };
+    } catch { /* not base64 */ }
+  }
+  if (/^[0-9a-f]{16,}$/i.test(v)) {
+    return { kind: "hex", inner: v };
+  }
+  return null;
+};
+const reencode = (kind: "base64" | "hex", inner: string): string =>
+  kind === "base64" ? Buffer.from(inner, "utf8").toString("base64") : inner;
+
+const encodedVariantsOf = (value: string, objectIds: readonly string[]): string[] => {
+  const d = decodeMaybe(value);
+  if (d === null || d.kind === "raw") return [];
+  // produce variants of the DECODED inner value, re-encoded in original shape
+  if (d.kind === "hex") return []; // hex of an id rarely wraps structured content
+  const innerVariants = variantsOf(d.inner.replace(/[^0-9a-z-]/gi, "9"), objectIds);
+  return innerVariants.map((iv) => reencode("base64", d.inner.replace(/\d+/, iv.replace(/[^0-9]/g, "") || "1"))).slice(0, 3);
+};
+
+/** Identity-field extraction (pentest-ai sequential-identity confirmation):
+ *  pull owner-identifying values from a JSON/HTML response. */
+const IDENTITY_KEYS = /(?:email|username|user_name|userName|phone|mobile|nickname|nick_name|full_?name)/i;
+const extractIdentities = (body: string): Record<string, string> => {
+  const out: Record<string, string> = {};
+  try {
+    const walk = (o: unknown): void => {
+      if (o && typeof o === "object") {
+        if (Array.isArray(o)) { for (const x of o) walk(x); return; }
+        for (const [k, v] of Object.entries(o as Record<string, unknown>)) {
+          if (IDENTITY_KEYS.test(k) && typeof v === "string" && v.length > 0) out[k] = v;
+          walk(v);
+        }
+      }
+    };
+    walk(JSON.parse(body));
+  } catch {
+    // HTML fallback: input values / meta content
+    for (const m of body.matchAll(/<input[^>]*name="(email|username|phone|nickname)"[^>]*value="([^"]*)"/gi)) {
+      out[m[1]!.toLowerCase()] = m[2]!;
+    }
+  }
+  return out;
+};
+
 const sub = (s: string, from: string, to: string): string => s.split(from).join(to);
 
 interface IdTarget { kind: "path" | "query" | "body"; name: string; value: string }
+
+/** Drop credential headers for the anonymous reference request. */
+const stripCredentialHeaders = (headers?: Record<string, string>): Record<string, string> | undefined => {
+  if (!headers) return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(headers)) {
+    if (/^(authorization|cookie|x-csrf-token|x-api-key)$/i.test(k)) continue;
+    out[k] = v;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+};
 
 export const probeIdorDeep = async (input: IdorDeepInput): Promise<IdorDeepResult> => {
   await mkdir(input.outputRoot, { recursive: true });
@@ -108,6 +180,11 @@ export const probeIdorDeep = async (input: IdorDeepInput): Promise<IdorDeepResul
       const baseCall2 = await fetchUrl(url.toString(), { ...opts, method, body: baseBody });
       const noisy = baseCall2.status === baseCall.status && (baseCall2.sha256?.slice(0, 16) ?? "") !== (baseCall.sha256?.slice(0, 16) ?? "");
 
+      // Deno-refs: three-reference oracle (Auto-IDOR) needs the anonymous
+      // "correct denial" reference for the SAME object the baseline owns.
+      const deniedRef = await fetchUrl(url.toString(), { ...opts, method, body: baseBody, cookie: undefined, headers: stripCredentialHeaders(input.headers) });
+      let deniedRefBody: string | null = deniedRef.status >= 200 && deniedRef.status < 300 ? deniedRef.body : null;
+
       for (const v of variantsOf(original, objectIds)) {
         let target: string;
         let body: string | undefined;
@@ -133,8 +210,28 @@ export const probeIdorDeep = async (input: IdorDeepInput): Promise<IdorDeepResul
         } else if (r.status === 401 || r.status === 403) {
           candidates.push({ ...common, contentDiff: false, verdict: "denied" });
         } else if (r.status >= 200 && r.status < 300) {
-          // 2xx with DIFFERENT content than the caller's own object = data of another principal
-          candidates.push({ ...common, contentDiff: true, verdict: "idor-suspect" });
+          // 2xx with DIFFERENT content than the caller's own object = data of another principal.
+          // Three-reference oracle (Auto-IDOR): confirmed ⟺ attacker ≈ owner
+          // AND attacker ≉ denied(anon). attacker ≈ denied → public endpoint,
+          // not IDOR. Owner baseline failed → inconclusive, stay suspect.
+          const nVar = normalizeBody(r.body);
+          const nOwn = normalizeBody(baseCall.body);
+          const simOwner = charSimilarity(nVar, nOwn);
+          const simDenied = deniedRefBody === null ? 0 : charSimilarity(nVar, normalizeBody(deniedRefBody));
+          const idsVar = extractIdentities(r.body);
+          const idsOwn = extractIdentities(baseCall.body);
+          const distinctIdentity = Object.keys(idsVar).filter(
+            (k) => idsOwn[k] !== undefined && idsVar[k] !== idsOwn[k],
+          );
+          if (simDenied > 0.9) {
+            candidates.push({ ...common, contentDiff: false, oracle: { simOwner, simDenied }, verdict: "public-or-unprotected" });
+          } else if (simOwner >= 0.85 && distinctIdentity.length > 0) {
+            candidates.push({ ...common, contentDiff: true, oracle: { simOwner, simDenied }, identityEvidence: distinctIdentity.map((k) => `${k}: ${idsOwn[k]} → ${idsVar[k]}`).join("; "), verdict: "idor-confirmed-identity" });
+          } else if (simOwner >= 0.85) {
+            candidates.push({ ...common, contentDiff: true, oracle: { simOwner, simDenied }, verdict: "idor-confirmed" });
+          } else {
+            candidates.push({ ...common, contentDiff: true, oracle: { simOwner, simDenied }, verdict: "idor-suspect" });
+          }
         } else {
           candidates.push({ ...common, contentDiff: false, verdict: "skip" });
         }

@@ -47,6 +47,16 @@ export interface AuthzReplayInput {
   /** Fire the replays. Default true; set false for a dry inventory of what
    *  WOULD be replayed per role. */
   readonly apply?: boolean;
+  /** Per-role canary markers (Authz-ExeC identity markers): strings exclusive
+   *  to that principal (tenant name, seeded test data). Another role's marker
+   *  appearing in a replay body is content-level proof of cross-principal
+   *  leakage — checked before all structural comparisons. */
+  readonly markers?: Record<string, readonly string[]>;
+  /** Add a pseudo-role "__anonymous__" that strips ALL credential headers
+   *  (Autorize's unauthenticated third state): anonymous ≈ baseline → the
+   *  endpoint is public (downgrades bypass noise); anonymous denied while a
+   *  role is bypassed → confidence upgrade. Default: true. */
+  readonly anonymous?: boolean;
 }
 
 export interface EnforcementCell {
@@ -98,6 +108,51 @@ const credentialHeaders = (roleHeader: string): Record<string, string> => {
  *  roleMatrix (content, not bare status). */
 const hashOf = (s: string): string => createHash("sha256").update(s).digest("hex").slice(0, 12);
 
+/** Raw recorded body text, or null when the blob is absent. */
+const readRawBlob = async (recordRoot: string, hash: string | null): Promise<string | null> => {
+  if (!hash) return null;
+  try {
+    return await readFile(join(recordRoot, "blobs", hash.slice(0, 2), `${hash}.bin`), "utf8");
+  } catch { return null; }
+};
+
+/** Akto percentage_match: flatten JSON to key→value-set, fraction of keys whose
+ *  value-sets are equal. Non-JSON degrades to 0 (structural tier handles it). */
+const keyValueMatch = (a: string, b: string | null): number => {
+  if (b === null) return 0;
+  const flat = (s: string): Map<string, Set<string>> | null => {
+    try {
+      const out = new Map<string, Set<string>>();
+      const walk = (o: unknown, prefix: string): void => {
+        if (o && typeof o === "object") {
+          if (Array.isArray(o)) { o.forEach((x) => walk(x, prefix)); return; }
+          for (const [k, v] of Object.entries(o as Record<string, unknown>)) {
+            const key = `${prefix}.${k}`;
+            const leaf = v && typeof v === "object" ? null : String(v);
+            if (leaf !== null) {
+              if (!out.has(key)) out.set(key, new Set());
+              out.get(key)!.add(leaf);
+            }
+            walk(v, key);
+          }
+        }
+      };
+      walk(JSON.parse(s), "");
+      return out;
+    } catch { return null; }
+  };
+  const fa = flat(a);
+  const fb = flat(b);
+  if (fa === null || fb === null || fa.size === 0 || fb.size === 0) return 0;
+  let eq = 0;
+  for (const [k, va] of fa) {
+    const vb = fb.get(k);
+    if (vb === undefined) continue;
+    if (va.size === vb.size && [...va].every((x) => vb.has(x))) eq++;
+  }
+  return eq / Math.max(fa.size, fb.size);
+};
+
 /** Normalized recorded body text, or null when the blob is absent. */
 const readNormalizedBlob = async (recordRoot: string, hash: string | null): Promise<string | null> => {
   if (!hash) return null;
@@ -147,6 +202,10 @@ export const replayAuthz = async (input: AuthzReplayInput): Promise<AuthzReplayR
     .slice(0, input.maxExchanges ?? 25);
 
   const roleNames = Object.keys(input.roles);
+  // Anonymous third state (Autorize): strip ALL credential carriers, inject
+  // nothing — separates public endpoints from real cross-principal access.
+  const withAnonymous = input.anonymous !== false;
+  const replayRoles = withAnonymous ? [...roleNames, "__anonymous__"] : roleNames;
   const extraDeny = (input.denyFingerprints ?? []).map((f) => f.replace(/[/\\^$*+?.()|[\]{}]/g, (c) => `\\${c}`));
   const opts = { proxy: input.proxy, timeoutMs: input.timeoutMs ?? 10000 };
   const cells: EnforcementCell[] = [];
@@ -179,8 +238,12 @@ export const replayAuthz = async (input: AuthzReplayInput): Promise<AuthzReplayR
         if (CREDENTIAL_HEADER_RE.test(lk) || HOP_HEADERS.has(lk)) continue;
         baseHeaders[lk] = v;
       }
-      for (const role of roleNames) {
-        const headers = { ...credentialHeaders(input.roles[role]!), ...(input.roleHeaders?.[role] ?? {}), ...baseHeaders };
+      for (const role of replayRoles) {
+        // Anonymous: no injected credentials AND strip any residual credential
+        // carriers from the recorded baseline headers.
+        const headers = role === "__anonymous__"
+          ? Object.fromEntries(Object.entries(baseHeaders).filter(([k]) => !CREDENTIAL_HEADER_RE.test(k)))
+          : { ...credentialHeaders(input.roles[role]!), ...(input.roleHeaders?.[role] ?? {}), ...baseHeaders };
         const r = await fetchUrl(e.url, { ...opts, method: e.method, headers, body: body ?? undefined });
         if (r.status === 0) {
           cells.push({ exchangeId: e.id, method: e.method, url: e.url, role, baselineStatus: e.status ?? 0, replayStatus: 0, redirectedAway: false, verdict: "unknown", note: `unreachable: ${r.error ?? "network"}` });
@@ -197,7 +260,21 @@ export const replayAuthz = async (input: AuthzReplayInput): Promise<AuthzReplayR
 
         let verdict: EnforcementCell["verdict"];
         let note: string;
-        if (r.status === 429 || (r.status >= 500 && r.status < 600)) {
+        // Canary markers (Authz-ExeC foreignMarkerHit): another principal's
+        // exclusive string in this replay body = content-level proof of
+        // cross-principal leakage. Checked FIRST — outranks all structural
+        // comparisons. The BASELINE identity's markers count (that's the
+        // victim's data); the replay role's own markers do NOT (self-data).
+        const baseMarkerOwner = "__recorder__";
+        const foreignMarkers = Object.entries(input.markers ?? {})
+          .filter(([mRole]) => mRole !== role)
+          .flatMap(([, ms]) => ms);
+        const hitMarker = role === "__anonymous__" || role === baseMarkerOwner
+          ? undefined
+          : foreignMarkers.find((m) => m.length > 0 && r.body.includes(m));
+        if (hitMarker !== undefined && r.status >= 200 && r.status < 300) {
+          verdict = "bypassed"; note = `marker leak: foreign canary "${hitMarker.slice(0, 24)}" in response body — content-level cross-principal proof`;
+        } else if (r.status === 429 || (r.status >= 500 && r.status < 600)) {
           // Infrastructure noise ≠ application authz verdict (Authz-ExeC WAF tier):
           // rate limiting / WAF / origin errors are not authorization evidence.
           verdict = "unknown"; note = `infra-blocked (status ${r.status}) — not an authz signal`;
@@ -217,15 +294,25 @@ export const replayAuthz = async (input: AuthzReplayInput): Promise<AuthzReplayR
           // different fingerprint but still 2xx = needs eyes.
           const baseFp = await blobFingerprint(input.recordRoot, e.respBodyHash);
           const replayFp = fingerprint(r.status, r.sha256, r.bytes > 0);
+          // Normalized-hash comparison: blobFingerprint now hashes the
+          // NORMALIZED recorded body (2n: prefix); build the matching live
+          // fingerprint from the normalized replay body so the two formats
+          // align — otherwise every normalized blob mismatches by construction.
+          const nReplayFp = `2n:${normalizeBody(r.body).length}:${hashOf(normalizeBody(r.body))}`;
           // Volatile-normalized second opinion (Authz-ExeC): identical after
           // stripping timestamps/request-ids/nonces → same content.
           const nReplay = normalizeBody(r.body);
           const nBase = await readNormalizedBlob(input.recordRoot, e.respBodyHash);
           const sim = nBase === null ? 0 : tokenSimilarity(nReplay, nBase);
-          if (baseFp === replayFp) {
-            verdict = "bypassed"; note = `same response fingerprint as baseline (${replayFp})`;
+          if (baseFp === replayFp || (baseFp.startsWith("2n:") && baseFp === nReplayFp)) {
+            verdict = "bypassed"; note = `same response fingerprint as baseline (normalized ${baseFp.startsWith("2n:") ? "hash" : "raw"})`;
           } else if (nBase !== null && sim >= 0.9) {
             verdict = "bypassed"; note = `normalized bodies match (token similarity ${sim.toFixed(2)} — volatile noise stripped)`;
+          } else if (nBase !== null && keyValueMatch(r.body, await readRawBlob(input.recordRoot, e.respBodyHash)) >= 0.9) {
+            // Akto percentage_match: JSON flattened key→value-set overlap — the
+            // differing keys are typically the owner fields themselves, which
+            // is exactly the BOLA shape (same object type, different owner).
+            verdict = "bypassed"; note = `key-value match ≥90% (owner-field drift only)`;
           } else {
             verdict = "unknown"; note = `2xx but body differs from baseline (${replayFp} vs ${baseFp}, sim ${sim.toFixed(2)}) — manual check`;
           }
@@ -239,6 +326,17 @@ export const replayAuthz = async (input: AuthzReplayInput): Promise<AuthzReplayR
           verdict = "unknown"; note = `status ${r.status} — inconclusive`;
         }
         cells.push({ exchangeId: e.id, method: e.method, url: e.url, role, baselineStatus: e.status ?? 0, replayStatus: r.status, redirectedAway, verdict, note });
+        if (role === "__anonymous__" && verdict === "bypassed") {
+          // Anonymous got the SAME content as the recorded baseline → the
+          // endpoint is public; ANY role that also read it is not a finding.
+          // Rewrite this exchange's role cells from bypassed → public noise.
+          for (const c of cells) {
+            if (c.exchangeId === e.id && c.verdict === "bypassed" && c.role !== "__anonymous__") {
+              (c as { verdict: EnforcementCell["verdict"]; note: string }).verdict = "unknown";
+              (c as { note: string }).note = "downgraded: endpoint is public (anonymous replay read the same content)";
+            }
+          }
+        }
       }
     }
   }
