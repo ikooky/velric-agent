@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { ALL_CONTRACTS } from "../src/contracts/contracts.js";
 import golden from "./golden_samples.json" with { type: "json" };
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+const repoRoot = join(import.meta.dirname, "..");
 
 /** Golden-shape guard: every contract's outputSchema must safely parse a
  *  representative of the handler's REAL return shape. This is the class of
@@ -59,6 +62,19 @@ describe("output schema shape guards", () => {
       expect(contract, `golden sample for unknown tool ${tool}`).toBeTruthy();
       const parsed = contract!.outputSchema.safeParse(sample);
       expect(parsed.success, `${tool}: outputSchema rejects the REAL handler return — ${JSON.stringify(parsed.success ? null : parsed.error.issues?.slice(0, 2))}`).toBe(true);
+    }
+  });
+
+  it("chains.json references only live tool names (catalog-complete guard)", async () => {
+    const chains = JSON.parse(await readFile(join(repoRoot, "assets/chains.json"), "utf8")) as {
+      chains: { id: string; steps: { tool: string }[] }[];
+    };
+    expect(chains.chains.length).toBeGreaterThan(5);
+    const names = new Set(ALL_CONTRACTS.map((c) => c.name));
+    for (const ch of chains.chains) {
+      for (const st of ch.steps) {
+        expect(names.has(st.tool), `chain ${ch.id} references dead tool ${st.tool}`).toBe(true);
+      }
     }
   });
 

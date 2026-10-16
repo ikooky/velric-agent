@@ -1,0 +1,119 @@
+{
+  "$comment": "Data-driven exploitation chains (blitzstrike chains.json discipline): knowledge lives in DATA, never hardcoded in source. Each chain: triggers (finding keywords) + required_findings (prerequisites) + severity + steps as {action, tool, success_criteria, negative_control}. Tool names MUST exist in ALL_CONTRACTS — the golden-sample test validates this. negative_control: what result DISPROVES the hypothesis (prevents wishful chaining).",
+  "chains": [
+    {
+      "id": "spa_sourcemap_leak",
+      "triggers": ["sourcemap", "source map"],
+      "required_findings": [],
+      "severity": "high",
+      "steps": [
+        { "action": "recover original sources", "tool": "detect_sourcemaps", "success_criteria": "recovered > 0 sources written under sourcemap-recovered/", "negative_control": "sourcesContent stripped (missing > 0, recovered == 0)" },
+        { "action": "scan recovered source for secrets", "tool": "harvest_static", "success_criteria": "credential pairs found in recovered tree", "negative_control": "recovered sources are library code only" }
+      ]
+    },
+    {
+      "id": "sensitive_path_exposure",
+      "triggers": ["backup", "dump", "archive"],
+      "required_findings": [],
+      "severity": "high",
+      "steps": [
+        { "action": "find backup candidates", "tool": "dir_fuzz", "success_criteria": "200/403 hits on backup suffixes (backups preset)", "negative_control": "soft-404 calibration collapses all candidates" },
+        { "action": "unpack any found archive", "tool": "backup_unpack", "success_criteria": "archive unpacked with > 0 files", "negative_control": "candidate is a soft-404 page" }
+      ]
+    },
+    {
+      "id": "git_exposure",
+      "triggers": [".git"],
+      "required_findings": [],
+      "severity": "critical",
+      "steps": [
+        { "action": "probe .git HEAD", "tool": "http_probe", "success_criteria": "HEAD reachable (ref: refs/heads/…)", "negative_control": "403/404 on HEAD" },
+        { "action": "restore repository", "tool": "git_restore", "success_criteria": ">= 1 commit object recovered", "negative_control": "directory listing only, objects pruned" }
+      ]
+    },
+    {
+      "id": "idor_suspect_chain",
+      "triggers": ["idor", "bola"],
+      "required_findings": ["idor-suspect"],
+      "severity": "high",
+      "steps": [
+        { "action": "deepen suspect with three-reference oracle", "tool": "idor_deep", "success_criteria": "idor-confirmed / idor-confirmed-identity verdict with oracle sims", "negative_control": "public-or-unprotected (anonymous ≈ attacker ⇒ endpoint is public)" },
+        { "action": "replay recorded traffic under low-priv credentials", "tool": "authz_replay", "success_criteria": "bypassed cells with marker or fingerprint evidence", "negative_control": "anonymous third state downgrades to public-endpoint" }
+      ]
+    },
+    {
+      "id": "jwt_oracle_chain",
+      "triggers": ["jwt"],
+      "required_findings": ["jwt-usage"],
+      "severity": "high",
+      "steps": [
+        { "action": "collect and decode tokens", "tool": "jwt", "success_criteria": "tokens found with claims extracted", "negative_control": "no tokens in corpus (secrets/js/traffic)" },
+        { "action": "run differential attacks", "tool": "jwt", "success_criteria": "any attack verdict that is not inconclusive", "negative_control": "baseline non-2xx ⇒ all attacks inconclusive (dead oracle)" }
+      ]
+    },
+    {
+      "id": "secret_leak_chain",
+      "triggers": ["secret", "credential", "api key"],
+      "required_findings": [],
+      "severity": "critical",
+      "steps": [
+        { "action": "pair-scan corpora for credential pairs", "tool": "harvest_static", "success_criteria": "id+secret co-window confirmed pairs", "negative_control": "isolated key-id only (weak signal, unconfirmed)" },
+        { "action": "attribute leaked PII to endpoints", "tool": "harvest_static", "success_criteria": "PII kinds mapped to exchanges", "negative_control": "blobs contain no personal data kinds" }
+      ]
+    },
+    {
+      "id": "mass_assign_chain",
+      "triggers": ["mass assignment", "privilege field"],
+      "required_findings": ["mass-assign-sink"],
+      "severity": "critical",
+      "steps": [
+        { "action": "verify sink persistence with re-read", "tool": "mass_assign", "success_criteria": "injected field persists on re-read (apply mode)", "negative_control": "2xx but re-read shows original value (no binding)" }
+      ]
+    },
+    {
+      "id": "smuggle_chain",
+      "triggers": ["smuggling", "cl.te", "te.cl"],
+      "required_findings": ["smuggle-suspect"],
+      "severity": "high",
+      "steps": [
+        { "action": "differential smuggle probes", "tool": "probe_smuggle", "success_criteria": "status/time divergence vs baseline on conflict headers", "negative_control": "baseline unreachable ⇒ skip (no false differential)" }
+      ]
+    },
+    {
+      "id": "oob_confirmation",
+      "triggers": ["blind", "oob", "ssrf-suspect"],
+      "required_findings": ["ssrf-suspect"],
+      "severity": "high",
+      "steps": [
+        { "action": "fire nonce hosts and poll", "tool": "oob_confirm", "success_criteria": "DNS/HTTP interaction on unique callback host", "negative_control": "zero interactions in window (blind stays suspected)" }
+      ]
+    },
+    {
+      "id": "ws_origin_chain",
+      "triggers": ["websocket", "cross-origin ws"],
+      "required_findings": ["ws-reachable"],
+      "severity": "medium",
+      "steps": [
+        { "action": "origin check", "tool": "ws_origin_check", "success_criteria": "handshake accepted with foreign Origin", "negative_control": "403 on foreign Origin" }
+      ]
+    },
+    {
+      "id": "takeover_chain",
+      "triggers": ["dangling cname", "takeover"],
+      "required_findings": ["dangling-cname"],
+      "severity": "high",
+      "steps": [
+        { "action": "match provider fingerprints", "tool": "subdomain_enum", "success_criteria": "NXDOMAIN/ cname → provider fingerprint match", "negative_control": "cname resolves to live origin (no takeover surface)" }
+      ]
+    },
+    {
+      "id": "cache_poisoning_surface",
+      "triggers": ["unkeyed header", "cache"],
+      "required_findings": [],
+      "severity": "high",
+      "steps": [
+        { "action": "bucket-bisect hidden headers", "tool": "mine_hidden_params", "success_criteria": "header-kind param found with junk-anagram control passing", "negative_control": "every candidate also reacts to junk anagram (input-allergic endpoint)" }
+      ]
+    }
+  ]
+}

@@ -1,4 +1,5 @@
 import { writeArtifact } from "../adapters/artifacts.js";
+import { coerceProofKind, proofWording } from "../domain/proofKinds.js";
 
 /** Report input shape. */
 export interface ReportInput {
@@ -20,9 +21,18 @@ export interface FindingView {
   readonly disposition?: "pending" | "fixed";
   readonly evidenceHashes?: string[];
   readonly evidenceVersion?: number;
+  /** Which deterministic mechanism proved this finding (proofKinds.ts).
+   *  Missing → unproven; the report renders the honest caveat. */
+  readonly proofKind?: string;
 }
 
 const sevRank: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, "": 4 };
+
+const proofLine = (f: FindingView): string => {
+  const kind = coerceProofKind(f.proofKind);
+  if (kind === "unproven") return `> proof: ${proofWording("unproven", false)}`;
+  return `> proof (${kind}): ${proofWording(kind, true)}`;
+};
 
 const nz = (s: string | undefined, d: string): string =>
   s !== undefined && s.trim() !== "" ? s : d;
@@ -57,6 +67,7 @@ export const renderReport = (input: ReportInput): string => {
       b.push(`### ${i}. [${(nz(f.severity, "info")).toUpperCase()}] ${nz(f.name, nz(f.vulnClass, "未分类"))}`);
       b.push("");
       b.push(nz(f.summary, ""));
+      b.push(proofLine(f));
       b.push("");
       if (f.poc && f.poc.trim() !== "") {
         b.push("**PoC / 证据：**");
@@ -138,6 +149,8 @@ export const findingMarkdown = (f: FindingView): string => {
   b.push("");
   b.push("## 摘要");
   b.push(f.summary ?? "-");
+  b.push("");
+  b.push(proofLine(f));
   if (f.poc) {
     b.push("");
     b.push("## PoC");

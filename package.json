@@ -36,12 +36,13 @@
     "node": ">=22.0.0"
   },
   "files": [
-    "dist",
-    "assets",
-    "skills",
-    "scripts/velric-agent.mjs",
+    "LICENSE",
     "README.md",
-    "LICENSE"
+    "assets",
+    "assets/**",
+    "dist",
+    "scripts/velric-agent.mjs",
+    "skills"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
