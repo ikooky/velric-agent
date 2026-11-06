@@ -32,12 +32,8 @@
     "node-forge": "^1.4.0",
     "parse5": "8.0.1",
     "playwright-core": "1.64.0",
-    "protobufjs": "^8.8.1",
     "sql.js": "^1.14.2",
-    "tar-stream": "^3.2.2",
-    "undici": "^7.30.0",
-    "yaml": "2.9.1",
-    "zod": "4.6.7"
+    "undici": "^7.30.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
