@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Single bin: run the CLI from TypeScript sources directly (Node >= 22.13
-// type stripping) — no build step, dist/ stays a dev artifact only.
+// type stripping) — no build step, no dist/ artifact.
 const args = process.argv.slice(2);
 const module = await import("node:module");
 const loaderUrl = new URL("./ts-loader.mjs", import.meta.url);
