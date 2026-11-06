@@ -104,11 +104,11 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 ```bash
 git clone https://github.com/ikooky/velric-agent.git
 cd velric-agent
-npm install --omit=dev
+bash bootstrap.sh
 node scripts/velric-agent.mjs <command>
 ```
 
-零构建：CLI 直接从 TypeScript 源码运行（Node ≥ 22.13 原生类型剥离，无编译步骤、无 tsx/ts-node）。
+`bootstrap.sh` 一条命令完成：Node ≥ 22.13 检查（缺则给出安装指引）→ 运行时依赖安装 → 自验证（`help` 命令矩阵完整性）。零构建：CLI 直接从 TypeScript 源码运行（Node 原生类型剥离）。`--verify` 只验不装。
 
 ## CLI
 

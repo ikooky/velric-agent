@@ -13,7 +13,7 @@ description: |
 ## ACTION REQUIRED（读完后立刻执行）
 
 1. `NOW`: 确认目标在授权测试范围内（本工具链仅用于已授权的安全测试）
-2. `NOW`: 校验工具可用 —— `node <repo>/scripts/velric-agent.mjs help` 能列出命令矩阵即就绪；未安装则 `git clone` 仓库 + `npm install --omit=dev`（一次性，之后 skill 直接调用）
+2. `NOW`: 校验工具可用 —— `bash <repo>/bootstrap.sh --verify` 通过即就绪；未安装则 `git clone` 仓库后 `bash bootstrap.sh`（一条命令装完并自验，之后 skill 直接调用）
 3. `NEXT`: 侦察从 `references/workflow.md` 的 Phase 0 开始，工具不是孤立的——有阶段依赖与门禁
 4. `ACT`: 每个命令产物落各自的 `<outdir>/`（JSON+txt 工件），结论必须引用产物文件与真实状态码
 5. `ACT`: 需要出网代理时所有命令共用 `--proxy URL` / `--proxy-pool FILE` / `--rps N` 全局限速
@@ -22,7 +22,7 @@ description: |
 
 ## 命令矩阵
 
-命令一律形如 `node $VELRIC/scripts/velric-agent.mjs <subcommand>`，下表省略前缀。
+命令一律形如 `node $VELRIC/scripts/velric-agent.mjs <subcommand>`，下表省略前缀。首次使用先 `bash $VELRIC/bootstrap.sh`。
 
 ### Phase 0 — 指纹与分类
 | 命令 | 用途 |
