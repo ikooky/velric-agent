@@ -62,7 +62,7 @@ export const createOrLoadCA = async (root: string, commonName = "velric-recorder
     cert.publicKey = caPublicKey;
     cert.serialNumber = String(Date.now()) + String(host.length);
     cert.validity.notBefore = new Date(Date.now() - 3600000); // tolerate clock skew
-    cert.validity.notAfter = new Date(Date.now() + 365 * 86400000);
+    cert.validity.notAfter = new Date(Date.now() + LEAF_TTL_MS);
     cert.setSubject([{ name: "commonName", value: host }]);
     cert.setIssuer(forge.pki.certificateFromPem(caCertPem).subject.attributes);
     // IP hosts need an IPAddress SAN entry (type 7); DNS names use type 2.

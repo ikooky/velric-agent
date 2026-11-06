@@ -38,7 +38,10 @@ const patchBody = (source: string, patches: Readonly<Record<string,unknown>>, re
   let value: unknown;
   try { value = JSON.parse(source); } catch {
     const form = new URLSearchParams(source);
-    if (!source.includes("=")) return source;
+    if (!source.includes("=")) {
+      if (Object.keys(patches).length > 0) throw Object.assign(new Error("non-form body cannot carry patches"),{code:"unmapped_credential"});
+      return source;
+    }
     if (removeTokens) for (const name of [...form.keys()]) if (TOKEN_FIELD.test(name)) form.delete(name);
     for (const [name,val] of Object.entries(patches)) { if (val === null) form.delete(name); else form.set(name,String(val)); }
     return form.toString();
@@ -51,6 +54,10 @@ const patchBody = (source: string, patches: Readonly<Record<string,unknown>>, re
   const result = walk(value);
   if (result && typeof result === "object" && !Array.isArray(result)) {
     for (const [name,val] of Object.entries(patches)) { if (val===null) delete (result as Record<string,unknown>)[name]; else (result as Record<string,unknown>)[name]=val; }
+  } else if (Object.keys(patches).length > 0) {
+    // Array root / scalar body: silently keeping the recorded bytes would be a
+    // masked no-op — surface it instead.
+    throw Object.assign(new Error("json body root is not a patchable object"),{code:"unmapped_credential"});
   }
   return JSON.stringify(result);
 };
@@ -59,7 +66,9 @@ export const roleRequest = (recorded: RecordedRequest, override: RoleOverride): 
   if (override.anonymous) for (const name of [...url.searchParams.keys()]) if (TOKEN_FIELD.test(name)) url.searchParams.delete(name);
   for (const [name,val] of Object.entries(override.query??{})) { if(val===null)url.searchParams.delete(name);else url.searchParams.set(name,val); }
   const headers = Object.fromEntries(Object.entries(stripCredentials(recorded.headers)).filter(([name])=>!HOP.test(name)));
-  if (!override.anonymous) Object.assign(headers,credentialHeaders(override.credential??""),normalizeHeaders(override.headers));
+  // Hop-by-hop filtering applies to BOTH sources: a caller override must not
+  // re-introduce connection/content-length/transfer-encoding and corrupt framing.
+  if (!override.anonymous) Object.assign(headers,credentialHeaders(override.credential??""),Object.fromEntries(Object.entries(normalizeHeaders(override.headers)).filter(([name])=>!HOP.test(name))));
   let body = recorded.body;
   if (body && (override.anonymous || override.body)) {
     if (typeof body!=="string") throw Object.assign(new Error("binary identity carriers require an explicit request mapping"),{code:"unmapped_credential"});
@@ -80,6 +89,9 @@ export class SessionJar {
       const props=new Map(attributes.map(part=>{const i=part.indexOf("=");return i<0?[part.trim().toLowerCase(),""]:[part.slice(0,i).trim().toLowerCase(),part.slice(i+1).trim()];}));
       const explicit=props.get("domain");const domain=(explicit??u.hostname).replace(/^\./,"").toLowerCase();
       if(explicit && u.hostname!==domain && !u.hostname.endsWith("."+domain))continue;
+      // Public-suffix guard: a bare TLD Domain (Domain=com) would otherwise be
+      // replayed to every host under that suffix (cookie tossing).
+      if(explicit && (domain.indexOf(".")<0 || domain==="localhost"))continue;
       const defaultPath=u.pathname.slice(0,u.pathname.lastIndexOf("/")+1)||"/";
       const path=props.get("path")?.startsWith("/")?props.get("path")!:defaultPath;
       const expires=props.has("max-age")?Date.now()+Number(props.get("max-age"))*1000:props.has("expires")?Date.parse(props.get("expires")!):null;

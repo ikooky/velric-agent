@@ -3,14 +3,14 @@ import { readJson, writeJson, withRootLock } from "../core/storage.js";
 import type { ExplorationGraph, ExpNode, ExpEdge, Anchor } from "./graphs.js";
 
 export interface ColdParams { readonly coldAfterRounds:number; readonly maxDigestSize:number }
-export const DEFAULT_COLD_PARAMS:ColdParams={coldAfterRounds:3,maxDigestSize:50};
+const DEFAULT_COLD_PARAMS:ColdParams={coldAfterRounds:3,maxDigestSize:50};
 export interface NodeStamp { readonly id:string; lastTouched:number; version:number; contentHash?:string; touchVersion?:number }
 export interface Folded { digests:string[];folded:string[];rescued:string[] }
 const canonical=(value:unknown):unknown=>Array.isArray(value)?value.map(canonical):value && typeof value==="object"?
   Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>[k,canonical(v)])):value;
 const hash=(value:unknown):string=>createHash("sha256").update(JSON.stringify(canonical(value))).digest("hex");
 export const digestHash=(nodes:ExpNode[],edges:ExpEdge[]=[],anchors:Anchor[]=[]):string=>hash({nodes:[...nodes].sort((a,b)=>a.id.localeCompare(b.id)),edges:[...edges].sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b))),anchors:[...anchors].sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)))});
-export const coldGroups=(coldIds:Set<string>,edges:ExpEdge[]):string[][]=>{
+const coldGroups=(coldIds:Set<string>,edges:ExpEdge[]):string[][]=>{
   const parent=new Map([...coldIds].map(id=>[id,id]));
   const find=(id:string):string=>{let cur=id;while(parent.get(cur)!==cur)cur=parent.get(cur)!;return cur;};
   for(const edge of edges)if(parent.has(edge.from)&&parent.has(edge.to))parent.set(find(edge.from),find(edge.to));

@@ -10,7 +10,7 @@ export const originOf = (url: string): string => {
 };
 
 /** Walk back from a `}` index to its matching `{` and return the body. */
-export const matchedBlock = (s: string, endBraceIdx: number): string => {
+const matchedBlock = (s: string, endBraceIdx: number): string => {
   let depth = 0;
   for (let j = endBraceIdx; j >= 0; j--) {
     const ch = s[j];
@@ -29,7 +29,7 @@ export interface ChunkMap {
 }
 
 /** Parse every `}[x]+".js"` id→hash map plus this file's publicPath hints. */
-export const parseChunkMaps = (js: string): ChunkMap[] => {
+const parseChunkMaps = (js: string): ChunkMap[] => {
   const maps: ChunkMap[] = [];
   const pubs = [...js.matchAll(/(?:\.p|publicPath)\s*=\s*"([^"]*)"/g)].map(
     (m) => m[1]!,
@@ -58,7 +58,9 @@ export const chunkUrls = (base: string, js: string): string[] => {
     const paths = publicPaths.length > 0 ? publicPaths : ["/assets/", "/"];
     for (const [cid, hash] of Object.entries(ids)) {
       if (cid === "__vite__") {
-        for (const pp of paths) out.add(new URL(hash, `${origin}/`).href);
+        // The Vite manifest stores a ready absolute path in `hash` — no
+        // publicPath join needed.
+        out.add(new URL(hash, `${origin}/`).href);
         continue;
       }
       for (const pp of paths) {

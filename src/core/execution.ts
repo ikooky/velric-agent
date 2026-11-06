@@ -10,10 +10,16 @@ const local=new AsyncLocalStorage<Context>();
 export const executionRunId=()=>local.getStore()?.runId??"unbound";
 export const executionSignal=()=>local.getStore()?.signal;
 export const withExecution=async<T>(input:{tool:string;runId?:string;ledgerRoot?:string;signal?:AbortSignal},run:()=>Promise<T>):Promise<T>=>local.run({tool:input.tool,runId:input.runId??randomUUID(),ledgerRoot:input.ledgerRoot,receipts:[],signal:input.signal},run);
+/** Query-string credential fields are redacted before a URL is persisted to the ledger. */
+const TOKEN_FIELD_RE=/^(?:access_?token|refresh_?token|id_?token|auth_?token|api_?key|apikey|token|jwt|session_?token)$/i;
+const redactUrlTokens=(raw:string):string=>{try{const u=new URL(raw);let hit=false;for(const k of [...u.searchParams.keys()])if(TOKEN_FIELD_RE.test(k)){u.searchParams.set(k,"[REDACTED]");hit=true;}return hit?u.href:raw;}catch{return raw;}};
 export const recordReceipt=async(input:{url:string;method:string;status:number|null;requestHash?:string|null;responseHash?:string|null;principal?:string;complete:boolean;finalUrl?:string|null}):Promise<RequestReceipt>=>{
  const c=local.getStore();if(!c)throw Object.assign(new Error("no execution context"),{code:"receipt_outside_execution"});
- const receipt:RequestReceipt={id:randomUUID(),runId:c.runId,tool:c.tool,url:input.url,method:input.method.toUpperCase(),status:input.status,requestHash:input.requestHash??null,responseHash:input.responseHash??null,principal:input.principal??"anonymous",complete:input.complete,at:new Date().toISOString(),finalUrl:input.finalUrl};c.receipts.push(receipt);
- if(c.ledgerRoot)await withRootLock(c.ledgerRoot,async()=>{const old=await readJson<RequestReceipt[]>(c.ledgerRoot!,"observation_ledger.json",()=>[]);await writeJson(c.ledgerRoot!,"observation_ledger.json",[...old,receipt]);});
+ const safeUrl=redactUrlTokens(input.url);
+ const receipt:RequestReceipt={id:randomUUID(),runId:c.runId,tool:c.tool,url:safeUrl,method:input.method.toUpperCase(),status:input.status,requestHash:input.requestHash??null,responseHash:input.responseHash??null,principal:input.principal??"anonymous",complete:input.complete,at:new Date().toISOString(),finalUrl:input.finalUrl};c.receipts.push(receipt);
+ // Ledger persistence is bookkeeping, never the result: a corrupt/unwritable
+ // ledger must not fail an already-successful network request.
+ if(c.ledgerRoot)await withRootLock(c.ledgerRoot,async()=>{const old=await readJson<RequestReceipt[]>(c.ledgerRoot!,"observation_ledger.json",()=>[]);await writeJson(c.ledgerRoot!,"observation_ledger.json",[...old,receipt]);}).catch(()=>undefined);
  return receipt;
 };
 export const receipts=()=>[...(local.getStore()?.receipts??[])];

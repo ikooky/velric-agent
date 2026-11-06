@@ -91,13 +91,14 @@ export const scanTrafficPii = async (input: PiiScanInput): Promise<PiiScanResult
 
   for (const bf of blobFiles) {
     if (scanned >= cap) break;
-    const hash = createHash("sha256").update(await readFile(bf)).digest("hex");
+    // Read once; the same buffer feeds the hash and the scan (no double IO).
+    let buf: Buffer;
+    try { buf = await readFile(bf); } catch { continue; }
+    const hash = createHash("sha256").update(buf).digest("hex");
     // Only RESPONSE bodies are PII movement; request bodies map via reqBodyHash
     // and are scanned too (client PII submissions matter less, skip to keep
     // signal high — respBodyHash index decides attribution).
     const ex = hashToExchange.get(hash);
-    let buf: Buffer;
-    try { buf = await readFile(bf); } catch { continue; }
     if (buf.length === 0 || buf.length > 4 * 1024 * 1024) continue;
     if ((input.skipBinary ?? true) && !looksTextual(buf)) continue;
     scanned++;

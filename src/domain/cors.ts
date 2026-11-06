@@ -26,7 +26,7 @@ export interface CorsProbeResult {
   readonly artifacts: { path: string; bytes: number }[];
 }
 
-export const DEFAULT_CORS_ORIGINS: readonly string[] = [
+const DEFAULT_CORS_ORIGINS: readonly string[] = [
   "https://evil-velric.example.com",
   "null",
   "http://localhost:8080",

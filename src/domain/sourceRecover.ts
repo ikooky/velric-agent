@@ -87,11 +87,6 @@ export const recoverMapContents = async (maps: readonly MapContent[], outputRoot
   return { maps: mapCount, recovered: files.size, missing, files: [...files], artifacts: [art] };
 };
 
-export const recoverInlineMap = async (mapText: string, outputRoot: string): Promise<{ recovered: number; missing: number }> => {
-  const result = await recoverMapContents([{ text: mapText, from: "data:inline" }], outputRoot);
-  return { recovered: result.recovered, missing: result.missing };
-};
-
 export const recoverSourceMaps = async (input: RecoverInput): Promise<RecoverResult> => {
   if (input.mapContents) return recoverMapContents(input.mapContents, input.outputRoot);
   const entries = await readdir(input.mapDir, { withFileTypes: true }).catch(() => []);

@@ -1,4 +1,4 @@
-import { writeFile, readFile, mkdir } from "node:fs/promises";
+import { writeFile, readFile, mkdir, rename } from "node:fs/promises";
 import { join } from "node:path";
 
 /** Global rate limiter: token bucket with min-interval between acquisitions.
@@ -96,5 +96,8 @@ export const writeStageDone = async (
   if (seed !== undefined) (cp as { seed?: string }).seed = seed;
   cp.stages[stage] = { status: "ok", at: new Date().toISOString() };
   await mkdir(outputRoot, { recursive: true });
-  await writeFile(join(outputRoot, "checkpoint.json"), JSON.stringify(cp, null, 2));
+  // Atomic write: a crash mid-write must not corrupt the resume checkpoint.
+  const tmp = join(outputRoot, `checkpoint.json.${process.pid}.tmp`);
+  await writeFile(tmp, JSON.stringify(cp, null, 2));
+  await rename(tmp, join(outputRoot, "checkpoint.json"));
 };

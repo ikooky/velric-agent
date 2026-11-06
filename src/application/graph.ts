@@ -74,7 +74,7 @@ export interface Graph {
   nextId: number;
 }
 
-export const emptyGraph = (goal: string): Graph => ({
+const emptyGraph = (goal: string): Graph => ({
   goal,
   constraints: [],
   goals: [],

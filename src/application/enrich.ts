@@ -107,7 +107,9 @@ export const enrichAssets = async (input: EnrichInput): Promise<EnrichResult> =>
     upsert({ type: "domain", key: host, rootDomain: root });
     // A bare public suffix (host IS "co.uk") is not a registrable domain —
     // graphs.ts already refuses these; keep the two implementations aligned.
-    if (root !== host || host.split(".").length <= 2) {
+    // Every other host (including a bare multi-label eTLD+1 like target.co.uk
+    // or a two-label example.com) gets a root_domain node.
+    {
       const PUBLIC_SUFFIX = new Set(["co.uk", "org.uk", "ac.uk", "gov.uk", "com.au", "net.au", "org.au", "co.nz", "com.br", "com.cn", "com.tw", "com.hk", "co.jp", "co.kr", "co.in", "co.za", "com.sg", "com.my"]);
       if (!PUBLIC_SUFFIX.has(host)) upsert({ type: "root_domain", key: root, rootDomain: root });
     }
@@ -125,8 +127,14 @@ export const enrichAssets = async (input: EnrichInput): Promise<EnrichResult> =>
         upsert({ type: "subdomain", key: host, rootDomain: root, recordType: "CNAME", recordValue: [cn] });
       }
       if (input.http !== false) {
+        // Session cookies are scoped to the FIRST seed's registrable domain —
+        // never replayed to arbitrary hosts from third-party seed lists
+        // (same-origin discipline as harvest/spider).
+        const firstSeed = input.seeds[0] ?? "";
+        const firstRoot = (() => { try { return rootOf(new URL(/^https?:\/\//i.test(firstSeed) ? firstSeed : `https://${firstSeed}`).hostname.replace(/^www\./, "")); } catch { return null; } })();
+        const cookie = input.cookie && firstRoot && (root === firstRoot || host.endsWith(`.${firstRoot}`)) ? input.cookie : undefined;
         const probe = await httpProbe({ url,
-          proxy: input.proxy, cookie: input.cookie, timeoutMs: input.timeoutMs,
+          proxy: input.proxy, cookie, timeoutMs: input.timeoutMs,
         },).catch(() => null);
         if (probe && probe.status > 0) {
           upsert({

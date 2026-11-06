@@ -11,7 +11,7 @@ import { chunkUrls, originOf } from "../domain/chunks.js";
 import { classifyPaths, extractPathLiterals, extractRoutes } from "../domain/endpoints.js";
 
 /** Bounded-concurrency map pool. */
-export const pooled = async <T>(
+const pooled = async <T>(
   items: readonly T[],
   limit: number,
   worker: (item: T) => Promise<void>,
@@ -23,7 +23,8 @@ export const pooled = async <T>(
       await worker(items[idx]!);
     }
   };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run));
+  const workers = Math.max(1, Math.min(limit, items.length));
+  await Promise.all(Array.from({ length: workers }, run));
 };
 
 export interface HarvestInput {
@@ -53,7 +54,7 @@ export interface HarvestSummary {
   readonly artifacts: { path: string; bytes: number }[];
 }
 
-const SCRIPT_SRC_RE = /<script[^>]+src=("(?:[^"]+\.js[^"]*)"|'((?:[^']+\.js[^']*))'|([^"\s>]+\.js))/gi;
+const SCRIPT_SRC_RE = /<script[^>]+src=("(?:([^"]+\.js[^"]*))"|'((?:[^']+\.js[^']*))'|([^"\s>]+\.js))/gi;
 const LINK_JS_RE = /(?:src|href)=("([^"]*\.js)"|([^"\s>]+\.js))/gi;
 
 const normalizeBase = (raw: string): string =>
@@ -118,7 +119,7 @@ export const harvestStatic = async (
   const seeds = new Set<string>();
   for (const re of [SCRIPT_SRC_RE, LINK_JS_RE]) {
     for (const m of entry.body.matchAll(re)) {
-      const src = m[2] ?? m[3] ?? m[1]!;
+      const src = m[2] ?? m[3] ?? m[4]!;
       try { seeds.add(src.startsWith("http") ? src : new URL(src, base).href); }
       catch { /* one malformed src must not kill the whole harvest */ }
     }
@@ -259,6 +260,8 @@ export const mergeBrowserSamples = async (root: string, target: string, producer
   const retained = owner && owner.target !== new URL(target).href ? [] : old.map(row => ({ ...row, sources: (row.sources ?? ["runtime"]).filter(s => s !== producer) })).filter(row => row.sources.length);
   const merged = new Map<string, BrowserParamSample>();
   for (const row of [...retained, ...fresh.map(row => ({ ...row, sources: [producer] }))]) {
+    // Disk rows are untrusted: skip rows with an invalid shape instead of crashing.
+    if (!row || typeof row.method !== "string" || typeof row.url !== "string") continue;
     const normalized = { ...row, method: row.method.toUpperCase(), url: new URL(row.url, target).href };
     const key = JSON.stringify([normalized.method, normalized.url, normalized.body ?? null]);
     const prev = merged.get(key);
@@ -269,7 +272,7 @@ export const mergeBrowserSamples = async (root: string, target: string, producer
   return artifact;
 });
 
-export const listJsFiles = async (jsDir: string): Promise<string[]> => {
+const listJsFiles = async (jsDir: string): Promise<string[]> => {
   try {
     const manifest = await readJson<{ owners: Record<string, { path: string; sha256: string }[]> } | null>(dirname(jsDir), "js/corpus_manifest.json", () => null);
     if (manifest) {
@@ -278,7 +281,10 @@ export const listJsFiles = async (jsDir: string): Promise<string[]> => {
       for (const [name, hash] of files) {
         if (basename(name) !== name || !name.endsWith('.js')) throw new Error('invalid corpus path');
         const path = join(jsDir, name);
-        if (createHash('sha256').update(await readFile(path)).digest('hex') !== hash) throw new Error('corpus integrity mismatch');
+        // One missing file must not discard the whole verified corpus.
+        let bytes: Buffer;
+        try { bytes = await readFile(path); } catch { continue; }
+        if (createHash('sha256').update(bytes).digest('hex') !== hash) throw new Error('corpus integrity mismatch');
         out.push(path);
       }
       return out;

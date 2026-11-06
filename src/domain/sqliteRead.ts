@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, stat as statFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { createRequire } from "node:module";
 
@@ -40,6 +40,12 @@ export const readSqlite = async (input: SqliteReadInput): Promise<SqliteReadResu
     // require_.resolve("sql.js") lands inside dist/ — no extra segment.
     const sqljsDist = dirname(require_.resolve("sql.js"));
     const SQL = await initSqlJs({ locateFile: (f: string) => join(sqljsDist, f) });
+    const stat = await statFile(input.file);
+    if (stat.size > 64 * 1024 * 1024) {
+      const body = JSON.stringify({ ...result, opened: false, error: `db file too large (${stat.size} bytes, cap 64MB)` }, null, 2);
+      await writeFile(join(input.outputRoot, "sqlite_read.json"), body);
+      return { file: input.file, opened: false, tables: [], sensitive: [], artifacts: [{ path: join(input.outputRoot, "sqlite_read.json"), bytes: Buffer.byteLength(body) }] };
+    }
     const buf = await readFile(input.file);
     db = new SQL.Database(buf);
   } catch {

@@ -95,7 +95,7 @@ const diskLock = async (root: string): Promise<() => Promise<void>> => {
       try { await handle.writeFile(JSON.stringify({ pid: process.pid, token })); await handle.sync(); } finally { await handle.close(); }
       return async () => {
         const current = await readFile(path, "utf8").catch(() => "");
-        if (current && JSON.parse(current).token === token) await unlink(path);
+        try { if (current && JSON.parse(current).token === token) await unlink(path); } catch { /* corrupted lock file — nothing to release */ }
       };
     } catch (cause) {
       if ((cause as NodeJS.ErrnoException).code !== "EEXIST") throw cause;
@@ -104,6 +104,13 @@ const diskLock = async (root: string): Promise<() => Promise<void>> => {
       if (!before) continue;
       let owner: { pid?: number; token?: string } | null = null;
       try { owner = JSON.parse(await readFile(path, "utf8")); } catch { /* creation may still be in progress */ }
+      // Unparseable lock (crashed mid-write) has no pid to judge liveness by —
+      // fall back to age: past the busy deadline it is a poisoned lock, not a live one.
+      if (!owner && Date.now() - before.mtimeMs > 60000) {
+        const after = await lstat(path).catch(() => null);
+        if (after && after.ino === before.ino && after.mtimeMs === before.mtimeMs) await unlink(path).catch(() => undefined);
+        continue;
+      }
       if (owner && !ownerAlive(owner.pid)) {
         const after = await lstat(path).catch(() => null);
         if (after && after.ino === before.ino && after.mtimeMs === before.mtimeMs) await unlink(path).catch(() => undefined);

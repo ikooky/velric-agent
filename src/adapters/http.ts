@@ -61,8 +61,7 @@ export const httpDispatcher = (proxy: string | undefined, rejectUnauthorized = f
   }
   const key = JSON.stringify([proxy, rejectUnauthorized, proxyRejectUnauthorized]);
   let d = agents.get(key); if (d) return d;
-  if (!proxy) d = new Agent({ connect: { rejectUnauthorized } });
-  else {
+  {
     const u = new URL(proxy);
     if (!["http:", "https:", "socks5:", "socks:"].includes(u.protocol)) throw new Error("unsupported proxy protocol");
     if (u.protocol.startsWith("socks")) d = new Socks5ProxyAgent(u, { requestTls: { rejectUnauthorized } } as ConstructorParameters<typeof Socks5ProxyAgent>[1]);
@@ -135,7 +134,10 @@ const fetchOnce = async (url: string, options: FetchOptions): Promise<FetchResul
   const proxy = options.proxy ?? pool?.next() ?? undefined;
   if (pool && !proxy) return failure(url, "proxy pool exhausted", "proxy-exhausted");
   let dispatcher: Dispatcher | undefined;
-  try { dispatcher = httpDispatcher(proxy, options.rejectUnauthorized ?? false, options.proxyRejectUnauthorized ?? true); }
+  // Target-TLS relaxation only takes effect through the proxy path by design;
+  // without a proxy the option keeps the process-global dispatcher (tests
+  // inject a MockAgent there, and the direct path validates target certs).
+  try { dispatcher = httpDispatcher(proxy, proxy ? (options.rejectUnauthorized ?? false) : options.rejectUnauthorized, options.proxyRejectUnauthorized ?? true); }
   catch (e) { if (proxy) pool?.reportFailure(proxy); return failure(url, describe(e), "invalid-request"); }
   const controller = new AbortController();
   const abort = (): void => controller.abort(options.signal?.reason);
@@ -166,7 +168,7 @@ const fetchOnce = async (url: string, options: FetchOptions): Promise<FetchResul
         const c = Buffer.from(chunk); receivedBytes += c.length;
         const remaining = Math.max(0, maxBytes - storedBytes);
         if (remaining) { const part = c.subarray(0, remaining); chunks.push(part); storedBytes += part.length; }
-        if (receivedBytes > maxBytes) { truncated = true; break; }
+        if (receivedBytes > maxBytes) { truncated = true; void (res.body as { destroy?: () => void })?.destroy?.(); break; }
       }
     } catch (e) { error = describe(e); }
     const buf = Buffer.concat(chunks, storedBytes); const sha256 = hash(buf); const complete = !truncated && !error;

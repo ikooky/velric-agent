@@ -41,8 +41,8 @@ export const runCoverage = async (input: CoverageInput): Promise<CoverageResult>
     // instead of allowing cookies (which browsers scope by host, not port) out.
     await context.route("**/*", route => sameOrigin(route.request().url(), base.href) ? route.continue() : route.abort("blockedbyclient"));
     if (input.cookie) await context.addCookies(input.cookie.split(";").map(pair => {
-      const i = pair.indexOf("="); return { name: pair.slice(0, i).trim(), value: pair.slice(i + 1).trim(), url: base.origin + "/" };
-    }).filter(c => c.name));
+      const i = pair.indexOf("="); return i < 0 ? null : { name: pair.slice(0, i).trim(), value: pair.slice(i + 1).trim(), url: base.origin + "/" };
+    }).filter((c): c is { name: string; value: string; url: string } => c !== null && c.name.length > 0));
     await context.addInitScript(buildPreloadScript({ ...DEFAULT_HOOK_CONFIG, ...input.hook }));
     const page = await context.newPage();
     const observed = observeBrowserRequests(page);

@@ -60,7 +60,7 @@ export const deobfuscateSource = (source: string): TransformResult => {
     while (p && !isFn(p)) {
       if ((p.type === "AssignmentExpression" && contains(p.left, node)) || (p.type === "UpdateExpression") || (p.type === "UnaryExpression" && p.operator === "delete") ||
           ((p.type === "ForInStatement" || p.type === "ForOfStatement") && contains(p.left, node))) return false;
-      if (p.type === "Statement" as string) break;
+      if (/Statement$/.test(p.type)) break;
       node = p; p = parents.get(p);
     }
     return true;

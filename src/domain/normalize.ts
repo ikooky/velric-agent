@@ -129,14 +129,3 @@ export const charSimilarity = (a: string, b: string): number => {
   return 2 * prev[b.length]! / (a.length + b.length);
 };
 
-export const schemaSimilarity = (a: string, b: string): number => {
-  try {
-    const x = new Set(leaves(parse(a)).keys()), y = new Set(leaves(parse(b)).keys());
-    if (x.size === 0 || y.size === 0) return 0;
-    let common = 0;
-    for (const p of x) if (y.has(p)) common++;
-    return common / (x.size + y.size - common);
-  } catch {
-    return tokenSimilarity(a, b);
-  }
-};

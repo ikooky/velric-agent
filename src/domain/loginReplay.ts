@@ -56,7 +56,9 @@ export const replayLogin = async (input: LoginReplayInput): Promise<LoginReplayR
       const button = page.locator("button[type=submit], input[type=submit], button:has-text('Sign in'), button:has-text('Log in'), button:has-text('登录')").first();
       await Promise.all([
         page.waitForURL(url => url.href !== base.href, { timeout }).catch(() => undefined),
-        (await button.count() ? button.click({ timeout }) : page.locator(pass!).first().press('Enter')).then(() => { submitted = true; }),
+        (await button.count() ? button.click({ timeout }) : page.locator(pass!).first().press('Enter')).then(() => { submitted = true; }).catch((err) => {
+          evidence.push(`submit failed: ${err instanceof Error ? err.message : String(err)}`);
+        }),
       ]);
       if (input.loggedInRegex || input.loggedOutRegex) await page.waitForFunction(`() => {
         const text=document.body ? document.body.innerText : '';

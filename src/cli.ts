@@ -118,12 +118,13 @@ Usage:
   velric-agent cold-graph <dir> <action>       exploration graph compaction
   velric-agent retest <dir> <action>           finding retest lifecycle
   velric-agent traffic-query <dir> <action>    traffic search/get
-  velric-agent export-findings <f> <dir> <fmt> findings csv/json/md export
+  velric-agent export-findings <f> <dir> <fmt> findings csv/json/md/sarif export
   velric-agent evidence-bind <dir> <action>     evidence binding lifecycle
   velric-agent scan-platform <dir> <action>     native scan platform (projects/tasks/pipeline/assets)
   velric-agent help
 
 Common flags: --proxy URL | --proxy-pool FILE, --rps N (global rate limit), --cookie STR, --timeout MS
+Hunt binding: --run-id ID [--observation-ledger-root DIR] — record every request into the observation ledger for hunt-record verification
 `;
 
 
@@ -170,12 +171,9 @@ const resolveProxy = async (flags: Record<string, string | boolean | undefined>)
   return undefined;
 };
 
-/** Run one CLI command; returns the process exit code. */
-export const runCli = async (argv: readonly string[]): Promise<number> => {
-  const { command, positional, flags } = parseArgs(argv);
-  const out = (v: unknown) => console.log(JSON.stringify(v, null, 2));
-  try {
-    switch (command) {
+/** Dispatch one parsed command to its case; returns the process exit code. */
+const dispatch = async (command: string, positional: readonly string[], flags: Record<string, string | boolean>, out: (v: unknown) => void): Promise<number> => {
+  switch (command) {
       case "help":
       case "--help":
       case "-h":
@@ -452,7 +450,7 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
       case "url-refine": {
         const dir = positional[0];
         const urls = jarr(flags, "urls") ?? (typeof flags["urls-file"] === "string" ? (await (await import("node:fs/promises")).readFile(flags["urls-file"], "utf8")).split("\n").map((l) => l.trim()).filter(Boolean) : undefined);
-        if (!dir || !urls) {
+        if (!dir || !urls || urls.length === 0) {
           console.error("usage: url-refine <outdir> --urls a,b (or --urls-file FILE) [--action dedupe|classify] [--keep-static] [--fuzzy] [--params has|none]");
           return 2;
         }
@@ -685,8 +683,8 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
             outputRoot: dir,
             cookie: typeof flags.cookie === "string" ? flags.cookie : undefined,
             proxy: await resolveProxy(flags),
-            maxPages: typeof flags.max === "string" ? Number(flags.max) : undefined,
-            depth: typeof flags.depth === "string" ? Number(flags.depth) : undefined,
+            maxPages: num(flags.max),
+            depth: num(flags.depth),
             exclude: typeof flags.exclude === "string" ? flags.exclude : undefined,
           }),
         );
@@ -1088,7 +1086,7 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
       }
       case "proto-decode": {
         const [data, dir] = positional;
-        if (!data || !dir) { console.error("usage: proto-decode <hex|base64> <outdir> [--enc hex|base64]"); return 2; }
+        if (!data || !dir || (flags.enc !== undefined && flags.enc !== "hex" && flags.enc !== "base64")) { console.error("usage: proto-decode <hex|base64> <outdir> [--enc hex|base64]"); return 2; }
         const { decodeProtoHeuristic } = await import("./domain/protoDecode.js");
         out(await decodeProtoHeuristic({ data, encoding: (flags.enc === "hex" ? "hex" : "base64") as "hex" | "base64", outputRoot: dir }));
         return 0;
@@ -1258,11 +1256,11 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
       }
       case "export-findings": {
         const [file, dir, fmt] = positional;
-        if (!file || !dir || !fmt) { console.error("usage: export-findings <report.json> <outdir> csv|json|md-all"); return 2; }
+        if (!file || !dir || !fmt || !["csv", "json", "md-all", "sarif"].includes(fmt)) { console.error("usage: export-findings <report.json> <outdir> csv|json|md-all|sarif"); return 2; }
         const { readFile } = await import("node:fs/promises");
         const { generateReportExports } = await import("./application/report.js");
         const rep = JSON.parse(await readFile(file, "utf8")) as { findings?: unknown[] };
-        const files = await generateReportExports({ outputRoot: dir, format: fmt as "csv" | "json" | "md-all", findings: (rep.findings ?? []) as never[] });
+        const files = await generateReportExports({ outputRoot: dir, format: fmt as "csv" | "json" | "md-all" | "sarif", findings: (rep.findings ?? []) as never[] });
         out({ files });
         return 0;
       }
@@ -1334,7 +1332,29 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
         console.error(`unknown command: ${command}\n`);
         console.log(USAGE);
         return 2;
+  }
+};
+
+export const runCli = async (argv: readonly string[]): Promise<number> => {
+  const { command, positional, flags } = parseArgs(argv);
+  const out = (v: unknown) => console.log(JSON.stringify(v, null, 2));
+  // --run-id (+ optional --observation-ledger-root) binds every network
+  // request this process makes into the observation ledger — required when
+  // running recon commands inside a hunt context so hunt-record's
+  // anti-hallucination gate can verify observed facts.
+  const runBody = async (): Promise<number> => {
+    if (typeof flags["run-id"] === "string" && flags["run-id"]) {
+      const { withExecution } = await import("./core/execution.js");
+      return withExecution({
+        tool: `cli:${command}`,
+        runId: flags["run-id"],
+        ledgerRoot: typeof flags["observation-ledger-root"] === "string" ? flags["observation-ledger-root"] : undefined,
+      }, () => dispatch(command, positional, flags, out));
     }
+    return dispatch(command, positional, flags, out);
+  };
+  try {
+    return await runBody();
   } catch (cause) {
     const e = cause as { code?: string; message?: string };
     console.error(

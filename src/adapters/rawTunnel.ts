@@ -35,7 +35,16 @@ export const readSocket = (s: Socket, finished: (b: Buffer) => number, timeoutMs
     // Size limit wins over a matching terminator: a "complete" header that
     // exceeds the bound is refused, not accepted.
     if (data.length > maxBytes) { cleanup(); fail(new Error("response header limit")); return; }
-    const length = finished(data);
+    let length: number;
+    try {
+      length = finished(data);
+    } catch (e) {
+      // finished() throws synchronously inside this 'data' handler (e.g. a
+      // malformed SOCKS5 reply) — route it through fail() instead of letting
+      // it escape the EventEmitter and kill the process.
+      fail(e instanceof Error ? e : new Error(String(e)));
+      return;
+    }
     if (length >= 0) { cleanup(); if (length < data.length) s.unshift(data.subarray(length)); resolve(data.subarray(0, length)); }
   };
   const timer = setTimeout(() => fail(new Error("read timeout")), timeoutMs);
@@ -104,12 +113,12 @@ export interface RawHttpResult {
   complete: boolean; truncated: boolean; receivedBytes: number; storedBytes: number;
   requestHash: string; responseHash: string; elapsedMs: number; error?: string; receiptId?: string;
 }
-export const rawHttpExchange = async (url: string, request: Buffer, options: Omit<Partial<TunnelOptions>, "host" | "port"> & { maxBytes?: number } = {}): Promise<RawHttpResult> => {
+export const rawHttpExchange = async (url: string, request: Buffer, options: Omit<Partial<TunnelOptions>, "host" | "port" | "secure"> & { maxBytes?: number } = {}): Promise<RawHttpResult> => {
   const u = new URL(url); const started = Date.now(); const cap = options.maxBytes ?? 262144; const signal = options.signal ?? executionSignal();
   let socket: Socket | undefined; let sent = false; let wire = Buffer.alloc(0); let body = Buffer.alloc(0); let status = 0; let headers: Record<string, string> = {}; let complete = false; let truncated = false; let error: string | undefined;
   let receivedBytes = 0;
   try {
-    socket = await openTunnel({ host: u.hostname.replace(/^\[|\]$/g, ""), port: Number(u.port) || (u.protocol === "https:" ? 443 : 80), secure: u.protocol === "https:", ...options, signal });
+    socket = await openTunnel({ host: u.hostname.replace(/^\[|\]$/g, ""), port: Number(u.port) || (u.protocol === "https:" ? 443 : 80), ...options, secure: u.protocol === "https:", signal });
     await new Promise<void>((resolve, reject) => {
       const s = socket!; let settled = false;
       const finish = (e?: Error): void => { if (settled) return; settled = true; clearTimeout(timer); s.removeListener("data", data); s.removeListener("end", ended); s.removeListener("close", ended); s.removeListener("error", fail); signal?.removeEventListener("abort", abort); e ? reject(e) : resolve(); };

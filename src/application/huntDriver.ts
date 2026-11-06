@@ -46,7 +46,6 @@ interface HuntBudget {
 
 const BUDGET_FILE = "hunt_budget.json";
 
-export const budgetPath = (root: string): string => join(root, BUDGET_FILE);
 
 const loadBudget = async (root: string): Promise<HuntBudget> => {
   const graph = await loadGraph(root);
@@ -103,7 +102,6 @@ export interface LedgerEntry {
   readonly complete?: boolean;
 }
 const LEDGER_FILE = "observation_ledger.json";
-export const ledgerPath = (root: string): string => join(root, LEDGER_FILE);
 export const readLedger = (root: string): Promise<LedgerEntry[]> => readJson(root, LEDGER_FILE, () => [], value =>
   Array.isArray(value) && value.every(e=>e && typeof e.tool === "string" && typeof e.url === "string" &&
     (e.status===null || (Number.isInteger(e.status) && e.status>=0 && e.status<=599)) && typeof e.at === "string") &&

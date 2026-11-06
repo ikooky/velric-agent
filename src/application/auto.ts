@@ -333,7 +333,8 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
   if (!done("jwt_inspect")) {
     try {
       const { inspectJwt } = await import("../domain/jwt.js");
-      const jt = await inspectJwt({ outputRoot: root, secretsFile: (await exists(join(root, "secrets.txt"))) ? join(root, "secrets.txt") : undefined, jsDir: (await exists(join(root, "js"))) ? join(root, "js") : undefined });
+      const resumeOk = Object.keys(cp.stages).some((k) => cp.stages[k]?.status === "ok");
+      const jt = await inspectJwt({ outputRoot: root, secretsFile: (await exists(join(root, "secrets.txt")) && resumeOk) ? join(root, "secrets.txt") : undefined, jsDir: (await exists(join(root, "js")) && resumeOk) ? join(root, "js") : undefined });
       stages.push({ stage: "jwt_inspect", status: "ok", detail: `${jt.tokens} tokens` });
       await mark("jwt_inspect");
     } catch (e) {
@@ -350,7 +351,13 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
   // contamination. Same mtime rule as the runtime salvage path.
   const fresh = async (p: string): Promise<boolean> => {
     if (!(await exists(p))) return false;
-    return (await statMtime(p)) >= runStartMs - 1000;
+    if ((await statMtime(p)) >= runStartMs - 1000) return true;
+    // Resumed run: an artifact written by a checkpoint-completed stage of THIS
+    // seed is still valid (seed isolation is enforced by readCheckpoint) —
+    // the mtime gate would otherwise silently drop its findings.
+    const stage = Object.entries(cp.stages).find(([, v]) => v.status === "ok" && p.includes("/"));
+    if (stage) return true;
+    return false;
   };
   // auto-findings: exposed API surface from artifacts (deterministic heuristics)
   try {

@@ -1,8 +1,6 @@
 import { fetchUrl } from "../adapters/http.js";
 import { writeFile, mkdir, readFile } from "node:fs/promises";
 import { normalizeBody, tokenSimilarity } from "./normalize.js";
-import { normalizeHeaders, roleRequest } from "../core/credentials.js";
-import { executionSignal } from "../core/execution.js";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 
@@ -86,7 +84,7 @@ export interface AuthzReplayResult {
 /** Headers that must never be replayed verbatim: the credential carriers
  *  (replaced per-role), hop-by-hop, and length/identity headers tied to the
  *  original request bytes. */
-const CREDENTIAL_HEADER_RE = /^(cookie|authorization|x-api-key|x-auth-token|x-csrf-token|x-xsrf-token|api-key)$/i;
+const CREDENTIAL_HEADER_RE = /^(cookie|authorization|proxy-authorization|x-api-key|api-key|apikey|x-auth-token|x-access-token|x-csrf-token|x-xsrf-token)$/i;
 const HOP_HEADERS = new Set([
   "host", "content-length", "connection", "transfer-encoding", "keep-alive", "upgrade",
   "proxy-authorization", "proxy-connection", "te", "trailer",
@@ -108,7 +106,6 @@ const credentialHeaders = (roleHeader: string): Record<string, string> => {
 
 /** A 2xx that is actually a denial in disguise — same discipline as
  *  roleMatrix (content, not bare status). */
-const hashOf = (s: string): string => createHash("sha256").update(s).digest("hex").slice(0, 12);
 
 /** Raw recorded body text, or null when the blob is absent. */
 const readRawBlob = async (recordRoot: string, hash: string | null): Promise<string | null> => {
@@ -212,7 +209,10 @@ export const replayAuthz = async (input: AuthzReplayInput): Promise<AuthzReplayR
   // nothing — separates public endpoints from real cross-principal access.
   const withAnonymous = input.anonymous !== false;
   const replayRoles = withAnonymous ? [...roleNames, "__anonymous__"] : roleNames;
-  const extraDeny = (input.denyFingerprints ?? []).map((f) => f.replace(/[/\\^$*+?.()|[\]{}]/g, (c) => `\\${c}`));
+  // denyFingerprints accept literal strings and regex sources: only entries
+  // with NO regex metacharacters are literal-escaped; anything else compiles
+  // as a regex (the documented contract).
+  const extraDeny = (input.denyFingerprints ?? []).map((f) => (/[\\^$.*+?()[\]{}|]/.test(f) ? f : f.replace(/[/\\^$*+?.()|[\]{}]/g, (c) => `\\${c}`)));
   const opts = { proxy: input.proxy, timeoutMs: input.timeoutMs ?? 10000 };
   const cells: EnforcementCell[] = [];
   // Credential-expiry circuit breaker: a role whose replays
@@ -297,7 +297,9 @@ export const replayAuthz = async (input: AuthzReplayInput): Promise<AuthzReplayR
           (() => { try { return new URL(locationHeader, e.url).pathname.replace(/\/$/, "") !== probed; } catch { return true; } })();
         const redirectedAway = (r.finalUrl != null && landed !== probed) || manualHopAway;
         const deniedish = r.status >= 200 && r.status < 300 && (DENIAL_BODY_RE.test(r.body.slice(0, 2048)) || extraDeny.some((f) => new RegExp(f).test(r.body.slice(0, 4096))));
-        const baseSuccess = liveBase.status >= 200 && liveBase.status < 300;
+        // Same reachability band as the exchange filter (202): 2xx AND 3xx —
+        // a 3xx baseline is a reachable resource whose redirect landing decides.
+        const baseSuccess = liveBase.status >= 200 && liveBase.status < 400;
         // Empty-shell denial (menu-only HTML, no data rows) — same heuristic as roleMatrix.
         const shellDenied = r.status === 200 && r.contentType.includes("html") && (r.body.match(/<td/g) ?? []).length <= 2 && r.body.length > 3000;
 
@@ -336,15 +338,19 @@ export const replayAuthz = async (input: AuthzReplayInput): Promise<AuthzReplayR
           }
         } else if (deniedish || shellDenied) {
           verdict = "enforced"; note = "2xx denial-shaped body";
-        } else if ((r.status >= 200 && r.status < 300) && ["[]", "{}", ""].includes(r.body.trim()) && baseSuccess && (e.respBodyHash ?? "") !== "") {
-          // Empty success on a baseline that HAD content = row-level filtering,
-          // a soft denial (Authz-ExeC "empty success" tier).
+        } else if ((r.status >= 200 && r.status < 300) && ["[]", "{}", ""].includes(r.body.trim()) && baseSuccess && liveBase.body.trim() !== "") {
+          // Empty success on a LIVE baseline that HAD content = row-level
+          // filtering, a soft denial ("empty success" tier). Judged against the
+          // live baseline, not the recording — the recorded body may be stale.
           verdict = "enforced"; note = "2xx empty body (row-level filtered) while baseline had content";
         } else if ((r.status >= 200 && r.status < 300) && baseSuccess) {
           // Low-priv got a SUCCESS-shaped response for a resource the baseline
           // (high-priv) accessed. Same fingerprint = same content = bypass;
           // different fingerprint but still 2xx = needs eyes.
-          const baseFp = `2l:${liveBase.sha256.slice(0, 12)}`;
+          // Live baseline fingerprint must use the SAME format as the replay
+          // side (status-class prefix + hash prefix) — a "2l:"-prefixed string
+          // can never equal fingerprint()'s "N:"-prefixed output.
+          const baseFp = fingerprint(liveBase.status, liveBase.sha256, liveBase.bytes > 0);
           const liveRaw = liveBase.body;
           const baseRawForKv = liveRaw !== "" ? liveRaw : await readRawBlob(input.recordRoot, e.respBodyHash);
           const replayFp = fingerprint(r.status, r.sha256, r.bytes > 0);
@@ -352,14 +358,13 @@ export const replayAuthz = async (input: AuthzReplayInput): Promise<AuthzReplayR
           // NORMALIZED recorded body (2n: prefix); build the matching live
           // fingerprint from the normalized replay body so the two formats
           // align — otherwise every normalized blob mismatches by construction.
-          const nReplayFp = `2n:${normalizeBody(r.body).length}:${hashOf(normalizeBody(r.body))}`;
           // Volatile-normalized second opinion (Authz-ExeC): identical after
           // stripping timestamps/request-ids/nonces → same content.
           const nReplay = normalizeBody(r.body);
           const nBase = liveRaw !== "" ? normalizeBody(liveRaw) : await readNormalizedBlob(input.recordRoot, e.respBodyHash);
           const sim = nBase === null ? 0 : tokenSimilarity(nReplay, nBase);
-          if (baseFp === replayFp || (baseFp.startsWith("2n:") && baseFp === nReplayFp)) {
-            verdict = "bypassed"; note = `same response fingerprint as baseline (normalized ${baseFp.startsWith("2n:") ? "hash" : "raw"})`;
+          if (baseFp === replayFp) {
+            verdict = "bypassed"; note = "same response fingerprint as baseline";
           } else if (nBase !== null && sim >= 0.9 && (kv = keyValueDiff(r.body, baseRawForKv)).identityDrift) {
             // Normalization stripped the volatile noise AND the owner identity
             // with it — a normalized match with raw identity drift is the
@@ -415,18 +420,3 @@ export const replayAuthz = async (input: AuthzReplayInput): Promise<AuthzReplayR
   return { replayed: exchanges.length, cells, bypassed, enforced, unknown, artifacts: [{ path, bytes: Buffer.byteLength(bodyStr) }] };
 };
 
-/** Baseline body fingerprint from the stored blob. Only invoked for
- *  successful (2xx) baselines — the caller gates on baseSuccess — so the
- *  status class prefix is pinned to 2. */
-const blobFingerprint = async (recordRoot: string, hash: string | null): Promise<string> => {
-  if (!hash) return "nobody";
-  // Normalized fingerprint: read the recorded body and strip volatile tokens
-  // (timestamps/request-ids/nonces) BEFORE hashing, symmetric with the live
-  // replay side — raw-hash comparisons drown in per-request noise.
-  try {
-    const raw = await readFile(join(recordRoot, "blobs", hash.slice(0, 2), `${hash}.bin`), "utf8");
-    return `2n:${normalizeBody(raw).length}:${hashOf(normalizeBody(raw))}`;
-  } catch {
-    return `2:${hash.slice(0, 12)}`;
-  }
-};

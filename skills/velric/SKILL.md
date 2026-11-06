@@ -105,7 +105,7 @@ description: |
 | 命令 | 用途 |
 |------|------|
 | `velric-agent hunt-begin <goal> <outdir>` | 开 hunt（预算 --max-rounds/--max-cost） |
-| `velric-agent hunt-record <outdir> --record-file F` | 写回观察（goals/facts/findings/assets） |
+| `velric-agent hunt-record <outdir> --record-file F` | 写回观察（goals/facts/findings/assets；facts/findings 须有台账回执支撑——侦察命令加 `--run-id <hunt runId> --observation-ledger-root <outdir>` 才产生回执） |
 | `velric-agent hunt-overview <outdir>` | 读态势 + 台账证据快照 |
 
 ## 门禁（不可绕过）

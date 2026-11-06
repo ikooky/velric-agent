@@ -18,8 +18,6 @@ export const PRODUCT_IDENTITY = {
   displayName: "velric-agent",
   packageName: pkg.name,
   packageVersion: pkg.version,
-  packageSpecifier: `${pkg.name}@latest`,
-  cliBinary: "velric-agent",
 } as const;
 
 /** Resolve the package root (one level up from dist/ or src/). */

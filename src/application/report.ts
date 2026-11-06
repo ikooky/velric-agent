@@ -9,6 +9,8 @@ export interface ReportInput {
   readonly generatedAt: Date;
   readonly assetCounts: Record<string, number>;
   readonly findings: readonly FindingView[];
+  /** Confirmed finding count (proof-gated); rendered in the summary. */
+  readonly confirmedCount?: number;
 }
 
 /** Finding view shape. */
@@ -47,7 +49,7 @@ export const renderReport = (input: ReportInput): string => {
   b.push("");
   b.push("## 摘要");
   b.push("");
-  b.push(`- 确认发现：**0** 个`);
+  b.push(`- 确认发现：**${input.confirmedCount ?? 0}** 个`);
   b.push(`- 线索：**${input.findings.length}** 个`);
   b.push(`- 资产：${Object.entries(input.assetCounts)
     .map(([t, n]) => `${t} ${n}`)
@@ -236,6 +238,7 @@ export const generateReport = async (input: GenReportInput): Promise<GenerateRep
     generatedAt: new Date(),
     assetCounts: r.assetCounts ?? {},
     findings: rawFindings,
+    confirmedCount: confirmed,
   });
   const artifacts = [
     await writeArtifact(input.outputRoot, "report.md", md),
@@ -353,7 +356,7 @@ export const findingsSarif = (findings: readonly FindingView[]): string => {
       // the target URL is a property, never a fake artifact path.
       const sourceLocation = (f as { sourceLocation?: { uri?: unknown; line?: unknown; column?: unknown } }).sourceLocation;
       const location =
-        sourceLocation && typeof sourceLocation.uri === "string" && Number.isInteger(sourceLocation.line)
+        sourceLocation && typeof sourceLocation.uri === "string" && typeof sourceLocation.line === "number" && Number.isInteger(sourceLocation.line) && sourceLocation.line >= 1
           ? {
               physicalLocation: {
                 artifactLocation: { uri: sourceLocation.uri },
@@ -399,6 +402,9 @@ export const generateReportExports = async (input: {
   findings: readonly FindingView[];
 }): Promise<string[]> => {
   const out: string[] = [];
+  if (input.format !== "csv" && input.format !== "json" && input.format !== "sarif" && input.format !== "md-all") {
+    throw new Error(`unsupported export format: ${JSON.stringify(input.format)}`);
+  }
   if (input.format === "csv") {
     const { path: p } = await writeArtifact(input.outputRoot, "findings.csv", findingsCsv(input.findings));
     out.push(p);

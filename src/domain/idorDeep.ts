@@ -70,29 +70,6 @@ const variantsOf = (value: string, objectIds: readonly string[]): string[] => {
  *  substitution of the encoded string can never hit a valid object — decode,
  *  swap the inner id, re-encode in the same shape. */
 const B64_RE = /^[A-Za-z0-9+/]{8,}={0,2}$/;
-const decodeMaybe = (v: string): { kind: "raw" | "base64" | "hex"; inner: string } | null => {
-  if (B64_RE.test(v) && v.length >= 12) {
-    try {
-      const inner = Buffer.from(v, "base64").toString("utf8");
-      if (inner && /[\"{[]/.test(inner) && /[0-9a-z]/i.test(inner)) return { kind: "base64", inner };
-    } catch { /* not base64 */ }
-  }
-  if (/^[0-9a-f]{16,}$/i.test(v)) {
-    return { kind: "hex", inner: v };
-  }
-  return null;
-};
-const reencode = (kind: "base64" | "hex", inner: string): string =>
-  kind === "base64" ? Buffer.from(inner, "utf8").toString("base64") : inner;
-
-const encodedVariantsOf = (value: string, objectIds: readonly string[]): string[] => {
-  const d = decodeMaybe(value);
-  if (d === null || d.kind === "raw") return [];
-  // produce variants of the DECODED inner value, re-encoded in original shape
-  if (d.kind === "hex") return []; // hex of an id rarely wraps structured content
-  const innerVariants = variantsOf(d.inner.replace(/[^0-9a-z-]/gi, "9"), objectIds);
-  return innerVariants.map((iv) => reencode("base64", d.inner.replace(/\d+/, iv.replace(/[^0-9]/g, "") || "1"))).slice(0, 3);
-};
 
 /** Identity-field extraction (pentest-ai sequential-identity confirmation):
  *  pull owner-identifying values from a JSON/HTML response. */
@@ -128,7 +105,7 @@ const stripCredentialHeaders = (headers?: Record<string, string>): Record<string
   if (!headers) return undefined;
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(headers)) {
-    if (/^(authorization|cookie|x-csrf-token|x-api-key)$/i.test(k)) continue;
+    if (/^(cookie|authorization|proxy-authorization|x-api-key|api-key|apikey|x-auth-token|x-access-token|x-csrf-token|x-xsrf-token)$/i.test(k)) continue;
     out[k] = v;
   }
   return Object.keys(out).length > 0 ? out : undefined;

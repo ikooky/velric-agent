@@ -22,16 +22,21 @@ export interface RunDiffResult {
 const readLines = async (root: string, name: string): Promise<string[]> => {
   try {
     return (await readFile(join(root, name), "utf8")).split("\n").filter(Boolean);
-  } catch {
-    return [];
+  } catch (err) {
+    // Only "file absent" is an empty baseline; other IO failures (perms,
+    // corrupt fs) must surface — silently treating them as empty would report
+    // every existing row as newly added (false diff).
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw err;
   }
 };
 
 const readJsonFile = async <T,>(root: string, name: string): Promise<T | null> => {
   try {
     return JSON.parse(await readFile(join(root, name), "utf8")) as T;
-  } catch {
-    return null;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
   }
 };
 

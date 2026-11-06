@@ -6,7 +6,7 @@
  *
  * Ordered by evidential strength (weakest → strongest).
  */
-export const PROOF_KINDS = [
+const PROOF_KINDS = [
   "unproven",
   "static_analysis",
   "reflection_observed",

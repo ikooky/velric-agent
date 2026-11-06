@@ -62,19 +62,20 @@ const readJsonIf = async <T,>(p: string): Promise<T | undefined> => {
   try { return JSON.parse(await readFile(p, "utf8")) as T; } catch { return undefined; }
 };
 
+import { flatCodes, type PermTreeNode } from "./permTree.js";
+
 export const probeRoleMatrix = async (input: RoleMatrixInput): Promise<RoleMatrixResult> => {
   await mkdir(input.outputRoot, { recursive: true });
 
   // Endpoint candidates, two sources:
-  // 1) gates.js findings: PERM_API_RE hits (permission/role/acl/resource paths)
+  // 1) gates_report.json contentGate.permissionApiPaths (analyzeGates output)
   // 2) sensitive_paths.txt from probe_paths (admin-ish endpoints)
-  const gates = await readJsonIf<{ findings?: { apis?: { path?: string }[] }[] }>(join(input.reconRoot, "gates.json"));
-  const permApis = (gates?.findings ?? [])
-    .flatMap((f) => f.apis ?? [])
-    .map((a) => (typeof a.path === "string" ? a.path : ""))
-    .filter((p) => p.length > 0);
-  const tree = await readJsonIf<{ endpoints?: string[] }>(join(input.reconRoot, "permissions_tree.json"));
-  const treeEndpoints = tree?.endpoints ?? [];
+  const gates = await readJsonIf<{ contentGate?: { permissionApiPaths?: string[] } }>(join(input.reconRoot, "gates_report.json"));
+  const permApis = (gates?.contentGate?.permissionApiPaths ?? [])
+    .filter((p) => typeof p === "string" && p.length > 0);
+  // permissions_tree.json is a PermTreeNode[] (top-level array)
+  const treeJson = await readJsonIf<PermTreeNode[]>(join(input.reconRoot, "permissions_tree.json"));
+  const treeEndpoints = Array.isArray(treeJson) ? flatCodes(treeJson) : [];
 
   const endpoints = [...new Set([...permApis, ...treeEndpoints])]
     .filter((p) => p.startsWith("http") || p.startsWith("/"))

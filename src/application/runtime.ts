@@ -60,7 +60,14 @@ export const observeBrowserRequests = (page: Page) => {
   const success = (r: Request): void => finish(r, false);
   const failed = (r: Request): void => finish(r, true);
   page.on("request", start); page.on("requestfinished", success); page.on("requestfailed", failed);
-  return { requests, drain: async () => { await Promise.all([...pending]); if (failure) throw failure; }, close: () => {
+  return { requests, drain: async () => {
+    // Bounded drain: SSE/long-poll responses may never finish, and a single
+    // failed collector must not discard the whole capture. Wait up to 10s,
+    // then surface failures as console warnings instead of throwing.
+    const timeout = new Promise<void>((done) => setTimeout(done, 10_000));
+    await Promise.race([Promise.all([...pending]), timeout]);
+    if (failure) console.warn(`[runtime] network collector failure: ${failure instanceof Error ? failure.message : String(failure)}`);
+  }, close: () => {
     page.off("request", start); page.off("requestfinished", success); page.off("requestfailed", failed);
   } };
 };

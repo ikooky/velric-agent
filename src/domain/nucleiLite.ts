@@ -36,7 +36,7 @@ export interface NucleiLiteResult {
   readonly artifacts: { path: string; bytes: number }[];
 }
 
-export const BUILTIN_TEMPLATES: readonly NucleiTemplate[] = [
+const BUILTIN_TEMPLATES: readonly NucleiTemplate[] = [
   {
     id: "exposed-kibana",
     severity: "high",
@@ -168,7 +168,8 @@ export const runNucleiLite = async (input: NucleiLiteInput): Promise<NucleiLiteR
       }
     }
   };
-  await Promise.all(Array.from({ length: Math.min(input.concurrency ?? 6, jobs.length) }, worker));
+  const concurrency = Number.isFinite(input.concurrency) ? Math.max(1, Math.min(32, Math.floor(input.concurrency!))) : 6;
+  await Promise.all(Array.from({ length: Math.min(concurrency, jobs.length) }, worker));
 
   const result: NucleiLiteResult = { baseUrl: base, scanned, matched, artifacts: [] };
   const body = JSON.stringify(result, null, 2);

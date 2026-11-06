@@ -3,8 +3,8 @@ import { connect as netConnect } from "node:net";
 import { TLSSocket } from "node:tls";
 import { createServer as createHttpServer } from "node:http";
 import type { Duplex } from "node:stream";
-import { request as undiciRequest, Agent, type Dispatcher } from "undici";
-import { mkdir, writeFile, appendFile } from "node:fs/promises";
+import { request as undiciRequest, Agent } from "undici";
+import { mkdir, writeFile, appendFile, chmod } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 
@@ -71,7 +71,7 @@ export class TrafficRecorder {
 
   readonly start = async (port?: number): Promise<number> => {
     const listenPort = port ?? this.preferredPort ?? 0;
-    await mkdir(this.blobDir, { recursive: true });
+    await mkdir(this.blobDir, { recursive: true, mode: 0o700 });
     if (this.mitmEnabled) {
       const { createOrLoadCA } = await import("./mitm.js");
       this.mitmCA = await createOrLoadCA(this.outDir);
@@ -106,25 +106,11 @@ export class TrafficRecorder {
 
   readonly getExchanges = (): readonly RecordedExchange[] => this.exchanges;
 
-  /** Replay: fetch stored full bodies for one exchange (HTTP-captured only). */
-  async exchangeBodies(id: string): Promise<{ request?: Buffer; response?: Buffer } | null> {
-    const rec = this.exchanges.find((e) => e.id === id);
-    if (!rec) return null;
-    const load = async (hash: string | null): Promise<Buffer | undefined> => {
-      if (!hash) return undefined;
-      try { return await import("node:fs/promises").then((fs) => fs.readFile(join(this.blobDir, hash.slice(0, 2), hash + ".bin"))); }
-      catch { return undefined; }
-    };
-    // reqBodyHash is null for body-less requests (GET/CONNECT) — that must
-    // not block reading the RESPONSE body.
-    return { request: rec.reqBodyHash ? await load(rec.reqBodyHash) : undefined, response: await load(rec.respBodyHash) };
-  };
-
   private readonly spill = async (body: Buffer): Promise<string> => {
     const hash = createHash("sha256").update(body).digest("hex");
     const dir = join(this.blobDir, hash.slice(0, 2));
     await mkdir(dir, { recursive: true });
-    await writeFile(join(dir, hash + ".bin"), body);
+    await writeFile(join(dir, hash + ".bin"), body, { mode: 0o600 });
     return hash;
   };
 
@@ -134,6 +120,8 @@ export class TrafficRecorder {
     if (this.exchanges.length >= this.maxExchanges) return;
     this.exchanges.push(rec);
     await appendFile(join(this.outDir, "traffic.ndjson"), JSON.stringify(rec) + "\n").catch(() => {});
+    // Recorded traffic carries full credential headers — keep the file private.
+    await chmod(join(this.outDir, "traffic.ndjson"), 0o600).catch(() => {});
   };
 
   private readonly handleHttp = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
@@ -187,7 +175,7 @@ export class TrafficRecorder {
       if (!this.relaxAgent) this.relaxAgent = new Agent({ connect: { rejectUnauthorized: false } });
       const r = await undiciRequest(url, {
         method: String(req.method ?? "GET"),
-        headers: { ...omit(req.headers, ["host", "proxy-connection"]) as Record<string, string> },
+        headers: { ...omit(req.headers, ["host", "proxy-connection", "connection", "transfer-encoding", "te", "keep-alive", "upgrade", "trailer"]) as Record<string, string> },
         body: body.length > 0 ? body : undefined,
         dispatcher: this.upstreamAgent ?? this.relaxAgent,
       });
@@ -197,7 +185,7 @@ export class TrafficRecorder {
       let respLen = 0;
       for await (const c of r.body as unknown as AsyncIterable<Buffer>) {
         respLen += c.length;
-        if (respLen > MAX_BODY) break;
+        if (respLen > MAX_BODY) { void r.body.destroy?.(); break; }
         respChunks.push(c);
       }
       const respBody = Buffer.concat(respChunks);

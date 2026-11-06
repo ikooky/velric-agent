@@ -4,11 +4,11 @@
  */
 
 /** Endpoint-ish hints: a path containing one of these segments is an API path. */
-export const API_HINT =
+const API_HINT =
   /(?:^|\/)(?:api|rest|service|services|gateway|graphql|v\d|web|admin|backend|open)(?:\/|$|\.)/i;
 
 /** Static asset extensions that must never be treated as endpoints. */
-export const ASSET_EXT =
+const ASSET_EXT =
   /\.(?:js|css|png|jpe?g|svg|gif|woff2?|ttf|ico|map|mp4|webp)(?:\?|$)/i;
 
 export interface EndpointExtraction {

@@ -17,7 +17,7 @@ export interface SecretPattern {
   readonly re: RegExp;
 }
 
-export const SECRET_PATTERNS: readonly SecretPattern[] = [
+const SECRET_PATTERNS: readonly SecretPattern[] = [
   // cloud / SaaS keys (structural prefixes)
   { name: "aws_access_key_id", re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/ },
   { name: "github_token", re: /\bgh[pousr]_[A-Za-z0-9]{20,255}\b/ },
@@ -65,7 +65,7 @@ export interface PairedSecretPattern {
   readonly window: number;
 }
 
-export const PAIRED_SECRETS: readonly PairedSecretPattern[] = [
+const PAIRED_SECRETS: readonly PairedSecretPattern[] = [
   {
     name: "aws_key_pair",
     idRe: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/,
@@ -82,7 +82,7 @@ export const PAIRED_SECRETS: readonly PairedSecretPattern[] = [
 
 /** PII movement patterns (sensitive-data-exposure detection over
  *  recorded API responses). Structurally validated, not bare regex spam. */
-export const PII_PATTERNS: readonly SecretPattern[] = [
+const PII_PATTERNS: readonly SecretPattern[] = [
   { name: "email", re: /\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b/ },
   // mainland-CN mobile (structural: 1[3-9] + 9 digits, not part of a longer number)
   { name: "phone_cn", re: /(?<!\d)1[3-9]\d{9}(?!\d)/ },

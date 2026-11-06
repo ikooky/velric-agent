@@ -28,7 +28,7 @@ export const responseFingerprint = (r:Pick<FetchResult,"status"|"sha256">):strin
 export const stableResponses = (a:FetchResult,b:FetchResult):boolean => completeResponse(a)&&completeResponse(b)&&responseFingerprint(a)===responseFingerprint(b);
 export const sendParameterRequest = (request:ParameterRequest, options:{proxy?:string;timeoutMs?:number}={}):Promise<FetchResult> =>
   fetchUrl(request.url,{...options,method:request.method,headers:request.headers,body:request.body==null?undefined:(typeof request.body==="string"?Buffer.from(request.body):request.body) as unknown as FetchOptions["body"],redirect:"manual"});
-export function verificationRequest(verification:ParameterVerification, reference:ParameterRequest):ParameterRequest {
+function verificationRequest(verification:ParameterVerification, reference:ParameterRequest):ParameterRequest {
   if(!verification.policy?.principal?.trim()||!verification.policy.resource?.trim()||verification.policy.expected!=="deny")throw new Error("verification requires a principal/resource deny policy");
   if(!sameOrigin(verification.request.url,reference.url))throw new Error("verification must target the sample origin");
   if(!["GET","HEAD"].includes(verification.request.method??"GET"))throw new Error("verification must be read-only");

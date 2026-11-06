@@ -70,7 +70,7 @@ const parseSetCookie = (sc: string): { name: string; secure: boolean; httpOnly: 
     name,
     secure: attrs.some((a) => a === "secure"),
     httpOnly: attrs.some((a) => a === "httponly"),
-    sameSite: (sc.match(/samesite\s*=\s*(\w+)/i)?.[1] ?? null),
+    sameSite: (sc.match(/;\s*samesite\s*=\s*(\w+)/i)?.[1] ?? null),
   };
 };
 

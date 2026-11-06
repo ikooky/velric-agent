@@ -74,7 +74,7 @@ export function parameterSlots(request: ParameterRequest, where: "body"|"query")
   return jsonSlots(text);
 }
 /** Unqualified names must resolve uniquely; repeated query names need an index. */
-export function locateParameter(request: ParameterRequest, where: "body"|"query", field: string, occurrence?: number): ParameterSlot | null {
+function locateParameter(request: ParameterRequest, where: "body"|"query", field: string, occurrence?: number): ParameterSlot | null {
   let slots=parameterSlots(request,where).filter(s=>where==="body"&&field.startsWith("/")?s.path===field:s.name===field);
   if(occurrence!==undefined)slots=slots.filter(s=>s.occurrence===occurrence);
   return slots.length===1?slots[0]!:null;

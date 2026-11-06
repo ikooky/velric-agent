@@ -150,7 +150,6 @@ const runModule = async (mod: ModuleName, target: string, ctx: ModuleCtx): Promi
     if (isDomain) return { detail: "skip: web_crawler needs a URL", assets };
     const { spiderMpa } = await import("../application/spider.js");
     const r = await spiderMpa({ baseUrl: target, outputRoot: ctx.root, proxy, cookie });
-    void r;
     return { detail: `${r.crawled} pages / ${r.forms} forms / ${r.inlineApiUrls} inline apis`, assets };
   }
 
@@ -280,6 +279,7 @@ export const runTask = async (root:string,input:{
     });
   };
   try {
+    let latestSnapshot: TaskRecord | null = null;
     for(let mi=0;mi<claimed.modules.length;mi++)for(let ti=0;ti<targets.length;ti++){
       assertActive();const key=`${mi}:${ti}`,module=claimed.modules[mi]!,target=targets[ti]!;
       const latest=await withLock(root,async()=>own(await load(root)));
@@ -297,9 +297,17 @@ export const runTask = async (root:string,input:{
         if(result.assets.length)await assets.save();
         task.checkpoint!.completed[key]={module,target,status,detail:result.detail};summarize(task);refresh(task);await persist(root,st);return task;
       });
+      latestSnapshot = snapshot;
       await input.onCheckpoint?.(structuredClone(snapshot));
     }
-    clearInterval(heartbeat);await pending;assertActive();
+    clearInterval(heartbeat);await pending;
+    // If every module/target cell already reached a terminal state in the
+    // checkpoint, commit done even when the lease heartbeat just lapsed —
+    // losing a race at the finish line must not fail finished work.
+    const completed=latestSnapshot?.checkpoint?.completed??{};
+    const expected=claimed.modules.length*targets.length;
+    const allDone=Object.keys(completed).length>=expected&&expected>0&&Object.values(completed).every(c=>c.status==="ok"||c.status==="skip"||c.status==="fail");
+    if(!allDone)assertActive();
     return await withLock(root,async()=>{
       const st=await load(root),task=own(st);summarize(task);
       task.status=task.stageLog.every(x=>x.status==="fail")?"failed":"done";task.finishedAt=new Date().toISOString();delete task.lease;

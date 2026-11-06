@@ -29,7 +29,7 @@ export interface PathProbeResult {
 
 /** High-signal sensitive paths. Keep it tight: 60 paths × fast baseline beat
  *  5000-path dumps on both speed and precision. */
-export const SENSITIVE_PATHS: readonly string[] = [
+const SENSITIVE_PATHS: readonly string[] = [
   "/.git/config", "/.git/HEAD", "/.svn/entries", "/.DS_Store", "/.env", "/.env.local",
   "/.env.production", "/config.php.bak", "/web.config", "/robots.txt",
   "/crossdomain.xml", "/clientaccesspolicy.xml", "/phpinfo.php", "/info.php",

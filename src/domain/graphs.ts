@@ -96,9 +96,10 @@ export class AssetStore {
       const last3 = parts.slice(-3).join(".");
       const root = parts.length >= 3 && MULTI_SUFFIX.has(last2) ? last3 : last2;
       // A host that IS itself a public suffix (bare co.uk) must not become a
-      // root_domain node — only register real registrable domains.
+      // root_domain node — only register real registrable domains. Every
+      // other host (including a bare two-label registrable domain) gets one.
       let parentKey: string | undefined;
-      if (root !== host || parts.length > 2) {
+      if (!MULTI_SUFFIX.has(host)) {
         const rootNode = this.upsert({ type: "root_domain", value: root, taskTag });
         parentKey = rootNode.key;
         // Only a strict sub-host (host !== root) becomes a subdomain node — the

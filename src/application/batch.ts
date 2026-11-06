@@ -41,9 +41,9 @@ export const runBatch = async (input: BatchInput): Promise<BatchResult> => {
     // Slug must be a safe single path segment: normalize, then refuse
     // traversal-shaped results ("..", ".", empty) before joining outputRoot.
     const slug0 = seed.replace(/^https?:\/\//, "").replace(/[^a-zA-Z0-9.-]/g, "_").slice(0, 60);
-    if (slug0 === ".." || slug0 === "." || slug0 === "") throw new Error(`unsafe seed slug: ${JSON.stringify(seed.slice(0, 40))}`);
     const slug = slug0.replace(/^\.+/, "_");
     const outDir = join(input.outputRoot, slug);
+    if (slug0 === ".." || slug0 === "." || slug0 === "") return { seed, outDir, stagesOk: 0, stagesTotal: 0, apiEndpoints: 0, findings: 0, error: `unsafe seed slug: ${JSON.stringify(seed.slice(0, 40))}` };
     try {
       const { runAutoPipeline } = await import("./auto.js");
       const r = await runAutoPipeline({

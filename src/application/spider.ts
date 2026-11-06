@@ -147,7 +147,6 @@ export const spiderMpa = async (input: SpiderInput): Promise<SpiderSummary> => {
     }
     await ownCorpus(root, 'spider-mpa', base, corpus);
   }
-  void jsDir;
   artifacts.push(await writeOwnedManifest(root, 'spider_manifest.json', 'spider-mpa', base, artifacts, crawled));
 
   return {

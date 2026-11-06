@@ -60,7 +60,7 @@ export interface GateFindings {
   suggestedConfig: {
     localStorage: Record<string, string>;
     cookies: { name: string; value: string }[];
-    neutralize: { fields: string[]; success: number | string };
+    neutralize: { fields: string[]; success: number | string; fieldSuccess?: Record<string, string> };
     stubs: { match: string; body: unknown }[];
   };
   /** Storage accesses with their actual medium (sessionStorage ≠ localStorage). */
@@ -303,6 +303,10 @@ export const analyzeGates = async (input: { jsDir: string; outputRoot: string })
   // not become an executable gate patch.
   const fields = codeFields.filter((f) => fieldsWithSuccess.has(f)).slice(0, 6);
   const success = successValues.find((v) => v === "0") ?? successValues[0] ?? "0";
+  // Per-field success values: different code fields may use different success
+  // codes (code:0 vs ret:200) — one global value would patch the wrong field.
+  const fieldSuccess: Record<string, string> = {};
+  for (const c of comparisons) if (c.isSuccess && fields.includes(c.field)) fieldSuccess[c.field] ??= c.value;
   const stubs: { match: string; body: unknown }[] = [];
   for (const p of [...permissionApiPaths.slice(0, 2), ...menuApiPaths.slice(0, 2)]) {
     stubs.push({ match: p.replace(/[.*+?^${}()|[\]\\]/g, (c) => (c === "/" ? "\\/" : `\\${c}`)), body: { code: Number(success), data: { permissions: ["*"], menus: [] } } });
@@ -312,7 +316,7 @@ export const analyzeGates = async (input: { jsDir: string; outputRoot: string })
     renderGate: { storageKeys, cookieKeys, loginStateExpressions, decodeChain },
     interceptorGate: { codeFields, successValues, failureValues, redirectTriggers },
     contentGate: { permissionApiPaths, menuApiPaths, authMapObjects, routeMapObjects },
-    suggestedConfig: { localStorage: lsPatch, cookies: cookiePatch, neutralize: { fields, success }, stubs },
+    suggestedConfig: { localStorage: lsPatch, cookies: cookiePatch, neutralize: { fields, success, ...(Object.keys(fieldSuccess).length ? { fieldSuccess } : {}) }, stubs },
     storageCandidates,
     evidence,
   };

@@ -85,7 +85,6 @@ export const createOobSession = async (): Promise<OobClient> => {
         // silently dropping every interaction (verified against server
         // source: pkg/server/util.go isCorrelationID).
         const ZBASE32 = "ybndrfg8ejkmcpqxot1uwisza345h769";
-        void label;
         let nonce = "";
         const rb = randomBytes(13);
         for (let i = 0; i < 13; i++) nonce += ZBASE32[rb[i]! % ZBASE32.length];
@@ -201,7 +200,8 @@ export const probeOob = async (input: OobProbeInput): Promise<OobProbeResult> =>
       } else if (pos.in === "body" && body) {
         body = body.replaceAll(`"${pos.param}":"..."`, `"${pos.param}":"${concrete}"`).replaceAll(`"${pos.param}":""`, `"${pos.param}":"${concrete}"`);
         // generic JSON value substitution
-        body = body.replace(new RegExp(`("${pos.param}"\\s*:\\s*)"[^"]*"`), `$1"${concrete.replaceAll("$", "$$$$")}"`);
+        const escParam = pos.param.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        body = body.replace(new RegExp(`("${escParam}"\\s*:\\s*)"[^"]*"`), `$1"${concrete.replaceAll("$", "$$$$")}"`);
       } else if (pos.in === "header") {
         headers[pos.param] = concrete;
       } else if (pos.in === "path") {
