@@ -251,7 +251,7 @@ export const replayAuthz = async (input: AuthzReplayInput): Promise<AuthzReplayR
         if (CREDENTIAL_HEADER_RE.test(lk) || HOP_HEADERS.has(lk)) continue;
         baseHeaders[lk] = v;
       }
-      // LIVE baseline first (B04): the recorded response may be stale — the
+      // LIVE baseline first: the recorded response may be stale — the
       // resource may have changed, or the recorded session may already have
       // been denied. Re-fire the ORIGINAL recorded request once under the
       // recorded credentials; every role verdict is diffed against THIS, with

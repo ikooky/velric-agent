@@ -19,9 +19,9 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `paths` — 68 条敏感路径字典，soft-404 校准 + 通配路由识别 + catch-all 聚簇
 - `sourcemaps` — 生产 .map 泄漏检测
 - `wayback` — 历史端点回收
-- `url-refine` — URL 池零请求精炼: action=dedupe(uro 式清洗) / classify(gf 式攻击候选分流)
+- `url-refine` — URL 池零请求精炼: action=dedupe(URL 清洗去重) / classify(攻击候选分流)
 - `dir-fuzz` — 词表内容发现(FUZZ 关键字+soft-404 自动校准+扩展名变异+递归)
-- `screenshot` — gowitness 式截图取证(PNG+sha256+同模板聚类)
+- `screenshot` — 截图取证(PNG+sha256+同模板聚类)
 
 **运行时捕获**
 - `runtime` — 无头 Chromium 注入 hook(fetch/XHR/WS 全录制)，遍历路由记录真实 METHOD/URL/body
@@ -63,7 +63,7 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `jwt-inspect` — JWT 解码 + HS256 弱密钥爆破
 - `cors` — Origin 变体(反射/null/localhost/后缀匹配)
 - `probe-params` — 参数差分(必填/开关参数识别)
-- `authz-replay` — 录制流量按低权凭据逐条重放,Autorize 式三态判定(enforced/bypassed/unknown),覆盖 GET-only 矩阵看不到的 POST/PUT/PATCH/DELETE 越权
+- `authz-replay` — 录制流量按低权凭据逐条重放,三态判定(enforced/bypassed/unknown),覆盖 GET-only 矩阵看不到的 POST/PUT/PATCH/DELETE 越权
 - `mass-assign` — 向录制变更请求注入客户端从未发送的特权/归属字段(role/isAdmin/user_id/tenant_id/plan…),响应绑定即 CWE-915 sink,默认 dry-run
 - `pii-scan` — 录制流量响应体敏感数据运动分析(邮箱/手机号/银行卡/身份证/JWT),按端点归因;凭据配对验证(AWS key+secret 共现才告警)
 - `mine-params` — 隐藏参数挖掘(成对差分+cache-buster+响应词汇自学习),发现应用从未暴露的参数名

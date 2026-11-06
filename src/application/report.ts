@@ -249,7 +249,7 @@ export const generateReport = async (input: GenReportInput): Promise<GenerateRep
 /** CSV cell hardening: control characters force quoting; CR is stripped (a
  *  bare CR inside a quoted cell still breaks some parsers); leading
  *  spreadsheet-formula shapes (=,+,-,@, tab-prefixed) get a neutralizing
- *  apostrophe so exported findings cannot execute on open (D07/G09). */
+ *  apostrophe so exported findings cannot execute on open. */
 const csvCell = (v: string): string => {
   const noCr = v.replace(/\r\n?/g, "\n");
   // Formula guard after leading whitespace too — " \t@SUM(1)" is a
