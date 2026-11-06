@@ -35,7 +35,8 @@ const assetKey = (type: AssetType, value: string): string =>
 
 export class AssetStore {
   private graph: AssetGraph = { assets: {} };
-  constructor(private readonly root: string) {}
+  readonly root: string;
+  constructor(root: string) { this.root = root; }
   private async read(): Promise<AssetGraph> {
     return readJson(this.root,"asset_graph.json",()=>({assets:{},version:0}),value=>{
       const g=value as AssetGraph;
@@ -162,7 +163,8 @@ export class ExplorationGraph {
   private anchors: Anchor[] = [];
   private counter = 0;
   private version = 0;
-  constructor(private readonly root: string) {}
+  readonly root: string;
+  constructor(root: string) { this.root = root; }
   private async read(): Promise<{nodes:ExpNode[];edges:ExpEdge[];anchors:Anchor[];version?:number;counter?:number}> {
     return readJson(this.root,"exploration_graph.json",()=>({nodes:[],edges:[],anchors:[],version:0}),value=>{
       const g=value as {nodes:ExpNode[];edges:ExpEdge[];anchors:Anchor[];version?:number;counter?:number};
