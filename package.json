@@ -11,20 +11,6 @@
   "bugs": {
     "url": "https://github.com/ikooky/velric-agent/issues"
   },
-  "keywords": [
-    "security",
-    "pentest",
-    "recon",
-    "api-discovery",
-    "spa",
-    "model-context-protocol",
-    "agent-skills",
-    "playwright",
-    "cli"
-  ],
-  "publishConfig": {
-    "access": "public"
-  },
   "type": "module",
   "bin": {
     "velric-agent": "scripts/velric-agent.mjs"
@@ -32,15 +18,6 @@
   "engines": {
     "node": ">=22.13.0"
   },
-  "files": [
-    "LICENSE",
-    "README.md",
-    "assets",
-    "assets/**",
-    "dist",
-    "scripts/velric-agent.mjs",
-    "skills"
-  ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
@@ -70,5 +47,6 @@
     "@types/tar-stream": "^3.1.5",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
-  }
+  },
+  "private": true
 }

@@ -102,8 +102,11 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 要求 Node ≥ 22;`runtime` 需要系统 Chromium(`--chromium` 或 `VELRIC_CHROMIUM`)。
 
 ```bash
-npm install -g velric-agent
-npx -y velric-agent <command>
+git clone https://github.com/ikooky/velric-agent.git
+cd velric-agent
+npm install
+npm run build
+node scripts/velric-agent.mjs <command>
 ```
 
 ## CLI
