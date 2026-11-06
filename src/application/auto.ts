@@ -32,6 +32,9 @@ export interface AutoInput {
   readonly proxy?: string;
   readonly cookie?: string;
   readonly timeoutMs?: number;
+  /** Operator-pinned global rate limit; when undefined and a WAF is detected,
+   *  the pipeline caps itself (see the fingerprint stage). */
+  readonly rps?: number;
   readonly skipRuntime?: boolean;
   /** Resume from checkpoint.json when true (default true). */
   readonly resume?: boolean;
@@ -90,6 +93,13 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
       const { fingerprint } = await import("../domain/fingerprint.js");
       const fp = await fingerprint({ baseUrl: input.seed, outputRoot: root, proxy: input.proxy, cookie: input.cookie, timeoutMs: input.timeoutMs });
       stages.push({ stage: "fingerprint", status: "ok", detail: `waf=${fp.waf.join(",") || "none"} methods=${fp.methods.allowed.length}` });
+      // Gate discipline: a detected WAF means the rest of the pipeline must
+      // slow down (unless the operator pinned an explicit rate).
+      if (fp.waf.length > 0 && input.rps === undefined) {
+        const { setGlobalRateLimit } = await import("../adapters/http.js");
+        setGlobalRateLimit(5);
+        stages.push({ stage: "waf_throttle", status: "ok", detail: `waf=${fp.waf.join(",")} → global rps capped at 5` });
+      }
       await mark("fingerprint");
     } catch (e) {
       stages.push({ stage: "fingerprint", status: "fail", detail: String((e as Error).message ?? e).slice(0, 120) });

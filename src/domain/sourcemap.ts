@@ -130,11 +130,22 @@ export interface WaybackResult {
 export const fetchWayback = async (input: WaybackInput): Promise<WaybackResult> => {
   const target = input.target.replace(/^https?:\/\//, "").replace(/\/$/, "");
   await mkdir(input.outputRoot, { recursive: true });
+  const cdxUrl = `https://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(target)}&matchType=domain&collapse=urlkey&fl=original&limit=${Math.min(input.maxUrls ?? 500, 500)}&filter=statuscode:200`;
+  const fetchCdx = async (): Promise<{ status: number; body: string; error?: string }> => {
+    let last: { status: number; body: string; error?: string } = { status: 0, body: "" };
+    // The CDX endpoint is intermittently slow on domain-wide queries — allow
+    // a longer budget than the generic default, and retry on transport
+    // failure or an empty 200 (a real empty result is rare for any indexed
+    // domain, so an empty success is treated as suspect).
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, 2000 * attempt));
+      last = await fetchUrl(cdxUrl, { timeoutMs: input.timeoutMs ?? 90000, proxy: input.proxy });
+      if (last.status === 200 && last.body.trim() !== "") return last;
+    }
+    return last;
+  };
   try {
-    const res = await fetchUrl(
-      `https://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(target)}&matchType=domain&collapse=urlkey&fl=original&limit=${input.maxUrls ?? 2000}&filter=statuscode:200`,
-      { timeoutMs: input.timeoutMs ?? 30000, proxy: input.proxy },
-    );
+    const res = await fetchCdx();
     const urls = res.status === 200
       ? res.body.split("\n").map((l) => l.trim()).filter(Boolean)
       : [];

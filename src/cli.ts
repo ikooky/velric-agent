@@ -794,7 +794,7 @@ const dispatch = async (command: string, positional: readonly string[], flags: R
       case "auto": {
         const [seed, dir] = positional;
         if (!seed || !dir) {
-          console.error("usage: auto <seed> <outdir> [--chromium PATH] [--skip-runtime] [--proxy URL] [--cookie STR] [--timeout MS] [--max-pages N]");
+          console.error("usage: auto <seed> <outdir> [--chromium PATH] [--skip-runtime] [--proxy URL] [--cookie STR] [--timeout MS] [--max-pages N] [--rps N]");
           return 2;
         }
         const { runAutoPipeline } = await import("./application/auto.js");
@@ -806,6 +806,7 @@ const dispatch = async (command: string, positional: readonly string[], flags: R
             proxy: await resolveProxy(flags),
             cookie: typeof flags.cookie === "string" ? flags.cookie : undefined,
             timeoutMs: num(flags.timeout),
+            rps: num(flags.rps),
             skipRuntime: flags["skip-runtime"] === true,
             maxPages: num(flags["max-pages"]),
             resume: flags.fresh !== true,
