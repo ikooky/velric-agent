@@ -19,7 +19,6 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "start": "node scripts/velric-agent.mjs help",
     "dev": "node scripts/velric-agent.mjs",
