@@ -6,7 +6,7 @@ import { executionSignal } from "../core/execution.js";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 
-/** Autorize-style authorization enforcement replay: takes a traffic recording
+/** Authorization enforcement replay: takes a traffic recording
  *  (traffic.ndjson + blobs/ from traffic_record — the high-priv user's real
  *  browsing), re-fires each recorded exchange VERBATIM (method + body + all
  *  original headers) under each LOW-privilege context, and diffs the response
@@ -55,7 +55,7 @@ export interface AuthzReplayInput {
    *  leakage — checked before all structural comparisons. */
   readonly markers?: Record<string, readonly string[]>;
   /** Add a pseudo-role "__anonymous__" that strips ALL credential headers
-   *  (Autorize's unauthenticated third state): anonymous ≈ baseline → the
+   *  (the unauthenticated third state): anonymous ≈ baseline → the
    *  endpoint is public (downgrades bypass noise); anonymous denied while a
    *  role is bypassed → confidence upgrade. Default: true. */
   readonly anonymous?: boolean;
@@ -92,7 +92,7 @@ const HOP_HEADERS = new Set([
   "proxy-authorization", "proxy-connection", "te", "trailer",
   // Conditional validators: replaying a recorded If-None-Match yields 304 empty
   // bodies that mismatch every fingerprint and drown the diff in unknown
-  // (Autorize's handle_304_status_code_prevention).
+  // (304-prevention handling).
   "if-none-match", "if-modified-since",
 ]);
 
@@ -208,7 +208,7 @@ export const replayAuthz = async (input: AuthzReplayInput): Promise<AuthzReplayR
     .slice(0, input.maxExchanges ?? 25);
 
   const roleNames = Object.keys(input.roles);
-  // Anonymous third state (Autorize): strip ALL credential carriers, inject
+  // Anonymous third state: strip ALL credential carriers, inject
   // nothing — separates public endpoints from real cross-principal access.
   const withAnonymous = input.anonymous !== false;
   const replayRoles = withAnonymous ? [...roleNames, "__anonymous__"] : roleNames;
@@ -231,7 +231,7 @@ export const replayAuthz = async (input: AuthzReplayInput): Promise<AuthzReplayR
   } else {
     for (const e of exchanges) {
       // Conditional/No-Content baselines carry no diffable body — skip rather
-      // than pollute the matrix (Autorize ignore304).
+      // than pollute the matrix (ignore 304 noise).
       if (e.status === 304 || e.status === 204) {
         cells.push({ exchangeId: e.id, method: e.method, url: e.url, role: "-", baselineStatus: e.status ?? 0, replayStatus: 0, redirectedAway: false, verdict: "unknown", note: "skip: conditional/no-content baseline" });
         continue;
@@ -290,7 +290,7 @@ export const replayAuthz = async (input: AuthzReplayInput): Promise<AuthzReplayR
         const probed = new URL(e.url).pathname.replace(/\/$/, "");
         // Manual-redirect mode: a 3xx carrying a Location is an undollowed hop.
         // A login-ish Location (or any path away from the probe) is the auth
-        // wall signal Autorize reads from the followed chain — we read it from
+        // wall signal read from the followed redirect chain — we read it from
         // the single hop instead.
         const locationHeader = r.headers?.["location"] ?? "";
         const manualHopAway = r.status >= 300 && r.status < 400 && locationHeader !== "" &&

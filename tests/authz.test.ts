@@ -8,7 +8,7 @@ import { createHash } from "node:crypto";
 import { replayAuthz } from "../src/domain/authzReplay.js";
 import { probeMassAssign } from "../src/domain/massAssign.js";
 
-// Minimal app simulating the three enforcement shapes Autorize distinguishes:
+// Minimal app simulating the three enforcement shapes the replay distinguishes:
 //   /admin/data   — enforced: 403 for non-admin cookie, 200 for admin
 //   /shared/data  — bypass:   200 same body for everyone
 //   /sneaky/data  — 200 denial-shaped body for low-priv (content, not status)
@@ -110,7 +110,7 @@ const mkRecord = (dir: string): void => {
   writeFileSync(join(dir, "traffic.ndjson"), lines.join("\n") + "\n");
 };
 
-describe("authz_replay (Autorize-style)", () => {
+describe("authz_replay", () => {
   it("classifies enforced / bypassed / denial-shaped per role", async () => {
     const rec = mkdtempSync(join(tmpdir(), "authz-rec-"));
     const out = mkdtempSync(join(tmpdir(), "authz-out-"));
