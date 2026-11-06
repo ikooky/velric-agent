@@ -2,7 +2,7 @@
   <img src="assets/velric-lockup-horizontal.png" alt="velric" width="420">
 </p>
 
-Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子域/端口/敏感路径/CORS/WAF 指纹的纵深侦察，SPA/MPA 接口枚举，无头浏览器运行时流量录制，前端权限树重建，鉴权面测绘与凭据分析。提供 CLI 与 MCP server 双形态。仅用于已授权的安全测试。
+Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子域/端口/敏感路径/CORS/WAF 指纹的纵深侦察，SPA/MPA 接口枚举，无头浏览器运行时流量录制，前端权限树重建，鉴权面测绘与凭据分析。提供纯 CLI 形态与 agent skill 包（skills/velric/）。仅用于已授权的安全测试。
 
 ## 功能
 
@@ -79,15 +79,9 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `--proxy`(http/socks5)/ `--proxy-pool FILE`(轮换+失败剔除)/ `--rps N`(全局限速)
 - 外部请求默认 3 次重试
 
-## 工具面分层（能力门控）
+## 命令面
 
-目录完整、注册按条件 —— 67 个契约始终在 `ALL_CONTRACTS`，按环境变量裁剪注册面：
-
-- **默认 full**：全部 67 个注册（catalog complete）
-- **`VELRIC_PROFILE=lean`**：63 个 —— 隐藏 4 个内部簿记工具(`asset_graph`/`exploration_graph`/`traffic_query`/`finding_retest`，audience=internal，由 auto 管道与 hunt 循环在进程内消费)
-- **`VELRIC_TOOLS=a,b,c`**：显式白名单，覆盖两档 profile
-
-方法论引导不占工具位：workflow 全文在 MCP resource `velric://workflow-guide` 与 prompt `hunt-driver`。
+所有命令经 `velric-agent help` 列出；`auto` 管道与 hunt 循环在进程内消费簿记子命令(asset-graph/exploration-graph/traffic-query/retest)。方法论全文见 `skills/velric/references/workflow.md`。
 
 
 ## 安装
@@ -112,20 +106,14 @@ velric-agent runtime <baseUrl> <outdir> --chromium <path>
 velric-agent help
 ```
 
-## MCP 接入
+## Skill 接入（agent 宿主）
 
-`velric-agent mcp` 启动 stdio MCP server:67 个工具 + 2 个 resources(`velric://driver-playbook`、`velric://workflow-guide`)+ 1 个 prompt(`hunt-driver`)。
+`skills/velric/` 是给 agent 宿主（Claude Code / Codex / 其它）的技能包：
 
-```json
-{
-  "mcpServers": {
-    "velric-agent": {
-      "command": "npx",
-      "args": ["-y", "velric-agent@latest", "mcp"]
-    }
-  }
-}
-```
+- `SKILL.md` — 触发关键词 + ACTION REQUIRED + 命令矩阵（Phase 0-4 → 收尾）+ 门禁与自检
+- `references/workflow.md` — Phase 0-5 侦察方法论（阶段依赖与门禁）
+
+把 `skills/velric/` 拷进宿主的技能目录即可；工具面全部是 `velric-agent <subcommand>` CLI 命令，无协议层依赖。
 
 ## 免责声明
 

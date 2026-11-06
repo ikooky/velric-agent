@@ -12,7 +12,7 @@ describe("CLI usage alignment", () => {
       fs.readFileSync(new URL("../src/cli.ts", import.meta.url), "utf8"),
     );
     const usageCmds = [...src.matchAll(/^\s+velric-agent ([a-z][a-z0-9-]*)/gm)].map((m) => m[1]);
-    const unique = [...new Set(usageCmds)].filter((c) => c !== "mcp" && c !== "help");
+    const unique = [...new Set(usageCmds)].filter((c) => c !== "help");
     expect(unique.length).toBeGreaterThanOrEqual(11);
     for (const cmd of unique) {
       expect(src, `USAGE advertises "${cmd}" but cli.ts has no case for it`).toContain(
@@ -22,9 +22,7 @@ describe("CLI usage alignment", () => {
     // Bidirectional: every dispatch case must also be advertised in USAGE —
     // one-way alignment let 7 new commands ship silently unlisted.
     const caseCmds = [...src.matchAll(/^\s+case "([a-z][a-z0-9-]*)":/gm)].map((m) => m[1]);
-    const mcpOnly = new Set(["mcp"]);
     for (const cmd of caseCmds) {
-      if (mcpOnly.has(cmd)) continue;
       expect(src, `cli.ts dispatches "${cmd}" but USAGE never mentions it`).toMatch(
         new RegExp(`^\\s+velric-agent ${cmd}\\b`, "m"),
       );

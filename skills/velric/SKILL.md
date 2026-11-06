@@ -1,0 +1,120 @@
+---
+name: velric
+description: |
+  Web 应用攻击面测绘与越权检测工具链（velric-agent CLI）。覆盖子域/端口/敏感路径/CORS/WAF 指纹侦察、
+  SPA/MPA 接口枚举、无头运行时流量录制、前端权限树重建、鉴权面差分（authz-replay/role-matrix/IDOR/mass-assign）、
+  JWT/GraphQL/Header/Verb 绕过、PII 与凭据泄漏扫描。纯 Node 本地执行，无 LLM 依赖。
+  触发关键词：攻击面测绘、接口枚举、越权、IDOR、未授权访问、水平垂直越权、参数探测、隐藏参数、
+  权限树、流量录制、CORS、敏感路径、WAF 指纹、sourcemap 泄漏、JWT 攻击、GraphQL 鉴权、mass assignment、PII 扫描。
+---
+
+# velric-agent — Web 攻击面测绘工具链
+
+## ACTION REQUIRED（读完后立刻执行）
+
+1. `NOW`: 确认目标在授权测试范围内（本工具链仅用于已授权的安全测试）
+2. `NOW`: `node --version` ≥ 22.13；CLI 入口 `velric-agent`（npm i -g velric-agent 或 `node scripts/velric-agent.mjs`）
+3. `NEXT`: 侦察从 `references/workflow.md` 的 Phase 0 开始，工具不是孤立的——有阶段依赖与门禁
+4. `ACT`: 每个命令产物落各自的 `<outdir>/`（JSON+txt 工件），结论必须引用产物文件与真实状态码
+5. `ACT`: 需要出网代理时所有命令共用 `--proxy URL` / `--proxy-pool FILE` / `--rps N` 全局限速
+
+## 命令矩阵
+
+### Phase 0 — 指纹与分类
+| 命令 | 用途 |
+|------|------|
+| `velric-agent fingerprint <baseUrl> <outdir>` | WAF/CDN 识别、HTTP 方法枚举、Cookie 安全审计 |
+| `velric-agent http-probe <url>` | 单 URL 探测（状态/标题/哈希） |
+
+### Phase 1 — 资产面
+| 命令 | 用途 |
+|------|------|
+| `velric-agent subdomains <domain> <outdir>` | 子域枚举（crt.sh + CNAME + 词表） |
+| `velric-agent subdomain-alter <domain> <outdir> --hosts a,b` | 改写式子域生成（+`--resolve`） |
+| `velric-agent port-scan <host> <outdir>` | TCP top-ports 扫描 |
+| `velric-agent wayback <domain> <outdir>` | 历史 URL（web.archive.org） |
+| `velric-agent enrich <seed...> --out DIR` | 资产图（DNS+HTTP） |
+
+### Phase 2 — 静态侦察
+| 命令 | 用途 |
+|------|------|
+| `velric-agent harvest <url> <outdir>` | SPA bundle 提取 API/路由 + secrets 扫描 |
+| `velric-agent spider <url> <outdir>` | MPA 爬行（--max/--depth/--cookie） |
+| `velric-agent extract-routes <jsdir> <outdir>` | 从 JS 语料提取路由 |
+| `velric-agent deobfuscate <jsDir> <outdir>` | JS 反混淆（--action analyze 只做统计） |
+| `velric-agent paths <baseUrl> <outdir>` | 敏感路径（soft-404 校准） |
+| `velric-agent sourcemaps <jsDir> <outdir> --base URL` | 生产 .map 泄漏检测 |
+
+### Phase 3 — 运行时
+| 命令 | 用途 |
+|------|------|
+| `velric-agent runtime <url> <outdir>` | 无头浏览器 XHR/fetch/WS 帧捕获（--chromium） |
+| `velric-agent merge-params <samples.json> <outdir>` | 参数矩阵汇总 |
+| `velric-agent ws-schema <wsUrl> <outdir>` | WS 帧字段表 |
+| `velric-agent session-crawl <baseUrl> <loginUrl> <user> <pass> <outdir>` | 带登录态爬行（自动重登） |
+| `velric-agent traffic-recorder <outdir>` | MITM 流量录制代理 |
+| `velric-agent screenshot <outdir> --urls a,b` | 无头截图（--cluster） |
+
+### Phase 4 — 鉴权与越权
+| 命令 | 用途 |
+|------|------|
+| `velric-agent auth-probe <api_merged.txt> <outdir>` | 匿名可达 vs 需鉴权测绘 |
+| `velric-agent authz-replay <recordRoot> <outdir> --roles-file JSON` | 录制流量多角色差分重放（live-baseline 判定） |
+| `velric-agent role-matrix <reconRoot> <outdir> --roles-file JSON` | 跨角色访问矩阵 |
+| `velric-agent idor-prescreen <params_merged.json> <outdir>` | IDOR 候选预筛（只读差分） |
+| `velric-agent idor-deep <outdir> --endpoints-file JSON` | 三参照 IDOR 真实判定 |
+| `velric-agent mass-assign <recordRoot> <outdir>` | mass-assignment 污点探测（--fields） |
+| `velric-agent jwt-inspect <outdir>` / `jwt-attack <token> <endpoint> <outdir>` | JWT 解码/弱密钥/攻击套件 |
+| `velric-agent graphql-authz <endpoint> <schemaFile> <outdir>` | GraphQL 逐字段鉴权差分 |
+| `velric-agent header-bypass <outdir> --urls a,b` | 认证头绕过变体 |
+| `velric-agent verb-matrix <outdir> --urls a,b` | HTTP 动词覆盖矩阵 |
+| `velric-agent admin-surface <baseUrl> <outdir>` | 管理面测绘 |
+
+### 深化与参数
+| 命令 | 用途 |
+|------|------|
+| `velric-agent mine-params <outdir> (--url URL \| --remove-diff --merged F --base URL)` | 隐藏参数挖掘（桶二分/remove-diff） |
+| `velric-agent probe-params <params_merged.json> <outdir>` | 参数差分（必填/开关识别） |
+| `velric-agent waf-adapt <url> <payload> <outdir>` | payload 传输变形过 WAF |
+| `velric-agent oob-confirm <url> <outdir> --payloads a,b` | OOB 回调确认（interactsh） |
+| `velric-agent cors <baseUrl> <outdir>` | CORS 配置缺陷 |
+| `velric-agent dom-sinks` / `analyze-gates` / `perm-tree` | DOM 污点 / 鉴权门静态分析 / 权限树重建 |
+| `velric-agent pii-scan <recordRoot> <outdir>` | 录制流量 PII/凭据暴露扫描 |
+| `velric-agent graphql-deep <endpoint> <outdir>` | GraphQL 内省 + schema |
+| `velric-agent oidc-probe` / `smuggle-probe` / `ws-origin-check` | OIDC 配置 / 请求走私 / CSWSH |
+| `velric-agent nuclei-lite <baseUrl> <outdir>` | 模板匹配（面板/泄漏） |
+| `velric-agent backup-unpack` / `git-restore` / `sqlite-read` / `archive-recover` | 备份还原 / .git 源码还原 / SQLite 读取 / 归档恢复 |
+| `velric-agent url-refine <outdir> --urls a,b` | URL 去重/漏洞模式分类（--action classify） |
+| `velric-agent replay-tamper <recordRoot> <outdir> --rules-file JSON` | 录制流量篡改重放 |
+| `velric-agent login-replay <url> <u> <p> <outdir>` | 登录 + cookie 导出 |
+
+### 收尾
+| 命令 | 用途 |
+|------|------|
+| `velric-agent gen-report <report.json> <outdir>` | findings 报告（markdown/CSV/SARIF） |
+| `velric-agent save-evidence <items.json> <outdir>` | sha256 寻址证据 blob |
+| `velric-agent run-diff <oldDir> <newDir>` | 两次 run 的面变更对比 |
+| `velric-agent auto <seed> <outdir>` | 确定性全链管道（checkpoint 断点续跑） |
+| `velric-agent auto-batch <seeds.txt> <outdir>` | 批量 + 汇总 |
+
+### hunt 循环（宿主 agent 自主驱动）
+| 命令 | 用途 |
+|------|------|
+| `velric-agent hunt-begin <goal> <outdir>` | 开 hunt（预算 --max-rounds/--max-cost） |
+| `velric-agent hunt-record <outdir> --record-file F` | 写回观察（goals/facts/findings/assets） |
+| `velric-agent hunt-overview <outdir>` | 读态势 + 台账证据快照 |
+
+## 门禁（不可绕过）
+
+1. 观察台账反幻觉闸门：叙述的事实/PoC URL 必须来自台账真实记录，状态码一致，否则 drop
+2. 响应状态码必须真实可见才可写入结论；软 404 页面不得当作命中
+3. 所有输出到 report 的条目须带证据（文件/URL/状态码）
+4. 诚实报告：各阶段数量、未覆盖模块、每条结论的来源（静态/运行时/合并）
+5. secrets/dom-sinks/idor 类预筛结果 = 候选，不是实锤，须复核后才可升级结论
+
+## 任务完成自检（声称完成前 MUST 通过）
+
+- [ ] 每条结论都有产物文件 + 真实状态码支撑（不是"应该存在"）
+- [ ] soft-404 校准后的命中才算命中；401/403 = 存在但受保护，不是漏洞
+- [ ] 预筛类（secrets/idor/dom-sinks）结论标注"候选"，未当实锤
+- [ ] WAF 在位时已降速降并发（fingerprint 命中 → --rps 全局限速）
