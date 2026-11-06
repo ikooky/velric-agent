@@ -11,7 +11,7 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `subdomain-alter` — 子域排列变形引擎(dev→dev2/dev-qa/pre.dev…，ops 词表交叉+数字递增)，DNS 解析验证，发现 CT/词表都覆盖不到的资产
 - `port-scan` — TCP connect top 67 端口，非 Web 开放端口直出 finding
 - `fingerprint` — WAF/CDN 识别、HTTP 方法枚举、Cookie 安全审计、技术栈 header、安全 header 审计(HSTS/XFO/nosniff/Referrer-Policy/CSP 弱指令评估)、TLS 配置审计(协议/套件/证书过期/旧协议接受)
-- `dns_resolve` / `http_probe` — 解析/单点探测
+- `dns-resolve` / `http-probe` — 解析/单点探测
 
 **静态侦察**
 - `harvest` — SPA bundle 全量收割(chunk manifest 迭代下载)，提取 API/路由，内置 secrets 扫描与 robots/sitemap 合并
@@ -19,7 +19,7 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `paths` — 68 条敏感路径字典，soft-404 校准 + 通配路由识别 + catch-all 聚簇
 - `sourcemaps` — 生产 .map 泄漏检测
 - `wayback` — 历史端点回收
-- `url_refine` — URL 池零请求精炼: action=dedupe(uro 式清洗) / classify(gf 式六类攻击候选分流)
+- `url-refine` — URL 池零请求精炼: action=dedupe(uro 式清洗) / classify(gf 式攻击候选分流)
 - `dir-fuzz` — 词表内容发现(FUZZ 关键字+soft-404 自动校准+扩展名变异+递归)
 - `screenshot` — gowitness 式截图取证(PNG+sha256+同模板聚类)
 
@@ -55,7 +55,7 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `nuclei-lite` — 模板匹配(暴露面板/泄漏特征)
 - `login-replay` — 登录自动重放,导出会话 cookie
 - `backup-unpack` — 备份/转储解包+秘密扫描
-- `dir_fuzz preset=backups` — 备份文件发现(.bak/.old/.swp/tar.gz/sql 后缀+根转储名，soft-404 校准)，衔接 backup-unpack 成完整链
+- `paths preset=backups` — 备份文件发现(.bak/.old/.swp/tar.gz/sql 后缀+根转储名，soft-404 校准)，衔接 backup-unpack 成完整链
 - `sqlite-read` — SQLite 泄漏文件解析
 - `idor-prescreen` — id 类参数数值邻域差分预筛(只读)
 - `git-restore` — 泄漏 .git 源码树还原
@@ -66,14 +66,27 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `authz-replay` — 录制流量按低权凭据逐条重放,Autorize 式三态判定(enforced/bypassed/unknown),覆盖 GET-only 矩阵看不到的 POST/PUT/PATCH/DELETE 越权
 - `mass-assign` — 向录制变更请求注入客户端从未发送的特权/归属字段(role/isAdmin/user_id/tenant_id/plan…),响应绑定即 CWE-915 sink,默认 dry-run
 - `pii-scan` — 录制流量响应体敏感数据运动分析(邮箱/手机号/银行卡/身份证/JWT),按端点归因;凭据配对验证(AWS key+secret 共现才告警)
-- `mine-hidden-params` — 隐藏参数挖掘(成对差分+cache-buster+响应词汇自学习),发现应用从未暴露的参数名
+- `mine-params` — 隐藏参数挖掘(成对差分+cache-buster+响应词汇自学习),发现应用从未暴露的参数名
+
+- `role-matrix` — 跨角色访问矩阵(reconRoot 内端点 × 多角色凭据,行=端点列=角色)
+- `idor-deep` — 三参照 IDOR 判定(A/B/无关对象,身份字段确认+编码 ID 变体)
+- `graphql-authz` — GraphQL 逐字段鉴权差分(schema 驱动,匿名 pass 剥凭据)
+- `header-bypass` — 认证头绕过变体(X-Original-URL/X-Rewrite-URL/X-Forwarded-For…)
+- `verb-matrix` — HTTP 动词覆盖矩阵(GET/POST/PUT/DELETE/PATCH/OVERRIDE 头)
+- `admin-surface` — 管理面板面测绘(29 条路径探测+指纹)
+- `jwt-attack` — JWT 攻击套件(alg 混淆/弱 HMAC 密钥/kid 注入/claim 篡改)
+- `waf-adapt` — payload 传输变形过 WAF(query/body/header/path 四位置×大小写/编码/分块变体)
+- `oob-confirm` — OOB 带外回调确认(interactsh 轮询,盲 SSRF/RCE 实锤)
+- `replay-tamper` — 录制流量篡改重放(字段替换规则,默认 dry-run)
+- `deobfuscate` — JS 语料反混淆(字符串数组/控制流平坦化还原,--action analyze 只统计)
+- `screenshot` — 无头截图取证(PNG+sha256+聚类)
 
 **编排与交付**
 - `auto` — 一键管道 18 阶段(指纹→子域→静态→运行时→验证→报告)，stage 级 checkpoint 断点续跑
 - `auto-batch` — 多目标批量 + 汇总对比 + webhook 通知
 - `run-diff` — 两次 run 的攻击面变更对比(可配 cron 做监控)
 - `gen-report` / `save-evidence` — 报告渲染 + sha256 证据存储；findings 导出含 SARIF 2.1.0(GitHub code scanning 兼容)
-- `hunt_begin` / `hunt_record` / `hunt_overview` — 宿主 agent 驱动的 hunt 循环，观察台账反幻觉闸门，maxRounds/maxCost/maxDurationMin 预算硬停
+- `hunt-begin` / `hunt-record` / `hunt-overview` — 宿主 agent 驱动的 hunt 循环，观察台账反幻觉闸门，maxRounds/maxCost/maxDurationMin 预算硬停
 
 **网络设施**
 - `--proxy`(http/socks5)/ `--proxy-pool FILE`(轮换+失败剔除)/ `--rps N`(全局限速)
@@ -101,6 +114,8 @@ velric-agent subdomains <domain> <outdir>
 velric-agent port-scan <host> <outdir>
 velric-agent paths <baseUrl> <outdir>
 velric-agent auth-probe <api_merged.txt> <outdir> [--cookie STR]
+velric-agent authz-replay <recordRoot> <outdir> --roles-file roles.json
+velric-agent pii-scan <recordRoot> <outdir>
 velric-agent harvest <baseUrl> <outdir>
 velric-agent runtime <baseUrl> <outdir> --chromium <path>
 velric-agent help

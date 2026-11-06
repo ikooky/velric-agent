@@ -68,6 +68,7 @@ Usage:
   velric-agent verb-matrix <outdir> --urls a,b     HTTP verb override matrix probe
   velric-agent admin-surface <baseUrl> <outdir>    admin/panel surface map
   velric-agent graphql-authz <endpoint> <schemaFile> <outdir>   GraphQL per-field authz differential
+  velric-agent dir-fuzz <outdir> (--url URL [--wordlist-file F] | --preset sensitive|backups --base URL)   wordlist fuzzing
   velric-agent dns-resolve <host> [...]   resolve A/AAAA/CNAME
   velric-agent http-probe <url>           probe one URL (status/title/hash)
   velric-agent harvest <url> <outdir>     static SPA bundle harvest
@@ -883,6 +884,49 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
         }
         const { probePaths } = await import("./domain/pathProbe.js");
         out(await probePaths({ baseUrl: base, outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, proxy: await resolveProxy(flags) }));
+        return 0;
+      }
+      case "dir-fuzz": {
+        const dir = positional[0];
+        const preset = flags.preset;
+        const base = typeof flags.base === "string" ? flags.base : undefined;
+        const url = typeof flags.url === "string" ? flags.url : undefined;
+        if (preset === "sensitive" || preset === "backups") {
+          if (!dir || !base) {
+            console.error(`usage: dir-fuzz <outdir> --preset ${preset} --base URL [--cookie STR]`);
+            return 2;
+          }
+          if (preset === "sensitive") {
+            const { probePaths } = await import("./domain/pathProbe.js");
+            out(await probePaths({ baseUrl: base, outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout) }));
+          } else {
+            const { findBackups } = await import("./domain/backupFind.js");
+            out(await findBackups({ baseUrl: base, outputRoot: dir, targets: jarr(flags, "targets"), proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout), maxCandidates: num(flags.max) }));
+          }
+          return 0;
+        }
+        if (!dir || !url) {
+          console.error("usage: dir-fuzz <outdir> --url URL [--wordlist-file F] [--extensions html,php] [--recursion] [--calibration N] [--match-status 200,301] [--filter-size N] [--delay-ms N]");
+          return 2;
+        }
+        const { dirFuzz } = await import("./domain/dirFuzz.js");
+        out(await dirFuzz({
+          url, outputRoot: dir,
+          wordlistFile: typeof flags["wordlist-file"] === "string" ? flags["wordlist-file"] : undefined,
+          words: jarr(flags, "words"),
+          extensions: jarr(flags, "extensions"),
+          recursion: flags.recursion === true,
+          recursionDepth: num(flags["recursion-depth"]),
+          calibration: num(flags.calibration),
+          matchStatus: (typeof flags["match-status"] === "string" ? flags["match-status"].split(",").map((x) => Number(x.trim())).filter((n) => n > 0) : undefined),
+          filterSize: (typeof flags["filter-size"] === "string" ? flags["filter-size"].split(",").map((x) => Number(x.trim())).filter((n) => n >= 0) : undefined),
+          cookie: typeof flags.cookie === "string" ? flags.cookie : undefined,
+          headers: await jobj<Record<string, string>>(flags, "headers"),
+          proxy: await resolveProxy(flags),
+          timeoutMs: num(flags.timeout),
+          maxWords: num(flags.max),
+          delayMs: num(flags["delay-ms"]),
+        }));
         return 0;
       }
       case "cors": {
