@@ -4,7 +4,7 @@ import { EvidenceStore } from "./graphs.js";
 import { withRootLock } from "../core/storage.js";
 import { writeOwnedManifest } from "../application/harvest.js";
 
-/** Screenshot evidence collector (gowitness design): headless Chromium visits
+/** Screenshot evidence collector: headless Chromium visits
  *  each URL, captures a PNG + page fingerprint (title / final URL / tech
  *  headers), groups pages by visual-hash similarity (template clustering —
  *  dozens of hosts on the same CMS collapse to one look), and records every

@@ -4,7 +4,7 @@
  *  Three layers:
  *  - SECRET_PATTERNS: credential regexes (top providers with structural
  *    prefixes, high-signal subset)
- *  - PAIRED_SECRETS: jsluice-style pairing — an AWS access key id alone may be
+ *  - PAIRED_SECRETS: co-occurrence pairing — an AWS access key id alone may be
  *    a false positive, but key id + base64 secret co-occurring in the same
  *    object/region is a confirmed credential pair
  *  - PII_PATTERNS: personally identifiable data movement (API
@@ -52,7 +52,7 @@ export const SECRET_PATTERNS: readonly SecretPattern[] = [
   },
 ];
 
-/** Paired credential detection (jsluice discipline): a lone identifier is a
+/** Paired credential detection: a lone identifier is a
  *  weak signal; identifier + secret adjacent in the same window is a
  *  confirmed pair. Window = same JSON object or 200-char neighborhood. */
 export interface PairedSecretPattern {

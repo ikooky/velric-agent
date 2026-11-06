@@ -9,7 +9,7 @@ import { join } from "node:path";
  *  whitespace junk, char-code construction. Each mutation is a NEW request;
  *  verdicts are differential (payload got a NON-WAF response = delivered).
  *
- *  This is the transport layer for oob_confirm / nuclei payloads when a
+ *  This is the transport layer for oob_confirm / template-matcher payloads when a
  *  naive fire gets eaten by a WAF. Zero LLM, deterministic ladders. */
 
 export interface WafAdaptInput {

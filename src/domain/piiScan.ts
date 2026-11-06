@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 
 /** Sensitive-data-exposure scanner over recorded traffic: reads
  *  every response blob captured by traffic_record, scans for PII movement
- *  (emails/phones/cards/national IDs/JWTs) and credential pairs (jsluice
+ *  (emails/phones/cards/national IDs/JWTs) and credential pairs (co-occurrence
  *  pairing), then attributes each hit back to the exchange (method+URL) so
  *  the finding says WHICH endpoint leaks WHICH data class.
  *
@@ -35,7 +35,7 @@ export interface PiiScanResult {
   readonly exchanges: number;
   /** endpoint-level rollup, sorted by distinct data classes desc. */
   readonly exposures: EndpointExposure[];
-  /** credential PAIRS found (jsluice pairing) — these are findings on their own. */
+  /** credential PAIRS found (pairing) — these are findings on their own. */
   readonly credentialPairs: (SecretHit & { url: string; method: string })[];
   readonly artifacts: { path: string; bytes: number }[];
 }

@@ -30,7 +30,7 @@ describe("secrets expansion", () => {
     expect(hits.some((h) => h.name === "sendgrid_key")).toBe(true);
   });
 
-  it("pairs aws key id + secret only when co-occurring (jsluice discipline)", () => {
+  it("pairs aws key id + secret only when co-occurring", () => {
     // AWS secret keys are exactly 40 base64 chars
     const secret40 = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
     if (secret40.length !== 40) throw new Error("test vector must be 40 chars");

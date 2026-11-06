@@ -1,19 +1,19 @@
-/** URL-pool refinement pipeline (uro + gf + dupdurl design): two pure-local
+/** URL-pool refinement pipeline: two pure-local
  *  stages that make every downstream probe's input smaller and sharper.
  *
- *  dedupeUrls — zero-request URL list decluttering (uro): incremental-path
+ *  dedupeUrls — zero-request URL list decluttering: incremental-path
  *    folding (/page/1/ == /page/2/), same-path-different-value folding
  *    (?id=1 == ?id=2), static-extension drop, human-content drop, plus
- *    dupdurl-style fuzzy ID normalization (numeric/uuid/hash -> {id}).
+ *    fuzzy ID normalization (numeric/uuid/hash -> {id}).
  *
- *  classifyUrls — gf-style vulnerability-pattern tagging: parameter-name
+ *  classifyUrls — vulnerability-pattern tagging: parameter-name
  *    patterns mark URLs as xss/ssrf/redirect/lfi/sqli/idor candidates so
  *    downstream probes take targeted feeds instead of the whole pool. */
 
 const STATIC_EXT_RE = /\.(?:jpg|jpeg|png|gif|webp|svg|ico|css|js|mjs|map|woff2?|ttf|eot|mp4|webm|mp3|pdf|zip|rar|7z|gz|tgz)(?:[?#]|$)/i;
-/** human-written content paths (uro keepcontent inverse) */
+/** human-written content paths (keep-content inverse) */
 const HUMAN_CONTENT_RE = /\/(?:posts?|blog|news|articles?|categories?)\/[^/]{15,}\/?$/i;
-/** fuzzy ID shapes (dupdurl) — all fold to ONE {id} token: the point is
+/** fuzzy ID shapes — all fold to ONE {id} token: the point is
  *  collapsing "same endpoint, different entity" URLs. */
 const FUZZY_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   [/^\d+$/, "{id}"],
@@ -96,9 +96,9 @@ export const dedupeUrls = (input: DedupeUrlsInput): DedupeUrlsResult => {
 };
 
 // ---------------------------------------------------------------------------
-// gf-style classification
+// vulnerability-pattern classification
 
-/** Param-name/URL-shape patterns per attack class (gf patterns distilled). */
+/** Param-name/URL-shape patterns per attack class. */
 export const GF_PATTERNS: ReadonlyArray<{ cls: string; paramRe: RegExp; pathRe?: RegExp }> = [
   {
     cls: "ssrf",

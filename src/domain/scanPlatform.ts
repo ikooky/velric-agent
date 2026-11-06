@@ -4,7 +4,7 @@ import { withExecution } from "../core/execution.js";
 import { join } from "node:path";
 import { AssetStore, type AssetNode } from "./graphs.js";
 
-/** Native scan platform (ScopeSentry functional equivalent, fully in-process,
+/** Native scan platform (fully in-process,
  *  zero external service / zero credentials). Deterministic orchestration
  *  shell over the existing domain modules:
  *
@@ -317,7 +317,7 @@ export const runTask = async (root:string,input:{
   } finally {clearInterval(heartbeat);}
 };
 
-// ---------------- local retrieval (ScopeSentry list/count parity) ----------------
+// ---------------- local retrieval (list/count parity) ----------------
 
 export interface AssetQuery {
   type?: string;

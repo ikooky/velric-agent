@@ -2,7 +2,7 @@ import { fetchUrl } from "../adapters/http.js";
 import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
-/** Minimal template-based matcher engine (nuclei-style semantics, pure JS):
+/** Minimal template-based matcher engine (pure JS):
  *  each template declares target paths + match conditions (status / word /
  *  regex on body or headers). Ships a curated built-in template set for
  *  exposed panels and default pages. No PoC execution — read-only GETs. */
