@@ -41,6 +41,7 @@ export interface MatrixCell {
 
 export interface RoleMatrixResult {
   readonly probed: number;
+  readonly permissionCodes?: string[];
   readonly matrix: MatrixCell[];
   /** endpoint -> roles that reached it; a low-priv role in here while the
    *  frontend model says it should not have the code = escalation surface. */
@@ -73,9 +74,13 @@ export const probeRoleMatrix = async (input: RoleMatrixInput): Promise<RoleMatri
   const gates = await readJsonIf<{ contentGate?: { permissionApiPaths?: string[] } }>(join(input.reconRoot, "gates_report.json"));
   const permApis = (gates?.contentGate?.permissionApiPaths ?? [])
     .filter((p) => typeof p === "string" && p.length > 0);
-  // permissions_tree.json is a PermTreeNode[] (top-level array)
+  // permissions_tree.json is a PermTreeNode[] (top-level array). Only codes
+  // that are themselves paths (some apps key routes by permission path) can
+  // serve as probe endpoints; bare permission codes ("system:user:list") are
+  // authorization dimensions, not HTTP endpoints, and are reported as context.
   const treeJson = await readJsonIf<PermTreeNode[]>(join(input.reconRoot, "permissions_tree.json"));
-  const treeEndpoints = Array.isArray(treeJson) ? flatCodes(treeJson) : [];
+  const treeCodes = Array.isArray(treeJson) ? flatCodes(treeJson) : [];
+  const treeEndpoints = treeCodes.filter((c) => c.startsWith("/"));
 
   const endpoints = [...new Set([...permApis, ...treeEndpoints])]
     .filter((p) => p.startsWith("http") || p.startsWith("/"))
@@ -118,7 +123,13 @@ export const probeRoleMatrix = async (input: RoleMatrixInput): Promise<RoleMatri
       const probed = new URL(url).pathname.replace(/\/$/, "");
       // landed=="" means the root "/" — still a different page than the
       // protected one when the probe was NOT for "/" itself.
-      const redirectedAway = r.finalUrl != null && landed !== probed;
+      // fetchUrl defaults to redirect:"manual" — the 302→/login hop must be
+      // read from the Location header of the single hop, not from finalUrl
+      // (which only differs when the caller passes redirect:"follow").
+      const locationHeader = r.headers?.["location"] ?? "";
+      const manualHopAway = r.status >= 300 && r.status < 400 && locationHeader !== "" &&
+        (() => { try { return new URL(locationHeader, url).pathname.replace(/\/$/, "") !== probed; } catch { return true; } })();
+      const redirectedAway = (r.finalUrl != null && landed !== probed) || manualHopAway;
       // 2xx is not "allowed" on its own: many gateways answer 200 with a
       // JSON access-denied body. Downgrade to ambiguous when the body smells
       // like a denial (differential discipline: content, not bare status).
@@ -189,8 +200,8 @@ export const probeRoleMatrix = async (input: RoleMatrixInput): Promise<RoleMatri
     }
   }
 
-  const body = JSON.stringify({ probed: endpoints.length, matrix, accessByEndpoint, escalations, violations: [...violations, ...escalations] }, null, 2);
+  const body = JSON.stringify({ probed: endpoints.length, matrix, accessByEndpoint, escalations, violations: [...violations, ...escalations], ...(treeCodes.length ? { permissionCodes: treeCodes } : {}) }, null, 2);
   const path = join(input.outputRoot, "role_matrix.json");
   await writeFile(path, body);
-  return { probed: endpoints.length, matrix, accessByEndpoint, escalations, violations: [...violations, ...escalations], artifacts: [{ path, bytes: Buffer.byteLength(body) }] };
+  return { probed: endpoints.length, matrix, accessByEndpoint, escalations, violations: [...violations, ...escalations], ...(treeCodes.length ? { permissionCodes: treeCodes } : {}), artifacts: [{ path, bytes: Buffer.byteLength(body) }] };
 };

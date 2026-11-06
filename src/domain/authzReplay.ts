@@ -354,12 +354,10 @@ export const replayAuthz = async (input: AuthzReplayInput): Promise<AuthzReplayR
           const liveRaw = liveBase.body;
           const baseRawForKv = liveRaw !== "" ? liveRaw : await readRawBlob(input.recordRoot, e.respBodyHash);
           const replayFp = fingerprint(r.status, r.sha256, r.bytes > 0);
-          // Normalized-hash comparison: blobFingerprint now hashes the
-          // NORMALIZED recorded body (2n: prefix); build the matching live
-          // fingerprint from the normalized replay body so the two formats
-          // align — otherwise every normalized blob mismatches by construction.
-          // Volatile-normalized second opinion (Authz-ExeC): identical after
-          // stripping timestamps/request-ids/nonces → same content.
+          // Volatile-normalized second opinion: identical after stripping
+          // timestamps/request-ids/nonces → same content. The normalized
+          // recorded blob (readNormalizedBlob) is compared against the
+          // normalized replay body — both sides use the same pipeline.
           const nReplay = normalizeBody(r.body);
           const nBase = liveRaw !== "" ? normalizeBody(liveRaw) : await readNormalizedBlob(input.recordRoot, e.respBodyHash);
           const sim = nBase === null ? 0 : tokenSimilarity(nReplay, nBase);

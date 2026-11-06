@@ -69,7 +69,6 @@ const variantsOf = (value: string, objectIds: readonly string[]): string[] => {
  *  like base64/hex WRAPPING a meaningful id (eyJpZCI6MTB9 = {"id":10}), blind
  *  substitution of the encoded string can never hit a valid object — decode,
  *  swap the inner id, re-encode in the same shape. */
-const B64_RE = /^[A-Za-z0-9+/]{8,}={0,2}$/;
 
 /** Identity-field extraction (pentest-ai sequential-identity confirmation):
  *  pull owner-identifying values from a JSON/HTML response. */

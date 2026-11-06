@@ -1,3 +1,4 @@
+import { PUBLIC_MULTI_SUFFIX } from "../domain/graphs.js";
 import { promises as dns } from "node:dns";
 import { join } from "node:path";
 import { httpProbe } from "./probe.js";
@@ -53,7 +54,7 @@ const rootOf = (host: string): string => {
   // Same algorithm as graphs.ts MULTI_SUFFIX: two-label suffixes that are
   // public suffixes (co.uk et al) need the eTLD+1 to be three labels —
   // naive last-2 returned "co.uk" for "target.co.uk".
-  const MULTI_SUFFIX = new Set(["co.uk", "org.uk", "ac.uk", "gov.uk", "com.au", "net.au", "org.au", "co.nz", "com.br", "com.cn", "com.tw", "com.hk", "co.jp", "co.kr", "co.in", "co.za", "com.sg", "com.my"]);
+  const MULTI_SUFFIX = PUBLIC_MULTI_SUFFIX;
   const parts = host.split(".");
   if (parts.length <= 2) return host;
   const last2 = parts.slice(-2).join(".");
@@ -110,7 +111,7 @@ export const enrichAssets = async (input: EnrichInput): Promise<EnrichResult> =>
     // Every other host (including a bare multi-label eTLD+1 like target.co.uk
     // or a two-label example.com) gets a root_domain node.
     {
-      const PUBLIC_SUFFIX = new Set(["co.uk", "org.uk", "ac.uk", "gov.uk", "com.au", "net.au", "org.au", "co.nz", "com.br", "com.cn", "com.tw", "com.hk", "co.jp", "co.kr", "co.in", "co.za", "com.sg", "com.my"]);
+      const PUBLIC_SUFFIX = PUBLIC_MULTI_SUFFIX;
       if (!PUBLIC_SUFFIX.has(host)) upsert({ type: "root_domain", key: root, rootDomain: root });
     }
     try {

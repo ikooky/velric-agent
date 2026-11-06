@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { assertHash, putBlob, readBlob, readJson, writeJson, withRootLock } from "../core/storage.js";
+/** Two-label suffixes that need a third label to form a registrable domain. */
+export const PUBLIC_MULTI_SUFFIX = new Set(["co.uk", "org.uk", "ac.uk", "gov.uk", "com.au", "net.au", "org.au", "co.nz", "com.br", "com.cn", "com.tw", "com.hk", "co.jp", "co.kr", "co.in", "co.za", "com.sg", "com.my"]);
 
 /** Dual-graph persistence (velric platform layer, deterministic file-based
  *  port): the asset graph is a global shared truth store (root_domain →
@@ -91,7 +93,7 @@ export class AssetStore {
       // Common multi-label public suffixes where last-2-labels would give a
       // bare suffix (api.example.co.uk -> co.uk). Small built-in list; the
       // full PSL is overkill for recon tagging.
-      const MULTI_SUFFIX = new Set(["co.uk", "org.uk", "ac.uk", "gov.uk", "com.au", "net.au", "org.au", "co.nz", "com.br", "com.cn", "com.tw", "com.hk", "co.jp", "co.kr", "co.in", "co.za", "com.sg", "com.my"]);
+      const MULTI_SUFFIX = PUBLIC_MULTI_SUFFIX;
       const last2 = parts.slice(-2).join(".");
       const last3 = parts.slice(-3).join(".");
       const root = parts.length >= 3 && MULTI_SUFFIX.has(last2) ? last3 : last2;

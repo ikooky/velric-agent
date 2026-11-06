@@ -1099,8 +1099,15 @@ const dispatch = async (command: string, positional: readonly string[], flags: R
         return 0;
       }
       case "login-replay": {
-        const [b, user, pass, dir] = positional;
-        if (!b || !user || !pass || !dir) { console.error("usage: login-replay <loginUrl> <user> <pass> <outdir> [--chromium PATH]"); return 2; }
+        const [b, user, passArg, dir] = positional;
+        // --pass-file reads the password from a file (0600) instead of argv,
+        // where local users can see it in /proc.
+        let pass = passArg;
+        if (typeof flags["pass-file"] === "string") {
+          const { readFile: rf } = await import("node:fs/promises");
+          pass = (await rf(flags["pass-file"], "utf8")).trim();
+        }
+        if (!b || !user || !pass || !dir) { console.error("usage: login-replay <loginUrl> <user> <pass|--> <outdir> [--chromium PATH] [--pass-file F]"); return 2; }
         const { replayLogin } = await import("./domain/loginReplay.js");
         out(await replayLogin({ baseUrl: b, username: user, password: pass, outputRoot: dir, chromiumPath: typeof flags.chromium === "string" ? flags.chromium : undefined, proxy: await resolveProxy(flags) }));
         return 0;

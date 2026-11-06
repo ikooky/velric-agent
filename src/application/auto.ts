@@ -355,8 +355,10 @@ export const runAutoPipeline = async (input: AutoInput): Promise<AutoResult> => 
     // Resumed run: an artifact written by a checkpoint-completed stage of THIS
     // seed is still valid (seed isolation is enforced by readCheckpoint) —
     // the mtime gate would otherwise silently drop its findings.
-    const stage = Object.entries(cp.stages).find(([, v]) => v.status === "ok" && p.includes("/"));
-    if (stage) return true;
+    // Any completed checkpoint stage proves this is a resumed run of the SAME
+    // seed (readCheckpoint resets stages on seed mismatch), so older artifacts
+    // under this root are still valid input.
+    if (Object.values(cp.stages).some((v) => v.status === "ok")) return true;
     return false;
   };
   // auto-findings: exposed API surface from artifacts (deterministic heuristics)

@@ -196,10 +196,15 @@ export const captureRuntime = async (
     mode: input.mode ?? input.hook?.mode ?? "passive",
   };
 
+  // Proxy credentials go through launch({proxy}) (never argv): a userinfo
+  // URL on the chromium command line leaks into /proc for local users.
+  const proxyOpts = input.proxy ? (() => { try { const u = new URL(input.proxy!); return { server: `${u.protocol}//${u.hostname}:${u.port}`, ...(u.username ? { username: decodeURIComponent(u.username) } : {}), ...(u.password ? { password: decodeURIComponent(u.password) } : {}) }; } catch { return { server: input.proxy! }; } })() : undefined;
   const browser = await chromium.launch({
     executablePath: execPath,
     headless: input.headless ?? true,
-    args: [...chromiumSandboxArgs(), ...(input.proxy ? [`--proxy-server=${input.proxy}`] : [])],
+    proxy: proxyOpts,
+    // No-credential proxies may also go via argv; credentialed ones must not.
+    args: [...chromiumSandboxArgs(), ...((input.proxy && !proxyOpts) ? [`--proxy-server=${input.proxy}`] : [])],
   });
 
   try {

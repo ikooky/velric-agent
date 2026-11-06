@@ -98,7 +98,11 @@ export const probePaths = async (input: PathProbeInput): Promise<PathProbeResult
       const r = await fetchUrl(url, opts); probed++;
       if (!r.status || r.status === 404 || r.status === 410 || r.complete === false || r.truncated || r.error) continue;
       const signature = discoverySignature(r);
-      if (r.status >= 200 && r.status < 300 && stable.has(signature)) continue;
+      // Soft-404 exclusion applies to ANY status: catch-all 3xx-to-login and
+      // catch-all error pages produce the same signature for every probe —
+      // matching the random-baseline signature means "not found", regardless
+      // of status class.
+      if (stable.has(signature)) continue;
       const u = new URL(url);
       found.push({ path: `${u.pathname}${u.search}`, status: r.status, bytes: r.bytes, contentType: r.contentType, signature });
     }
