@@ -79,6 +79,10 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `oob-confirm` — OOB 带外回调确认(interactsh 轮询,盲 SSRF/RCE 实锤)
 - `replay-tamper` — 录制流量篡改重放(字段替换规则,默认 dry-run)
 - `deobfuscate` — JS 语料反混淆(字符串数组/控制流平坦化还原,--action analyze 只统计)
+- `vm-analyze` — JS 自定义 VM 解释器静态逆向(opcode 表提取/分类、dispatch 位解码、常量表、报告输出)
+- `elf-analyze` — ELF 静态逆向(节区/段/符号/动态依赖,加固判定 PIE/RELRO/NX/栈保护/stripped)
+- `wasm-analyze` — WASM 静态逆向(导入导出/内存布局/name-section 符号恢复,emscripten/WASI 识别)
+- `dex-analyze` — DEX/APK 静态逆向(类/方法/字段全量,字符串表 URL/密钥提取)
 - `screenshot` — 无头截图取证(PNG+sha256+聚类)
 
 **编排与交付**

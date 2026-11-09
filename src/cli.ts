@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { resolveHost } from "./application/dns.js";
 import { httpProbe } from "./application/probe.js";
 import { harvestStatic } from "./application/harvest.js";
@@ -95,6 +96,9 @@ Usage:
   velric-agent auth-probe <api_merged.txt> <outdir>  anonymous vs auth access mapping
   velric-agent idor-prescreen <params_merged.json> <outdir>  IDOR candidate prescreen
   velric-agent git-restore <baseUrl> <outdir>  rebuild source from leaked .git
+  velric-agent elf-analyze <binary> <outdir>   ELF static analysis (sections/segments/symbols/imports, hardening: PIE RELRO NX canary stripped, dynamic deps, build-id)
+  velric-agent wasm-analyze <file.wasm> <outdir>  WASM static analysis (sections, imports/exports, memories, name-section symbol recovery, runtime hints)
+  velric-agent dex-analyze <file.dex|.apk> <outdir>  DEX static analysis (strings/classes/methods/fields, URL+secret extraction from string table)
   velric-agent vm-analyze <jsDir> <outdir>     JS VM interpreter static reverse (opcode table, dispatch, state slots)
   velric-agent dom-sinks <jsDir> <outdir>      DOM-XSS taint chain scan
   velric-agent jwt-inspect <outdir>            JWT decode + weak-secret crack
@@ -1014,6 +1018,50 @@ const dispatch = async (command: string, positional: readonly string[], flags: R
         }
         const { restoreGit } = await import("./domain/gitRestore.js");
         out(await restoreGit({ baseUrl: base, outputRoot: dir, proxy: await resolveProxy(flags) }));
+        return 0;
+      }
+      case "elf-analyze": {
+        const [file, dir] = positional;
+        if (!file || !dir) {
+          console.error("usage: elf-analyze <binary> <outdir>");
+          return 2;
+        }
+        const { analyzeElf } = await import("./domain/elfAnalyze.js");
+        out(await analyzeElf({ file, outputRoot: dir }));
+        return 0;
+      }
+      case "wasm-analyze": {
+        const [file, dir] = positional;
+        if (!file || !dir) {
+          console.error("usage: wasm-analyze <file.wasm> <outdir>");
+          return 2;
+        }
+        const { analyzeWasm } = await import("./domain/wasmAnalyze.js");
+        out(await analyzeWasm({ file, outputRoot: dir }));
+        return 0;
+      }
+      case "dex-analyze": {
+        const [file, dir] = positional;
+        if (!file || !dir) {
+          console.error("usage: dex-analyze <file.dex|file.apk> <outdir>");
+          return 2;
+        }
+        const { analyzeDex } = await import("./domain/dexAnalyze.js");
+        let target = file;
+        // APK: extract classes.dex in-place to a temp dir next to output
+        if (/\.apk$/i.test(file)) {
+          const { readFile } = await import("node:fs/promises");
+          const { execFile } = await import("node:child_process");
+          const { promisify } = await import("node:util");
+          const buf = await readFile(file);
+          if (buf.readUInt32LE(0) === 0x04034b50) {
+            const zipDir = join(dir, "_apk");
+            await import("node:fs/promises").then(fs => fs.mkdir(zipDir, { recursive: true }));
+            await promisify(execFile)("unzip", ["-o", "-j", file, "classes.dex", "-d", zipDir]);
+            target = join(zipDir, "classes.dex");
+          }
+        }
+        out(await analyzeDex({ file: target, outputRoot: dir }));
         return 0;
       }
       case "vm-analyze": {

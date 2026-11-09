@@ -47,6 +47,9 @@ description: |
 | `velric-agent extract-routes <jsdir> <outdir>` | 从 JS 语料提取路由 |
 | `velric-agent deobfuscate <jsDir> <outdir>` | JS 反混淆（--action analyze 只做统计） |
 | `velric-agent vm-analyze <jsDir> <outdir>` | JS 自定义 VM 解释器静态逆向：opcode 表提取/分类（CALL/BRANCH/STORE/RETURN/DOM/ALLOC/REGEX）、dispatch 位解码（&31 / >>5&31）、状态槽位、常量表引用、常量前奏映射。产出 vm_analysis.json + vm_report.md（--max-files/--min-score 调阈值） |
+| `velric-agent elf-analyze <binary> <outdir>` | ELF 静态逆向：节区/段/符号表/动态依赖/入口，加固判定（PIE/RELRO/NX/栈保护/stripped/build-id），导入面=攻击面。产出 elf_analysis.json + elf_report.md |
+| `velric-agent wasm-analyze <file.wasm> <outdir>` | WASM 静态逆向：节区/导入导出函数/内存布局/name-section 符号恢复（emscripten/WASI 识别）。产出 wasm_analysis.json + wasm_report.md |
+| `velric-agent dex-analyze <file.dex或.apk> <outdir>` | DEX 静态逆向：类/方法/字段全量、字符串表 URL/密钥提取（直接吃 APK 自动解 classes.dex）。产出 dex_analysis.json + dex_strings.txt + dex_urls.txt + dex_report.md |
 | `velric-agent paths <baseUrl> <outdir>` | 敏感路径（soft-404 校准） |
 | `velric-agent sourcemaps <jsDir> <outdir> --base URL` | 生产 .map 泄漏检测 |
 
