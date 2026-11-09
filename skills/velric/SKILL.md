@@ -50,6 +50,8 @@ description: |
 | `velric-agent elf-analyze <binary> <outdir>` | ELF 静态逆向：节区/段/符号表/动态依赖/入口，加固判定（PIE/RELRO/NX/栈保护/stripped/build-id），导入面=攻击面。产出 elf_analysis.json + elf_report.md |
 | `velric-agent wasm-analyze <file.wasm> <outdir>` | WASM 静态逆向：节区/导入导出函数/内存布局/name-section 符号恢复（emscripten/WASI 识别）。产出 wasm_analysis.json + wasm_report.md |
 | `velric-agent dex-analyze <file.dex或.apk> <outdir>` | DEX 静态逆向：类/方法/字段全量、字符串表 URL/密钥提取（直接吃 APK 自动解 classes.dex）。产出 dex_analysis.json + dex_strings.txt + dex_urls.txt + dex_report.md |
+| `velric-agent wasm-disasm <file.wasm> <outdir>` | WASM 完整反汇编：全 opcode（含 SIMD/饱和截断/批量内存）、函数内偏移、call 目标按 name 解析、全模块调用图。产出 wasm_disasm.txt + wasm_callgraph.json（--max-functions 钳制） |
+| `velric-agent dex-disasm <file.dex或.apk> <outdir>` | Dalvik 字节码反汇编（smali 级）：每方法指令流+寄存器+调用解析、字符串交叉引用（哪个方法引用哪个字符串）、类过滤。产出 dex_disasm.smali + dex_string_xrefs.json（--class-filter RE / --max-methods N） |
 | `velric-agent paths <baseUrl> <outdir>` | 敏感路径（soft-404 校准） |
 | `velric-agent sourcemaps <jsDir> <outdir> --base URL` | 生产 .map 泄漏检测 |
 

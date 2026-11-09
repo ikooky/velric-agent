@@ -96,6 +96,8 @@ Usage:
   velric-agent auth-probe <api_merged.txt> <outdir>  anonymous vs auth access mapping
   velric-agent idor-prescreen <params_merged.json> <outdir>  IDOR candidate prescreen
   velric-agent git-restore <baseUrl> <outdir>  rebuild source from leaked .git
+  velric-agent dex-disasm <file.dex|.apk> <outdir>  Dalvik bytecode disassembly (smali-level, string xrefs, per-class filter, direct APK input)
+  velric-agent wasm-disasm <file.wasm> <outdir>  Full WASM disassembly (all opcodes incl. SIMD/sat-trunc/bulk-memory, function-local offsets, call targets resolved to names, callgraph edges)
   velric-agent elf-analyze <binary> <outdir>   ELF static analysis (sections/segments/symbols/imports, hardening: PIE RELRO NX canary stripped, dynamic deps, build-id)
   velric-agent wasm-analyze <file.wasm> <outdir>  WASM static analysis (sections, imports/exports, memories, name-section symbol recovery, runtime hints)
   velric-agent dex-analyze <file.dex|.apk> <outdir>  DEX static analysis (strings/classes/methods/fields, URL+secret extraction from string table)
@@ -1018,6 +1020,42 @@ const dispatch = async (command: string, positional: readonly string[], flags: R
         }
         const { restoreGit } = await import("./domain/gitRestore.js");
         out(await restoreGit({ baseUrl: base, outputRoot: dir, proxy: await resolveProxy(flags) }));
+        return 0;
+      }
+      case "dex-disasm": {
+        const [file, dir] = positional;
+        if (!file || !dir) {
+          console.error("usage: dex-disasm <file.dex|.apk> <outdir> [--max-methods N] [--class-filter RE]");
+          return 2;
+        }
+        const { disassembleDex } = await import("./domain/dexDisasm.js");
+        let target = file;
+        if (/\.apk$/i.test(file)) {
+          const { readFile } = await import("node:fs/promises");
+          const { execFile } = await import("node:child_process");
+          const { promisify } = await import("node:util");
+          const buf = await readFile(file);
+          if (buf.readUInt32LE(0) === 0x04034b50) {
+            const zipDir = join(dir, "_apk");
+            const fs = await import("node:fs/promises");
+            await fs.mkdir(zipDir, { recursive: true });
+            await promisify(execFile)("unzip", ["-o", "-j", file, "classes.dex", "-d", zipDir]);
+            target = join(zipDir, "classes.dex");
+          }
+        }
+        const r = await disassembleDex({ file: target, outputRoot: dir, maxMethods: num(flags["max-methods"]), classFilter: typeof flags["class-filter"] === "string" ? flags["class-filter"] : undefined });
+        out({ file: r.file, bytes: r.bytes, methods: r.methods, disassembled: r.disassembled, sample: r.details.slice(0, 3), topStringXrefs: r.stringXrefs.filter(x => /^(?:https?:|str )/.test(x.str) || x.str.length > 8).slice(0, 20), artifacts: r.artifacts });
+        return 0;
+      }
+      case "wasm-disasm": {
+        const [file, dir] = positional;
+        if (!file || !dir) {
+          console.error("usage: wasm-disasm <file.wasm> <outdir> [--max-functions N]");
+          return 2;
+        }
+        const { disassembleWasm } = await import("./domain/wasmDisasm.js");
+        const r = await disassembleWasm({ file, outputRoot: dir, maxFunctions: num(flags["max-functions"]) });
+        out({ file: r.file, bytes: r.bytes, functions: r.functions, disassembled: r.disassembled, callgraphEdges: r.callgraph.length, topCalls: r.callgraph.slice(0, 20), artifacts: r.artifacts });
         return 0;
       }
       case "elf-analyze": {

@@ -56,3 +56,34 @@ describe("binary-analyze", () => {
     expect(r.reason).toBe("not-dex-magic");
   });
 });
+
+import { disassembleWasm } from "../src/domain/wasmDisasm.js";
+import { disassembleDex } from "../src/domain/dexDisasm.js";
+
+describe("instruction-layer disassembly", () => {
+  it("wasm-disasm: disassembles hand-built module with resolved call names", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "wd-"));
+    const f = join(dir, "mini.wasm");
+    // (module (import "env" "log" (func)) (func $add (param i32 i32)(result i32) local.get 0 local.get 1 i32.add) (func $main i32.const 7 call $add) (export "add") (name section))
+    await writeFile(f, miniWasm);
+    const r = await disassembleWasm({ file: f, outputRoot: join(dir, "out") });
+    expect(r.disassembled).toBeGreaterThan(0);
+    const addFn = r.details.find(d => d.name === "addfn" || d.name === "f1");
+    expect(addFn).toBeTruthy();
+    expect(addFn!.instrs.some(i => i.name === "i32.add")).toBe(true);
+  });
+  it("wasm-disasm: rejects garbage", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "wd-"));
+    const f = join(dir, "g.wasm");
+    await writeFile(f, Buffer.from("garbage bytes here for sure"));
+    const r = await disassembleWasm({ file: f, outputRoot: join(dir, "out") });
+    expect(r.disassembled).toBe(0);
+  });
+  it("dex-disasm: rejects non-dex", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "dd-"));
+    const f = join(dir, "x.dex");
+    await writeFile(f, Buffer.alloc(200, 1));
+    const r = await disassembleDex({ file: f, outputRoot: join(dir, "out") });
+    expect(r.disassembled).toBe(0);
+  });
+});

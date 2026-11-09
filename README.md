@@ -83,6 +83,8 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `elf-analyze` — ELF 静态逆向(节区/段/符号/动态依赖,加固判定 PIE/RELRO/NX/栈保护/stripped)
 - `wasm-analyze` — WASM 静态逆向(导入导出/内存布局/name-section 符号恢复,emscripten/WASI 识别)
 - `dex-analyze` — DEX/APK 静态逆向(类/方法/字段全量,字符串表 URL/密钥提取)
+- `wasm-disasm` — WASM 完整反汇编(全 opcode 含 SIMD,call 目标名解析,全模块调用图)
+- `dex-disasm` — Dalvik 字节码反汇编(smali 级,字符串交叉引用,类过滤)
 - `screenshot` — 无头截图取证(PNG+sha256+聚类)
 
 **编排与交付**
