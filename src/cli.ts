@@ -95,6 +95,7 @@ Usage:
   velric-agent auth-probe <api_merged.txt> <outdir>  anonymous vs auth access mapping
   velric-agent idor-prescreen <params_merged.json> <outdir>  IDOR candidate prescreen
   velric-agent git-restore <baseUrl> <outdir>  rebuild source from leaked .git
+  velric-agent vm-analyze <jsDir> <outdir>     JS VM interpreter static reverse (opcode table, dispatch, state slots)
   velric-agent dom-sinks <jsDir> <outdir>      DOM-XSS taint chain scan
   velric-agent jwt-inspect <outdir>            JWT decode + weak-secret crack
   velric-agent ws-schema <runtime_api.json> <outdir>  WS message field schemas
@@ -1013,6 +1014,16 @@ const dispatch = async (command: string, positional: readonly string[], flags: R
         }
         const { restoreGit } = await import("./domain/gitRestore.js");
         out(await restoreGit({ baseUrl: base, outputRoot: dir, proxy: await resolveProxy(flags) }));
+        return 0;
+      }
+      case "vm-analyze": {
+        const [jsDir, dir] = positional;
+        if (!jsDir || !dir) {
+          console.error("usage: vm-analyze <jsDir> <outdir> [--max-files N] [--min-score N]");
+          return 2;
+        }
+        const { analyzeVmCorpus } = await import("./domain/vmAnalyze.js");
+        out(await analyzeVmCorpus({ jsDir, outputRoot: dir, maxFiles: num(flags["max-files"]), minInterpreterScore: num(flags["min-score"]) }));
         return 0;
       }
       case "dom-sinks": {

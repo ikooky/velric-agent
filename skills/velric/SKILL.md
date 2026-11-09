@@ -46,6 +46,7 @@ description: |
 | `velric-agent spider <url> <outdir>` | MPA 爬行（--max/--depth/--cookie） |
 | `velric-agent extract-routes <jsdir> <outdir>` | 从 JS 语料提取路由 |
 | `velric-agent deobfuscate <jsDir> <outdir>` | JS 反混淆（--action analyze 只做统计） |
+| `velric-agent vm-analyze <jsDir> <outdir>` | JS 自定义 VM 解释器静态逆向：opcode 表提取/分类（CALL/BRANCH/STORE/RETURN/DOM/ALLOC/REGEX）、dispatch 位解码（&31 / >>5&31）、状态槽位、常量表引用、常量前奏映射。产出 vm_analysis.json + vm_report.md（--max-files/--min-score 调阈值） |
 | `velric-agent paths <baseUrl> <outdir>` | 敏感路径（soft-404 校准） |
 | `velric-agent sourcemaps <jsDir> <outdir> --base URL` | 生产 .map 泄漏检测 |
 

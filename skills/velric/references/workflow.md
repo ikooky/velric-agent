@@ -17,6 +17,8 @@
 - MPA → `spider` + `extract-routes`
 - `paths` 敏感路径(soft-404 校准后仍 200 才算命中;401/403 = 存在但受保护)
 - `sourcemaps` 生产 .map 泄漏检测
+- `deobfuscate` 字符串数组/控制流平坦化还原后再做后续分析
+- `vm-analyze` 语料命中风控/自定义 VM（IIFE+状态数组+位解码 opcode 分发）时：先跑它拿 opcode 表/常量表/dispatch 语义，再定位导出函数注册点；opcode 表是后续人工追踪调用链的底图
 
 ## Phase 3 — 运行时
 - `runtime`(需 Chromium)抓真实 XHR/fetch/WS 帧;无浏览器时静态面兜底
