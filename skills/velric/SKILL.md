@@ -22,116 +22,172 @@ description: |
 
 ## 命令矩阵
 
-命令一律形如 `node $VELRIC/scripts/velric-agent.mjs <subcommand>`，下表省略前缀。首次使用先 `bash $VELRIC/bootstrap.sh`。
+命令一律形如 `node $VELRIC/scripts/velric-agent.mjs <subcommand>`，下表省略前缀。首次使用先 `bash $VELRIC/bootstrap.sh`。命令注册表与分组 = `src/cli/registry.ts`（CLI `help` 输出同源渲染）。
 
-### Phase 0 — 指纹与分类
+### 侦察 — 资产与面测绘
+
+先跑 fingerprint 判 WAF/类型；subdomains/port-scan/wayback 圈资产；paths/dir-fuzz/info-leak 摸面。
+
 | 命令 | 用途 |
 |------|------|
-| `velric-agent fingerprint <baseUrl> <outdir>` | WAF/CDN 识别、HTTP 方法枚举、Cookie 安全审计 |
-| `velric-agent http-probe <url>` | 单 URL 探测（状态/标题/哈希） |
+| `velric-agent subdomains <domain> <outdir>` | subdomain enum (crt.sh + CNAME + wordlist) |
+| `velric-agent subdomain-alter <domain> <outdir> --hosts a,b` | alteration-based subdomain generation (+ --resolve) |
+| `velric-agent port-scan <host> <outdir>` | TCP top-ports scan (--ports/--timeout) |
+| `velric-agent dns-resolve <host> [...]` | resolve A/AAAA/CNAME |
+| `velric-agent http-probe <url>` | probe one URL (status/title/hash) |
+| `velric-agent enrich <seed...> --out DIR` | asset graph from seeds (DNS+HTTP) |
+| `velric-agent wayback <domain> <outdir>` | historical URLs from web.archive.org |
+| `velric-agent fingerprint <baseUrl> <outdir>` | WAF/CDN id + method enum + cookie audit |
+| `velric-agent paths <baseUrl> <outdir>` | sensitive paths w/ soft-404 calibration |
+| `velric-agent dir-fuzz <outdir> (--url URL [--wordlist-file F] | --preset sensitive|backups --base URL)` | wordlist fuzzing |
+| `velric-agent nuclei-lite <baseUrl> <outdir>` | template matcher (panels/leaks) |
+| `velric-agent admin-surface <baseUrl> <outdir>` | admin/panel surface map |
+| `velric-agent info-leak <baseUrl> <outdir>` | information disclosure (paths/stack/banners/secrets) |
+| `velric-agent coverage <baseUrl> <outdir>` | interactive coverage enumeration |
+| `velric-agent site-map <baseUrl> <outdir>` | structured site map |
+| `velric-agent asset-graph <dir> <action>` | asset graph store |
 
-### Phase 1 — 资产面
+### 内容 — 抓取与语料
+
+SPA 走 harvest、MPA 走 spider；deobfuscate 还原后做后续分析；泄漏语料 git-restore/backup-unpack/sqlite-read。
+
 | 命令 | 用途 |
 |------|------|
-| `velric-agent subdomains <domain> <outdir>` | 子域枚举（crt.sh + CNAME + 词表） |
-| `velric-agent subdomain-alter <domain> <outdir> --hosts a,b` | 改写式子域生成（+`--resolve`） |
-| `velric-agent port-scan <host> <outdir>` | TCP top-ports 扫描 |
-| `velric-agent wayback <domain> <outdir>` | 历史 URL（web.archive.org） |
-| `velric-agent enrich <seed...> --out DIR` | 资产图（DNS+HTTP） |
+| `velric-agent harvest <url> <outdir>` | static SPA bundle harvest |
+| `velric-agent spider <url> <outdir>` | MPA crawl (--cookie/--max/--depth/--exclude) |
+| `velric-agent extract-routes <jsdir> <outdir>` | routes from JS corpus |
+| `velric-agent sourcemaps <jsDir> <outdir>` | source-map leak detection (--base URL) |
+| `velric-agent deobfuscate <jsDir> <outdir>` | JS corpus deobfuscation (--action analyze) |
+| `velric-agent git-restore <baseUrl> <outdir>` | rebuild source from leaked .git |
+| `velric-agent backup-unpack <urls.txt> <outdir>` | dump unpack + secret scan |
+| `velric-agent sqlite-read <file.db> <outdir>` | SQLite leak reader |
+| `velric-agent archive-recover <url> <outdir>` | blocked-page archive recovery |
+| `velric-agent url-refine <outdir> --urls a,b` | URL dedupe/classify (--action classify, --fuzzy) |
+| `velric-agent screenshot <outdir> --urls a,b` | headless screenshot capture (--cluster) |
+| `velric-agent traffic-recorder <outdir>` | traffic recording proxy |
+| `velric-agent traffic-query <dir> <action>` | traffic search/get |
 
-### Phase 2 — 静态侦察
+### 运行时 — 浏览器与协议
+
+runtime 抓真实 XHR/WS；merge-params 汇参数矩阵；ws-schema/proto-decode 解私有协议。
+
 | 命令 | 用途 |
 |------|------|
-| `velric-agent harvest <url> <outdir>` | SPA bundle 提取 API/路由 + secrets 扫描 |
-| `velric-agent spider <url> <outdir>` | MPA 爬行（--max/--depth/--cookie） |
-| `velric-agent extract-routes <jsdir> <outdir>` | 从 JS 语料提取路由 |
-| `velric-agent deobfuscate <jsDir> <outdir>` | JS 反混淆（--action analyze 只做统计） |
-| `velric-agent vm-analyze <jsDir> <outdir>` | JS 自定义 VM 解释器静态逆向：opcode 表提取/分类（CALL/BRANCH/STORE/RETURN/DOM/ALLOC/REGEX）、dispatch 位解码（&31 / >>5&31）、状态槽位、常量表引用、常量前奏映射。产出 vm_analysis.json + vm_report.md（--max-files/--min-score 调阈值） |
-| `velric-agent elf-analyze <binary> <outdir>` | ELF 静态逆向：节区/段/符号表/动态依赖/入口，加固判定（PIE/RELRO/NX/栈保护/stripped/build-id），导入面=攻击面。产出 elf_analysis.json + elf_report.md |
-| `velric-agent wasm-analyze <file.wasm> <outdir>` | WASM 静态逆向：节区/导入导出函数/内存布局/name-section 符号恢复（emscripten/WASI 识别）。产出 wasm_analysis.json + wasm_report.md |
-| `velric-agent dex-analyze <file.dex或.apk> <outdir>` | DEX 静态逆向：类/方法/字段全量、字符串表 URL/密钥提取（直接吃 APK 自动解 classes.dex）。产出 dex_analysis.json + dex_strings.txt + dex_urls.txt + dex_report.md |
-| `velric-agent wasm-disasm <file.wasm> <outdir>` | WASM 完整反汇编：全 opcode（含 SIMD/饱和截断/批量内存）、函数内偏移、call 目标按 name 解析、全模块调用图。产出 wasm_disasm.txt + wasm_callgraph.json（--max-functions 钳制） |
-| `velric-agent dex-disasm <file.dex或.apk> <outdir>` | Dalvik 字节码反汇编（smali 级）：每方法指令流+寄存器+调用解析、字符串交叉引用（哪个方法引用哪个字符串）、类过滤。产出 dex_disasm.smali + dex_string_xrefs.json（--class-filter RE / --max-methods N） |
-| `velric-agent x86-disasm <elf> <outdir>` | x86 ELF 指令级反汇编：符号表锚定函数（stripped 二进制走 entry+endbr64/push-rbp 序言启发式）、call 目标符号标注、字符串表。产出 x86_disasm.txt + x86_disasm.json（--max-functions N / --max-instrs N）。引擎为 capstone-wasm（可选依赖，缺失时降级输出字符串表并明示） |
-| `velric-agent nosqli-probe <url> <outdir> --param id` | NoSQL 注入差分：$ne/$gt/$regex/$exists/$where 运算符 + 类型混淆（[]/null/0/{}），行数/modified 计数发散判定 + Mongo 错误签名。产出 nosqli_cases.json + findings.md（--in body --method PATCH --body-template） |
-| `velric-agent race-probe <url> <outdir>` | TOCTOU 竞争面：并发单次语义请求（券/转账/扣款）N×rounds 全发，admitted vs 服务端自证状态发散判定 check-then-act 窗口。产出 race_cases.json + findings.md（--concurrency/--rounds/--verify-url） |
-| `velric-agent graphql-batch <endpoint> <outdir>` | GraphQL 深度/别名轰炸限额测量：depth 阶梯（1..9）+ 别名扇出阶梯（2/8/32/128/512），服务端拒绝语义分类。产出 graphql_batch.json/md（--query-template） |
-| `velric-agent ldap-probe <url> <outdir> --param uid` | LDAP 注入差分：通配符（\*/前缀\*）/过滤器闭合（\*)）/加宽（\*)(objectClass=\*)）/布尔 OR/AND/null/DN 注入 8 向量，行数发散 + LDAP 错误签名。产出 ldap_cases.json + findings.md |
-| `velric-agent api-version <versioned-api-url> <outdir>` | API 版本鉴权降级：v0..v4 姊妹版本匿名 vs 鉴权对照，旧版丢失鉴权层的数据泄漏。产出 api_version_cases.json + api_version.md |
-| `velric-agent info-leak <baseUrl> <outdir>` | 信息泄漏面：22 条敏感路径（.env/.git/actuator/heapdump/server-status/phpinfo/swagger…SPA fallback 校准）+ 堆栈跟踪 + 内部路径 + banner/inline secret，三档 severity。产出 info_leak.json/md |
-| `velric-agent pass-policy <url> <outdir> --body-template T` | 密码策略面：空/单字符/top 常用/纯数字/重复/键盘走位 10 档弱密码接受度（{UNIQ} 防唯一性冲突）。产出 pass_policy.json/md |
-| `velric-agent jwks-forge <token> <oracleUrl> <outdir> --jwks-url U` | JWT jku/x5u 伪造：攻击者 JWKS + RSA 签名提权 claims，oracle 差分判定验证器是否解引用头部 URL。产出 jwks_forge.json/md |
-| `velric-agent cors-deep <url> <outdir>` | CORS 可利用性矩阵：任意/空/兄弟域 origin 反射 × credentials × preflight 方法，四档 verdict。产出 cors_deep.json/md |
-| `velric-agent ws-auth <wsUrl> <outdir>` | WebSocket 认证缺口：裸 RFC6455 握手（匿名升级/跨 Origin/子协议混淆/无认证服务端推送）。产出 ws_auth.json/md |
-| `velric-agent reset-abuse <resetUrl> <loginUrl> <outdir>` | 密码重置滥用：静态安全问题答案喷洒→重置接受→新凭证登录自证完整接管链+hash 回显检测。产出 reset_cases.json + reset_abuse.md |
-| `velric-agent host-poison <url> <outdir>` | Host 头/密码重置投毒面：Host/X-Forwarded-Host/X-Forwarded-Proto/X-Original-Host/Forwarded 等 9 向量金丝雀，检测服务端用攻击者输入构造绝对 URL（重置链接/canonical/跳转）。产出 host_poison.json/md |
-| `velric-agent upload-probe <url> <outdir>` | 文件上传面：内容类型混淆、双扩展名、null 截断、SVG/HTML/JS 载体、polyglot GIF、.htaccess、JSP/SHTML 等 11 向量 multipart 上传，接受语义+exec-risk 判定+存储 URL 提取。产出 upload_cases.json + findings.md |
-| `velric-agent ssti-probe <url> <outdir> --param q` | SSTI 面：11 种引擎语法的 7\*7 金丝雀算术（jinja/twig/freemarker/velocity/smarty/erb/es6/mvel/pebble），49 回显且非字面回显才 confirmed。产出 ssti_cases.json + findings.md |
-| `velric-agent cred-brute <url> <outdir> --pairs-file F` | 凭证爆破：有界字典喷洒 + 逐响应语义分类（auth-ok/bad-cred/429/锁定/CAPTCHA），节流存在性汇总。产出 cred_cases.json + cred_brute.md（--body-template '{USER}/{PASS}' --delay-ms） |
-| `velric-agent otp-brute`（增强） | 附带 2FA secret 泄漏检测：探 verify 端点同时检查 setup/status 姐妹端点明文回显 totpSecret（base32 特征），命中即输出可伪造 TOTP 的绕过素材 |
-| `velric-agent value-abuse <url> <outdir> --body-template '{"quantity":1}'` | 业务逻辑值域滥用：负数/零/小数/溢出/字符串数值/科学计数法 7 变体注入，接受+回显+**回读持久化验证**三段确认。产出 value_abuse_cases.json + value_abuse.md（--verify-url 回读 / --bearer T） |
-| `velric-agent sqli-probe <url> <outdir> --param q` | SQL 注入差分：error-oracle（5 种引号破坏）+ boolean-blind（AND 1=1/1=2 三组对）+ 有界 time-blind（sqlite/pgsql/mysql/mssql）+ 认证绕过语法（--auth-bypass）。产出 sqli_cases.json + sqli_findings.md（--in body 配 --body-template） |
-| `velric-agent otp-brute <url> <outdir> --body-template T` | OTP/2FA 爆破面：有界错误码样本测 verify 端点节流/锁定/CAPTCHA 升级缺失，全空间串行时间估算。产出 otp_brute.json/md（T 含 {CODE} 占位符） |
-| `velric-agent idor-deep --write` | 写 IDOR 模式：变异目标对象（PATCH/PUT）+ 服务器写计数自证（modified/matched>0），--write-payload/--write-method/--ids |
-| `velric-agent hpp-probe <url> <outdir> --params a,b` | HTTP 参数污染：duplicate/array-cast/comma/semicolon/percent-dot 五策略差分，识别 last-wins/first-wins/拼接型解析器。产出 hpp_cases.json + hpp_findings.md |
-| `velric-agent proto-pollute <url> <outdir>` | 原型污染面：`__proto__`/`constructor.prototype`/dot-path/数组下标向量（JSON body），反射+差分判定。产出 proto_cases.json + proto_findings.md |
-| `velric-agent redirect-traverse <url> <outdir> --params a,b` | 开放重定向（绝对/协议相对/反斜杠/@符号/percent 编码 10 变体，Location 头分析）+ 路径遍历（7 编码变体，/etc/passwd 内容特征判定）。产出 redirect_cases.json + traversal_cases.json + findings.md |
-| `velric-agent cache-deceive <baseUrl> <outdir> --private-path /api/me` | Web 缓存欺骗（路径后缀技巧 + 匿名复核确认污染）+ unkeyed header 投毒面（X-Forwarded-Host 等 6 头反射检测）。产出 cache_cases.json + cache_findings.md |
-| `velric-agent role-escalate <url> <outdir> --body-template '{}'` | 提权参数面：role/isAdmin/userType 等 20 字段 × 8 值注入差分；回显型 API 自动对照降误报（状态码变化才报）。产出 role_cases.json + role_findings.md |
-| `velric-agent paths <baseUrl> <outdir>` | 敏感路径（soft-404 校准） |
-| `velric-agent sourcemaps <jsDir> <outdir> --base URL` | 生产 .map 泄漏检测 |
+| `velric-agent runtime <url> <outdir>` | headless runtime capture (--chromium/--routes/--wait/--per-route/--api-pattern) |
+| `velric-agent session-crawl <baseUrl> <loginUrl> <user> <pass> <outdir>` | authenticated crawl w/ relogin |
+| `velric-agent perm-tree <jsdir> <outdir>` | permission tree rebuild (--role NAME) |
+| `velric-agent merge-params <samples.json> <outdir>` | param matrix merge |
+| `velric-agent ws-schema <runtime_api.json> <outdir>` | WS message field schemas |
+| `velric-agent proto-decode <hex|base64> <outdir>` | protobuf heuristic decode |
+| `velric-agent ws-origin-check <wsUrl> <outdir>` | WS cross-origin check (CSWSH) |
 
-### Phase 3 — 运行时
+### 逆向 — 静态与指令层
+
+JS: vm-analyze（自定义 VM opcode）→ dom-sinks/analyze-gates；二进制: elf/wasm/dex-analyze 定性 → wasm/dex/x86-disasm 指令级 + xref。
+
 | 命令 | 用途 |
 |------|------|
-| `velric-agent runtime <url> <outdir>` | 无头浏览器 XHR/fetch/WS 帧捕获（--chromium） |
-| `velric-agent merge-params <samples.json> <outdir>` | 参数矩阵汇总 |
-| `velric-agent ws-schema <wsUrl> <outdir>` | WS 帧字段表 |
-| `velric-agent session-crawl <baseUrl> <loginUrl> <user> <pass> <outdir>` | 带登录态爬行（自动重登） |
-| `velric-agent traffic-recorder <outdir>` | MITM 流量录制代理 |
-| `velric-agent screenshot <outdir> --urls a,b` | 无头截图（--cluster） |
+| `velric-agent vm-analyze <jsDir> <outdir>` | JS VM interpreter static reverse (opcode table, dispatch, state slots) |
+| `velric-agent dom-sinks <jsDir> <outdir>` | DOM-XSS taint chain scan |
+| `velric-agent analyze-gates <jsDir> <outdir>` | auth-gate static analysis |
+| `velric-agent elf-analyze <binary> <outdir>` | ELF static analysis (sections/symbols/hardening/imports) |
+| `velric-agent wasm-analyze <file.wasm> <outdir>` | WASM static analysis (imports/exports/symbol recovery) |
+| `velric-agent dex-analyze <file.dex|.apk> <outdir>` | DEX static analysis (strings/classes/methods/URLs) |
+| `velric-agent wasm-disasm <file.wasm> <outdir>` | full WASM disassembly (all opcodes, callgraph) |
+| `velric-agent dex-disasm <file.dex|.apk> <outdir>` | Dalvik bytecode disassembly (smali-level, string xrefs) |
+| `velric-agent x86-disasm <elf> <outdir>` | x86 ELF instruction-level disassembly (capstone-wasm optional) |
 
-### Phase 4 — 鉴权与越权
+### 注入 — 语法与参数
+
+逐差分探针：SQL/NoSQL/LDAP/SSTI 语法面 + 原型污染/HPP/重定向遍历；全部带基线差分与错误签名，findings 需复核语义。
+
 | 命令 | 用途 |
 |------|------|
-| `velric-agent auth-probe <api_merged.txt> <outdir>` | 匿名可达 vs 需鉴权测绘 |
-| `velric-agent authz-replay <recordRoot> <outdir> --roles-file JSON` | 录制流量多角色差分重放（live-baseline 判定） |
-| `velric-agent role-matrix <reconRoot> <outdir> --roles-file JSON` | 跨角色访问矩阵 |
-| `velric-agent idor-prescreen <params_merged.json> <outdir>` | IDOR 候选预筛（只读差分） |
-| `velric-agent idor-deep <outdir> --endpoints-file JSON` | 三参照 IDOR 真实判定 |
-| `velric-agent mass-assign <recordRoot> <outdir>` | mass-assignment 污点探测（--fields） |
-| `velric-agent jwt-inspect <outdir>` / `jwt-attack <token> <endpoint> <outdir>` | JWT 解码/弱密钥/攻击套件 |
-| `velric-agent graphql-authz <endpoint> <schemaFile> <outdir>` | GraphQL 逐字段鉴权差分 |
-| `velric-agent header-bypass <outdir> --urls a,b` | 认证头绕过变体 |
-| `velric-agent verb-matrix <outdir> --urls a,b` | HTTP 动词覆盖矩阵 |
-| `velric-agent admin-surface <baseUrl> <outdir>` | 管理面测绘 |
+| `velric-agent sqli-probe <url> <outdir> --param q` | SQL injection differential (error/boolean/time blind/auth-bypass) |
+| `velric-agent nosqli-probe <url> <outdir> --param id` | NoSQL operator injection ($ne/$gt/$regex/$where, type juggling) |
+| `velric-agent ldap-probe <url> <outdir> --param uid` | LDAP injection (wildcard/filter-widening/boolean-OR, row divergence) |
+| `velric-agent ssti-probe <url> <outdir> --param q` | SSTI canary arithmetic (11 engine grammars, 49-reflection verdict) |
+| `velric-agent proto-pollute <url> <outdir>` | prototype pollution vectors (__proto__/constructor, JSON body) |
+| `velric-agent hpp-probe <url> <outdir> --params a,b` | HTTP parameter pollution (duplicate/array/comma strategies) |
+| `velric-agent redirect-traverse <url> <outdir> --params a,b` | open redirect + path traversal encodings (Location analysis, passwd oracle) |
 
-### 深化与参数
+### 认证 — 凭证与令牌
+
+cred-brute 语义分类喷洒；pass-policy/reset-abuse 弱密码与重置接管；jwt-inspect/jwt-attack/jwks-forge 三层 JWT 面。
+
 | 命令 | 用途 |
 |------|------|
-| `velric-agent mine-params <outdir> (--url URL \| --remove-diff --merged F --base URL)` | 隐藏参数挖掘（桶二分/remove-diff） |
-| `velric-agent probe-params <params_merged.json> <outdir>` | 参数差分（必填/开关识别） |
-| `velric-agent waf-adapt <url> <payload> <outdir>` | payload 传输变形过 WAF |
-| `velric-agent oob-confirm <url> <outdir> --payloads a,b` | OOB 回调确认（interactsh） |
-| `velric-agent cors <baseUrl> <outdir>` | CORS 配置缺陷 |
-| `velric-agent dom-sinks` / `analyze-gates` / `perm-tree` | DOM 污点 / 鉴权门静态分析 / 权限树重建 |
-| `velric-agent pii-scan <recordRoot> <outdir>` | 录制流量 PII/凭据暴露扫描 |
-| `velric-agent graphql-deep <endpoint> <outdir>` | GraphQL 内省 + schema |
-| `velric-agent oidc-probe` / `smuggle-probe` / `ws-origin-check` | OIDC 配置 / 请求走私 / CSWSH |
-| `velric-agent nuclei-lite <baseUrl> <outdir>` | 模板匹配（面板/泄漏） |
-| `velric-agent backup-unpack` / `git-restore` / `sqlite-read` / `archive-recover` | 备份还原 / .git 源码还原 / SQLite 读取 / 归档恢复 |
-| `velric-agent url-refine <outdir> --urls a,b` | URL 去重/漏洞模式分类（--action classify） |
-| `velric-agent replay-tamper <recordRoot> <outdir> --rules-file JSON` | 录制流量篡改重放 |
-| `velric-agent login-replay <url> <u> <p> <outdir>` | 登录 + cookie 导出 |
+| `velric-agent cred-brute <url> <outdir> --pairs-file F` | credential spray (semantic classification) |
+| `velric-agent otp-brute <url> <outdir> --body-template T` | OTP/2FA rate-limit & lockout measurement (+2FA secret leak detection) |
+| `velric-agent pass-policy <url> <outdir> --body-template T` | password policy surface (10-tier weak acceptance) |
+| `velric-agent reset-abuse <resetUrl> <loginUrl> <outdir>` | static security-answer takeover (spray → reset → login proof) |
+| `velric-agent jwt-inspect <outdir>` | JWT decode + weak-secret crack |
+| `velric-agent jwt-attack <token> <endpoint> <outdir>` | JWT attack suite (alg confusion/weak key/kid, --public-key-file) |
+| `velric-agent jwks-forge <token> <oracleUrl> <outdir> --jwks-url U` | JWT jku/x5u header forgery (attacker JWKS + claim elevation) |
+| `velric-agent login-replay <url> <u> <p> <outdir>` | login + cookie export |
 
-### 收尾
+### 授权 — 越权与访问控制
+
+auth-probe 画鉴权面 → idor-prescreen/idor-deep（读写 IDOR）→ authz-replay/role-matrix 多角色差分 → role-escalate/mass-assign/api-version 提权面。
+
 | 命令 | 用途 |
 |------|------|
-| `velric-agent gen-report <report.json> <outdir>` | findings 报告（markdown/CSV/SARIF） |
-| `velric-agent save-evidence <items.json> <outdir>` | sha256 寻址证据 blob |
-| `velric-agent run-diff <oldDir> <newDir>` | 两次 run 的面变更对比 |
-| `velric-agent auto <seed> <outdir>` | 确定性全链管道（checkpoint 断点续跑） |
-| `velric-agent auto-batch <seeds.txt> <outdir>` | 批量 + 汇总 |
+| `velric-agent auth-probe <api_merged.txt> <outdir>` | anonymous vs auth access mapping |
+| `velric-agent idor-prescreen <params_merged.json> <outdir>` | IDOR candidate prescreen |
+| `velric-agent idor-deep <outdir> --endpoints[-file] JSON` | three-reference IDOR oracle probing (--write for write-IDOR) |
+| `velric-agent authz-replay <recordRoot> <outdir> --roles[-file] JSON` | authz differential replay (live-baseline verdicts) |
+| `velric-agent role-matrix <reconRoot> <outdir> --roles[-file] JSON` | cross-role access matrix |
+| `velric-agent role-escalate <url> <outdir> --body-template {}` | privilege escalation params (role field injection differential) |
+| `velric-agent mass-assign <recordRoot> <outdir>` | mass-assignment sink probe (--fields a,b) |
+| `velric-agent api-version <versioned-api-url> <outdir>` | API version authz drift (v0..v4 downgrade leaks) |
+| `velric-agent header-bypass <outdir> --urls a,b` | auth-header bypass variants (X-Original-URL etc.) |
+| `velric-agent verb-matrix <outdir> --urls a,b` | HTTP verb override matrix probe |
+| `velric-agent graphql-authz <endpoint> <schemaFile> <outdir>` | GraphQL per-field authz differential |
+
+### 业务逻辑 — 值域与竞争
+
+value-abuse 负数/溢出注入 + 回读持久化；race-probe TOCTOU 并发自证；cache-deceive/host-poison/upload-probe/graphql-batch 基础设施逻辑面。
+
+| 命令 | 用途 |
+|------|------|
+| `velric-agent value-abuse <url> <outdir> --body-template T` | business-logic value abuse (negative/overflow, read-back persistence) |
+| `velric-agent race-probe <url> <outdir>` | TOCTOU race (concurrent mutation + read-back divergence) |
+| `velric-agent cache-deceive <baseUrl> <outdir> --private-path /api/me` | web cache deception + unkeyed header poisoning |
+| `velric-agent host-poison <url> <outdir>` | Host-header/reset poisoning (9-vector canary reflection) |
+| `velric-agent upload-probe <url> <outdir>` | file-upload surface (11 vectors, exec-risk + stored URL) |
+| `velric-agent graphql-batch <endpoint> <outdir>` | GraphQL depth/alias-bombing limit measurement |
+
+### 平台 — 管道与证据
+
+auto/auto-batch 确定性管道；hunt 循环台账；waf-adapt/oob-confirm/smuggle/oidc/cors 深化工具；gen-report/save-evidence 收尾。
+
+| 命令 | 用途 |
+|------|------|
+| `velric-agent auto <seed> <outdir>` | deterministic pipeline (checkpoint resume, --fresh) |
+| `velric-agent auto-batch <seeds.txt> <outdir>` | batch pipeline + summary (--notify URL) |
+| `velric-agent run-diff <oldDir> <newDir>` | diff two recon runs (attack-surface monitoring) |
+| `velric-agent gen-report <report.json> <outdir>` | findings markdown report |
+| `velric-agent save-evidence <items.json> <outdir>` | content-addressed evidence blobs |
+| `velric-agent evidence <dir> <action>` | evidence blob store |
+| `velric-agent evidence-bind <dir> <action>` | evidence binding lifecycle |
+| `velric-agent exploration-graph <dir> <action>` | exploration lineage graph |
+| `velric-agent cold-graph <dir> <action>` | exploration graph compaction |
+| `velric-agent retest <dir> <action>` | finding retest lifecycle |
+| `velric-agent export-findings <f> <dir> <fmt>` | findings csv/json/md/sarif export |
+| `velric-agent scan-platform <dir> <action>` | native scan platform (projects/tasks/pipeline/assets) |
+| `velric-agent waf-adapt <url> <payload> <outdir>` | payload transport adaptation vs WAF (--in query|body|header|path) |
+| `velric-agent oob-confirm <url> <outdir> --payloads a,b` | OOB callback confirmation (interactsh) |
+| `velric-agent smuggle-probe <baseUrl> <outdir>` | request-smuggling differential |
+| `velric-agent oidc-probe <baseUrl> <outdir>` | OAuth/OIDC/SAML config probe |
+| `velric-agent cors <baseUrl> <outdir>` | CORS misconfiguration probe |
+| `velric-agent cors-deep <url> <outdir>` | CORS exploitability matrix (reflection × credentials, preflight) |
+| `velric-agent ws-auth <wsUrl> <outdir>` | WebSocket auth gap (anonymous upgrade, cross-origin, push; raw RFC6455) |
+| `velric-agent graphql-deep <endpoint> <outdir>` | GraphQL introspection + schema |
+| `velric-agent mine-params <outdir> (--url URL | --remove-diff --merged F --base URL)` | hidden param mining (bucket bisection / remove-diff) |
+| `velric-agent probe-params <params_merged.json> <outdir>` | per-param differential probe (--max N) |
+| `velric-agent pii-scan <recordRoot> <outdir>` | PII/credential exposure scan over recorded traffic |
+| `velric-agent replay-tamper <recordRoot> <outdir>` | replay recorded exchanges with tamper rules (--rules-file, --apply) |
+
 
 ### hunt 循环（宿主 agent 自主驱动）
 | 命令 | 用途 |
