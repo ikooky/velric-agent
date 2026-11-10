@@ -86,6 +86,7 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `wasm-disasm` — WASM 完整反汇编(全 opcode 含 SIMD,call 目标名解析,全模块调用图)
 - `dex-disasm` — Dalvik 字节码反汇编(smali 级,字符串交叉引用,类过滤)
 - `x86-disasm` — x86 ELF 指令级反汇编(符号/序言锚定,call 目标标注,可选 capstone-wasm 引擎,缺失自动降级)
+- `value-abuse` — 业务逻辑值域滥用(负数/零/溢出/精度注入,回读持久化验证)
 - `hpp-probe` — HTTP 参数污染(duplicate/array/comma/semicolon/percent-dot 差分)
 - `proto-pollute` — 原型污染面(__proto__/constructor 向量,反射+差分)
 - `redirect-traverse` — 开放重定向(10 变体)+路径遍历(7 编码,passwd 特征判定)

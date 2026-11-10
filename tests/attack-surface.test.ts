@@ -98,3 +98,30 @@ describe("attack-surface probes", () => {
     expect(r.findings.length).toBe(0);
   });
 });
+
+import { probeValueAbuse } from "../src/domain/valueAbuse.js";
+
+describe("value-abuse probe", () => {
+  it("confirms persisted negative quantity with read-back verification", async () => {
+    const state: Record<string, unknown>[] = [];
+    const srv = http.createServer((req, res) => {
+      if (req.method === "POST" && req.url === "/api/items") {
+        let b = ""; req.on("data", c => b += c); req.on("end", () => {
+          const o = JSON.parse(b) as Record<string, unknown>;
+          state.push(o);
+          res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(o));
+        });
+        return;
+      }
+      if (req.method === "GET" && req.url === "/api/items") { res.writeHead(200).end(JSON.stringify(state)); return; }
+      res.writeHead(404).end();
+    });
+    await new Promise<void>(r => srv.listen(18305, "127.0.0.1", () => r()));
+    try {
+      const dir = await mkdtemp(join(tmpdir(), "va-"));
+      const r = await probeValueAbuse({ url: "http://127.0.0.1:18305/api/items", bodyTemplate: '{"BasketId":1,"ProductId":1,"quantity":1}', fields: ["quantity"], verifyUrl: "http://127.0.0.1:18305/api/items", outputRoot: join(dir, "o") });
+      expect(r.confirmed.length).toBeGreaterThan(0);
+      expect(r.confirmed.some(c => c.kind === "negative")).toBe(true);
+    } finally { await new Promise<void>(r => srv.close(() => r())); }
+  });
+});

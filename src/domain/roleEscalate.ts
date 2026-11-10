@@ -11,6 +11,8 @@ export interface RoleInput {
   readonly url: string;
   readonly method?: string;
   readonly bodyTemplate?: string;
+  /** uniquify: replace {UNIQ} placeholder per request (defeats uniqueness validation on e.g. email) */
+  readonly uniquify?: boolean;
   readonly outputRoot: string;
   readonly cookie?: string;
   readonly headers?: Record<string, string>;
@@ -46,9 +48,11 @@ export const probeRoleEscalation = async (input: RoleInput): Promise<RoleResult>
   };
   let template: Record<string, unknown> = {};
   try { if (input.bodyTemplate) template = JSON.parse(input.bodyTemplate) as Record<string, unknown>; } catch { /* raw */ }
-  const baseline = await send(input.bodyTemplate ?? undefined);
+  let seq = 0;
+  const uniq = (body: string): string => input.uniquify ? body.replaceAll("{UNIQ}", `${Date.now()}-${seq++}`) : body;
+  const baseline = await send(uniq(input.bodyTemplate ?? "{}"));
   // 回显型API对照: 无意义字段同样被接受+响应变化 → 响应差异只反映"字段被存储", 不反映权限语义
-  const controlPayload = JSON.stringify({ ...template, zzqq_nonsense_probe: "1" });
+  const controlPayload = uniq(JSON.stringify({ ...template, zzqq_nonsense_probe: "1" }));
   const control = await send(controlPayload);
   const controlSim = charSimilarity(normalizeBody(baseline.body), normalizeBody(control.body));
   const echoLike = controlSim < 0.95; // 对照字段也导致分叉 = 回显型, 提高报告门槛
@@ -56,7 +60,7 @@ export const probeRoleEscalation = async (input: RoleInput): Promise<RoleResult>
   const findings: RoleResult["findings"] = [];
   for (const f of fields) {
     for (const v of ROLE_VALUES) {
-      const body = JSON.stringify({ ...template, [f]: v === "true" ? true : v === "1" || v === "100" ? Number(v) : v });
+      const body = uniq(JSON.stringify({ ...template, [f]: v === "true" ? true : v === "1" || v === "100" ? Number(v) : v }));
       const r = await send(body);
       const accepted = !/error|invalid|denied|forbidden|not allowed|unknown field|unprocessable/i.test(r.body.slice(0, 500)) && r.status < 400;
       const sim = charSimilarity(normalizeBody(baseline.body), normalizeBody(r.body));

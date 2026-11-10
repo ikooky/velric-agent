@@ -53,6 +53,7 @@ description: |
 | `velric-agent wasm-disasm <file.wasm> <outdir>` | WASM 完整反汇编：全 opcode（含 SIMD/饱和截断/批量内存）、函数内偏移、call 目标按 name 解析、全模块调用图。产出 wasm_disasm.txt + wasm_callgraph.json（--max-functions 钳制） |
 | `velric-agent dex-disasm <file.dex或.apk> <outdir>` | Dalvik 字节码反汇编（smali 级）：每方法指令流+寄存器+调用解析、字符串交叉引用（哪个方法引用哪个字符串）、类过滤。产出 dex_disasm.smali + dex_string_xrefs.json（--class-filter RE / --max-methods N） |
 | `velric-agent x86-disasm <elf> <outdir>` | x86 ELF 指令级反汇编：符号表锚定函数（stripped 二进制走 entry+endbr64/push-rbp 序言启发式）、call 目标符号标注、字符串表。产出 x86_disasm.txt + x86_disasm.json（--max-functions N / --max-instrs N）。引擎为 capstone-wasm（可选依赖，缺失时降级输出字符串表并明示） |
+| `velric-agent value-abuse <url> <outdir> --body-template '{"quantity":1}'` | 业务逻辑值域滥用：负数/零/小数/溢出/字符串数值/科学计数法 7 变体注入，接受+回显+**回读持久化验证**三段确认。产出 value_abuse_cases.json + value_abuse.md（--verify-url 回读 / --bearer T） |
 | `velric-agent hpp-probe <url> <outdir> --params a,b` | HTTP 参数污染：duplicate/array-cast/comma/semicolon/percent-dot 五策略差分，识别 last-wins/first-wins/拼接型解析器。产出 hpp_cases.json + hpp_findings.md |
 | `velric-agent proto-pollute <url> <outdir>` | 原型污染面：`__proto__`/`constructor.prototype`/dot-path/数组下标向量（JSON body），反射+差分判定。产出 proto_cases.json + proto_findings.md |
 | `velric-agent redirect-traverse <url> <outdir> --params a,b` | 开放重定向（绝对/协议相对/反斜杠/@符号/percent 编码 10 变体，Location 头分析）+ 路径遍历（7 编码变体，/etc/passwd 内容特征判定）。产出 redirect_cases.json + traversal_cases.json + findings.md |

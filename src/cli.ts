@@ -96,6 +96,7 @@ Usage:
   velric-agent auth-probe <api_merged.txt> <outdir>  anonymous vs auth access mapping
   velric-agent idor-prescreen <params_merged.json> <outdir>  IDOR candidate prescreen
   velric-agent git-restore <baseUrl> <outdir>  rebuild source from leaked .git
+  velric-agent value-abuse <url> <outdir>   business-logic value abuse (negative/zero/fractional/overflow quantities & prices, read-back persistence verification)
   velric-agent hpp-probe <url> <outdir>   HTTP parameter pollution (duplicate/array/comma strategies, response differential)
   velric-agent proto-pollute <url> <outdir>   prototype pollution vectors (__proto__/constructor/prototype, JSON body)
   velric-agent redirect-traverse <url> <outdir>   open redirect + path traversal encodings (Location analysis, /etc/passwd oracle)
@@ -507,7 +508,7 @@ const dispatch = async (command: string, positional: readonly string[], flags: R
       case "jwt-attack": {
         const [token, endpoint, dir] = positional;
         if (!token || !endpoint || !dir) {
-          console.error("usage: jwt-attack <token> <endpoint> <outdir> [--secrets-file FILE] [--candidates a,b]");
+          console.error("usage: jwt-attack <token> <endpoint> <outdir> [--secrets-file FILE] [--candidates a,b] [--public-key-file F]");
           return 2;
         }
         const { probeJwtAttack } = await import("./domain/jwtAttack.js");
@@ -518,6 +519,7 @@ const dispatch = async (command: string, positional: readonly string[], flags: R
           proxy: await resolveProxy(flags),
           timeoutMs: num(flags.timeout),
           secretCandidates: cand,
+          publicKeyPem: typeof flags["public-key-file"] === "string" ? await import("node:fs/promises").then(fs => fs.readFile(flags["public-key-file"] as string, "utf8")) : undefined,
         }));
         return 0;
       }
@@ -1053,6 +1055,14 @@ const dispatch = async (command: string, positional: readonly string[], flags: R
         out({ file: r.file, bytes: r.bytes, methods: r.methods, disassembled: r.disassembled, sample: r.details.slice(0, 3), topStringXrefs: r.stringXrefs.filter(x => /^(?:https?:|str )/.test(x.str) || x.str.length > 8).slice(0, 20), artifacts: r.artifacts });
         return 0;
       }
+      case "value-abuse": {
+        const [url, dir] = positional;
+        if (!url || !dir) { console.error("usage: value-abuse <url> <outdir> --body-template '{\"quantity\":1}' [--fields a,b] [--verify-url U] [--bearer T] [--cookie C]"); return 2; }
+        const { probeValueAbuse } = await import("./domain/valueAbuse.js");
+        const r = await probeValueAbuse({ url, bodyTemplate: String(flags["body-template"] ?? "{}"), fields: typeof flags.fields === "string" ? flags.fields.split(",") : undefined, verifyUrl: typeof flags["verify-url"] === "string" ? flags["verify-url"] : undefined, outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, bearer: typeof flags.bearer === "string" ? flags.bearer : undefined, proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout) });
+        out({ probed: r.probed, confirmed: r.confirmed.length, leads: r.leads.length, detail: [...r.confirmed.slice(0, 10), ...r.leads.slice(0, 10)], artifacts: r.artifacts });
+        return 0;
+      }
       case "hpp-probe": {
         const [url, dir] = positional;
         if (!url || !dir) { console.error("usage: hpp-probe <url> <outdir> --params a,b [--expected V]"); return 2; }
@@ -1072,10 +1082,10 @@ const dispatch = async (command: string, positional: readonly string[], flags: R
       }
       case "redirect-traverse": {
         const [url, dir] = positional;
-        if (!url || !dir) { console.error("usage: redirect-traverse <url> <outdir> [--params a,b]"); return 2; }
+        if (!url || !dir) { console.error("usage: redirect-traverse <url> <outdir> [--params a,b] [--trav-path]"); return 2; }
         const { probeRedirectTraversal } = await import("./domain/redirectTraverse.js");
         const strList2 = (v: string | boolean | undefined): string[] | undefined => typeof v === "string" && v.length > 0 ? v.split(",").map(x => x.trim()).filter(Boolean) : undefined;
-        const r = await probeRedirectTraversal({ baseUrl: url, params: strList2(flags.params), outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout) });
+        const r = await probeRedirectTraversal({ baseUrl: url, params: strList2(flags.params), pathTraversal: flags["trav-path"] === true, outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout) });
         out({ redirectProbed: r.redirectProbed, externalRedirects: r.redirectFindings.length, traversalProbed: r.traversalProbed, traversalHits: r.traversalFindings.length, redirectFindings: r.redirectFindings.slice(0, 10), artifacts: r.artifacts });
         return 0;
       }
@@ -1089,10 +1099,10 @@ const dispatch = async (command: string, positional: readonly string[], flags: R
       }
       case "role-escalate": {
         const [url, dir] = positional;
-        if (!url || !dir) { console.error("usage: role-escalate <url> <outdir> [--method POST] [--body-template '{}'] [--fields a,b]"); return 2; }
+        if (!url || !dir) { console.error("usage: role-escalate <url> <outdir> [--method POST] [--body-template '{}'] [--fields a,b] [--uniquify]"); return 2; }
         const { probeRoleEscalation } = await import("./domain/roleEscalate.js");
         const strList3 = (v: string | boolean | undefined): string[] | undefined => typeof v === "string" && v.length > 0 ? v.split(",").map(x => x.trim()).filter(Boolean) : undefined;
-        const r = await probeRoleEscalation({ url, method: typeof flags.method === "string" ? flags.method : undefined, bodyTemplate: typeof flags["body-template"] === "string" ? flags["body-template"] : undefined, fields: strList3(flags.fields), outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout) });
+        const r = await probeRoleEscalation({ url, method: typeof flags.method === "string" ? flags.method : undefined, bodyTemplate: typeof flags["body-template"] === "string" ? flags["body-template"] : undefined, fields: strList3(flags.fields), outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout), uniquify: flags.uniquify === true });
         out({ probed: r.probed, findings: r.findings.length, detail: r.findings.slice(0, 15), artifacts: r.artifacts });
         return 0;
       }

