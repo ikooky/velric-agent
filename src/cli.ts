@@ -96,6 +96,8 @@ Usage:
   velric-agent auth-probe <api_merged.txt> <outdir>  anonymous vs auth access mapping
   velric-agent idor-prescreen <params_merged.json> <outdir>  IDOR candidate prescreen
   velric-agent git-restore <baseUrl> <outdir>  rebuild source from leaked .git
+  velric-agent otp-brute <url> <outdir> --body-template T   OTP/2FA verify rate-limit & lockout measurement (bounded wrong-code sample)
+  velric-agent sqli-probe <url> <outdir> --param q   SQL injection differential (error oracle / boolean blind / bounded time blind / auth-bypass grammar)
   velric-agent value-abuse <url> <outdir>   business-logic value abuse (negative/zero/fractional/overflow quantities & prices, read-back persistence verification)
   velric-agent hpp-probe <url> <outdir>   HTTP parameter pollution (duplicate/array/comma strategies, response differential)
   velric-agent proto-pollute <url> <outdir>   prototype pollution vectors (__proto__/constructor/prototype, JSON body)
@@ -527,7 +529,7 @@ const dispatch = async (command: string, positional: readonly string[], flags: R
         const dir = positional[0];
         const endpoints = await jarrObj<{ method: string; path: string; fields: { name: string; in: string }[] }>(flags, "endpoints");
         if (!dir || !endpoints) {
-          console.error("usage: idor-deep <outdir> --endpoints[-file] '[{\"method\":\"GET\",\"path\":\"/api/x\",\"fields\":[{\"name\":\"id\",\"in\":\"query\"}]}]' [--base URL] [--ids a,b] [--max-targets N]");
+          console.error("usage: idor-deep <outdir> --endpoints[-file] '[{\"method\":\"GET\",\"path\":\"/api/x\",\"fields\":[{\"name\":\"id\",\"in\":\"query\"}]}]' [--base URL] [--ids a,b] [--max-targets N] [--write] [--write-payload JSON] [--write-method PATCH]");
           return 2;
         }
         const { probeIdorDeep } = await import("./domain/idorDeep.js");
@@ -536,6 +538,9 @@ const dispatch = async (command: string, positional: readonly string[], flags: R
           baseUrl: typeof flags.base === "string" ? flags.base : undefined,
           cookie: typeof flags.cookie === "string" ? flags.cookie : undefined,
           headers: await jobj<Record<string, string>>(flags, "headers"),
+          writeMode: flags["write"] === true,
+          writePayload: await jobj<Record<string, unknown>>(flags, "write-payload"),
+          writeMethod: typeof flags["write-method"] === "string" ? flags["write-method"] : undefined,
           proxy: await resolveProxy(flags),
           timeoutMs: num(flags.timeout),
           maxTargets: num(flags["max-targets"]),
@@ -1053,6 +1058,22 @@ const dispatch = async (command: string, positional: readonly string[], flags: R
         }
         const r = await disassembleDex({ file: target, outputRoot: dir, maxMethods: num(flags["max-methods"]), classFilter: typeof flags["class-filter"] === "string" ? flags["class-filter"] : undefined });
         out({ file: r.file, bytes: r.bytes, methods: r.methods, disassembled: r.disassembled, sample: r.details.slice(0, 3), topStringXrefs: r.stringXrefs.filter(x => /^(?:https?:|str )/.test(x.str) || x.str.length > 8).slice(0, 20), artifacts: r.artifacts });
+        return 0;
+      }
+      case "otp-brute": {
+        const [url, dir] = positional;
+        if (!url || !dir) { console.error("usage: otp-brute <url> <outdir> --body-template T [--samples N]   (T with {CODE} placeholder)"); return 2; }
+        const { probeOtpBrute } = await import("./domain/otpBrute.js");
+        const r = await probeOtpBrute({ url, bodyTemplate: String(flags["body-template"] ?? "{}"), samples: num(flags.samples), outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, headers: await jobj<Record<string, string>>(flags, "headers"), proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout) });
+        out({ sent: r.sent, rateLimited: r.rateLimited, lockout: r.lockoutSigns.length, bruteForceable: r.bruteForceable, estimateSeconds: r.estimateSeconds, artifacts: r.artifacts });
+        return 0;
+      }
+      case "sqli-probe": {
+        const [url, dir] = positional;
+        if (!url || !dir) { console.error("usage: sqli-probe <url> <outdir> --param q [--in query|body] [--body-template '{}'] [--auth-bypass] [--bearer T]"); return 2; }
+        const { probeSqli } = await import("./domain/sqliProbe.js");
+        const r = await probeSqli({ url, param: String(flags.param ?? "q"), in: typeof flags.in === "string" ? (flags.in === "body" ? "body" : "query") : "query", bodyTemplate: typeof flags["body-template"] === "string" ? flags["body-template"] : undefined, outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, bearer: typeof flags.bearer === "string" ? flags.bearer : undefined, proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout), authBypass: flags["auth-bypass"] === true });
+        out({ probed: r.probed, confirmed: r.confirmed.length, leads: r.leads.length, detail: [...r.confirmed, ...r.leads].slice(0, 10), artifacts: r.artifacts });
         return 0;
       }
       case "value-abuse": {

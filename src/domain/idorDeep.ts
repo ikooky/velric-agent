@@ -20,6 +20,12 @@ export interface IdorDeepInput {
   readonly applyBodyIdor?: boolean;
   /** Extra attacker-visible object IDs to try (from other roles' responses). */
   readonly objectIds?: readonly string[];
+  /** write-IDOR mode: attempt modifying each discovered object instead of reading */
+  readonly writeMode?: boolean;
+  /** payload used for write-mode mutation (default: {"message":"IDOR-WRITE-PROBE"} spread into body) */
+  readonly writePayload?: Record<string, unknown>;
+  /** method for write-mode (default PATCH) */
+  readonly writeMethod?: string;
 }
 
 export interface IdorDeepCandidate {
@@ -33,7 +39,7 @@ export interface IdorDeepCandidate {
   readonly variantStatus: number;
   /** content differential (sha256 prefix) — same status but different body = data leak */
   readonly contentDiff: boolean;
-  readonly verdict: "idor-suspect" | "idor-confirmed" | "idor-confirmed-identity" | "public-or-unprotected" | "same-response" | "not-found" | "denied" | "skip";
+  readonly verdict: "idor-suspect" | "idor-confirmed" | "idor-confirmed-identity" | "idor-confirmed-write" | "public-or-unprotected" | "same-response" | "not-found" | "denied" | "skip";
   /** Three-reference oracle detail (owner/attacker/denied): similarity to
    *  baseline and to the anonymous reference. */
   readonly oracle?: { simOwner: number; simDenied: number };
@@ -144,7 +150,7 @@ export const probeIdorDeep = async (input: IdorDeepInput): Promise<IdorDeepResul
       // State-change discipline: body-kind ID variants on mutating methods
       // re-fire POST/PUT/PATCH with attacker-chosen values — skip unless the
       // caller explicitly opted in (same gate as massAssign/replayTamper).
-      if (id.kind === "body" && !["GET", "HEAD", "OPTIONS"].includes(method) && input.applyBodyIdor !== true) continue;
+      if (id.kind === "body" && !["GET", "HEAD", "OPTIONS"].includes(method) && input.applyBodyIdor !== true && input.writeMode !== true) continue;
       const baseBody = id.kind === "body" ? JSON.stringify({ [id.name]: original }) : undefined;
       const baseCall = await fetchUrl(url.toString(), { ...opts, method, body: baseBody });
       if (baseCall.status === 0 || baseCall.status >= 400) continue;
@@ -173,6 +179,17 @@ export const probeIdorDeep = async (input: IdorDeepInput): Promise<IdorDeepResul
         } else {
           target = url.toString();
           body = JSON.stringify({ [id.name]: v });
+        }
+        // write-IDOR mode: attempt mutation instead of read; verify via read-back
+        if (input.writeMode === true) {
+          const wBody = JSON.stringify({ ...(input.writePayload ?? { message: "IDOR-WRITE-PROBE" }), ...(id.kind === "body" ? { [id.name]: v } : {}) });
+          const w = await fetchUrl(target, { ...opts, method: input.writeMethod ?? "PATCH", body: wBody, headers: { "content-type": "application/json", ...(opts.headers ?? {}) } });
+          // 服务器自证: modified/updated/matched 计数字段 > 0 (Mongo/ORM写响应)
+          let writeCount = 0;
+          try { const wj = JSON.parse(w.body) as Record<string, unknown>; for (const k of ["modified", "updated", "matched", "n", "ok"]) { const n = Number(wj[k]); if (Number.isFinite(n)) { writeCount = Math.max(writeCount, n); } } if (typeof wj["status"] === "string" && wj["status"] === "success") writeCount = Math.max(writeCount, 1); } catch { /* non-JSON */ }
+          const mutated = w.status >= 200 && w.status < 300 && writeCount > 0;
+          candidates.push({ url: target, method: input.writeMethod ?? "PATCH", param: id.kind === "path" ? `segment:${original}` : id.name, location: id.kind, original, variant: v, originalStatus: baseCall.status, variantStatus: w.status, contentDiff: mutated, verdict: mutated ? "idor-confirmed-write" : (w.status === 401 || w.status === 403 ? "denied" : w.status === 404 ? "not-found" : "same-response") });
+          continue;
         }
         const r = await fetchUrl(target, { ...opts, method, body });
         if (r.status === 0) continue;

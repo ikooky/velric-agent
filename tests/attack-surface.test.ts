@@ -125,3 +125,42 @@ describe("value-abuse probe", () => {
     } finally { await new Promise<void>(r => srv.close(() => r())); }
   });
 });
+
+import { probeSqli } from "../src/domain/sqliProbe.js";
+
+describe("sqli-probe", () => {
+  it("confirms boolean-blind divergence on vulnerable mock", { timeout: 30000 }, async () => {
+    const srv = http.createServer((req, res) => {
+      const q = new URL(req.url ?? "/", "http://x");
+      const v = q.searchParams.get("id") ?? "";
+      // 模拟可注入: ' AND '1'='1 返回数据, ' AND '1'='2 返回空
+      if (/AND '1'='1/.test(v)) { res.writeHead(200).end('[{"row":1}]'); return; }
+      if (/AND '1'='2/.test(v)) { res.writeHead(200).end('[]'); return; }
+      if (v.includes("'")) { res.writeHead(500).end('{"error":"SQLITE_ERROR: near ...: syntax error"}'); return; }
+      res.writeHead(200).end('[{"row":1}]');
+    });
+    await new Promise<void>(r => srv.listen(18306, "127.0.0.1", () => r()));
+    try {
+      const dir = await mkdtemp(join(tmpdir(), "sq-"));
+      const r = await probeSqli({ url: "http://127.0.0.1:18306/api/x?id=1", param: "id", outputRoot: join(dir, "o") });
+      expect(r.leads.length).toBeGreaterThan(0); // error-oracle 命中
+    } finally { await new Promise<void>(r => srv.close(() => r())); }
+  });
+  it("auth-bypass mode flags login returning token", { timeout: 30000 }, async () => {
+    const srv = http.createServer((req, res) => {
+      let b = ""; req.on("data", c => b += c); req.on("end", () => {
+        let o: Record<string, string>;
+        try { o = JSON.parse(b || "{}") as Record<string, string>; } catch { res.writeHead(400).end("bad"); return; }
+        if (o["email"]?.includes(" or ")) { res.writeHead(200).end('{"authentication":{"token":"eyJhbGciOiJIUzI1NiJ9.x.y","bid":1,"umail":"admin@x.io"}}'); return; }
+        res.writeHead(401).end('{"error":"Invalid credentials"}');
+      });
+    });
+    await new Promise<void>(r => srv.listen(18307, "127.0.0.1", () => r()));
+    try {
+      const dir = await mkdtemp(join(tmpdir(), "sq2-"));
+      const r = await probeSqli({ url: "http://127.0.0.1:18307/login", param: "email", in: "body", bodyTemplate: '{"email":"a@b.c","password":"x"}', authBypass: true, outputRoot: join(dir, "o") });
+      expect(r.confirmed.length).toBeGreaterThan(0);
+      expect(r.confirmed.some(c => c.technique === "auth-bypass")).toBe(true);
+    } finally { await new Promise<void>(r => srv.close(() => r())); }
+  });
+});

@@ -28,6 +28,9 @@
 - 权限面：`role-escalate`（注册/改资料端点的 role 字段注入；回显型 API 只信状态码变化）
 - 业务逻辑面：`value-abuse`（数量/价格负数与溢出注入，--verify-url 回读确认持久化）
 - JWT 面：`jwt-attack`（alg=none / RS-HS 公钥混淆 / kid 穿越 / 弱密钥；oracle 端点选"匿名 401、鉴权 200"的资源型路由，公开 whoami 类端点无法作证）
+- 注入面：`sqli-probe`（error-oracle/boolean-blind/有界 time-blind/--auth-bypass 认证绕过；body 型配 --body-template）
+- 写 IDOR：`idor-deep --write`（变异他人资源，服务器 modified 计数自证；body-ID 门禁在显式 --write 时放开）
+- 2FA 面：`otp-brute`（节流/锁定缺失测量；高限额节流器需拉高 --samples 才可见）
 
 ## Phase 3 — 运行时
 - `runtime`(需 Chromium)抓真实 XHR/fetch/WS 帧;无浏览器时静态面兜底
