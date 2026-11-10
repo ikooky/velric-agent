@@ -383,3 +383,21 @@ describe("cors-deep & pass-policy", () => {
     } finally { await new Promise<void>(r => srv.close(() => r())); }
   });
 });
+
+import { probeInfoLeak } from "../src/domain/infoLeak.js";
+
+describe("info-leak", () => {
+  it("flags exposed .env and stack traces, silent on clean server", { timeout: 30000 }, async () => {
+    const srv = http.createServer((req, res) => {
+      if (req.url === "/.env") { res.writeHead(200).end("DB_PASSWORD=supersecret123\nAWS_KEY=AKIAIOSFODNN7EXAMPLE"); return; }
+      if (req.url === "/crash") { res.writeHead(500).end("Error: at handler (/app/src/routes/user.js:42:13)"); return; }
+      res.writeHead(200).end("ok");
+    });
+    await new Promise<void>(r => srv.listen(18327, "127.0.0.1", () => r()));
+    try {
+      const dir = await mkdtemp(join(tmpdir(), "il-"));
+      const r = await probeInfoLeak({ baseUrl: "http://127.0.0.1:18327", outputRoot: join(dir, "o") });
+      expect(r.findings.some(f => f.kind === "env-file" && f.severity === "high")).toBe(true);
+    } finally { await new Promise<void>(r => srv.close(() => r())); }
+  });
+});

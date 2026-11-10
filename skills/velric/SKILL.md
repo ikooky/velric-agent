@@ -58,6 +58,7 @@ description: |
 | `velric-agent graphql-batch <endpoint> <outdir>` | GraphQL 深度/别名轰炸限额测量：depth 阶梯（1..9）+ 别名扇出阶梯（2/8/32/128/512），服务端拒绝语义分类。产出 graphql_batch.json/md（--query-template） |
 | `velric-agent ldap-probe <url> <outdir> --param uid` | LDAP 注入差分：通配符（\*/前缀\*）/过滤器闭合（\*)）/加宽（\*)(objectClass=\*)）/布尔 OR/AND/null/DN 注入 8 向量，行数发散 + LDAP 错误签名。产出 ldap_cases.json + findings.md |
 | `velric-agent api-version <versioned-api-url> <outdir>` | API 版本鉴权降级：v0..v4 姊妹版本匿名 vs 鉴权对照，旧版丢失鉴权层的数据泄漏。产出 api_version_cases.json + api_version.md |
+| `velric-agent info-leak <baseUrl> <outdir>` | 信息泄漏面：22 条敏感路径（.env/.git/actuator/heapdump/server-status/phpinfo/swagger…SPA fallback 校准）+ 堆栈跟踪 + 内部路径 + banner/inline secret，三档 severity。产出 info_leak.json/md |
 | `velric-agent pass-policy <url> <outdir> --body-template T` | 密码策略面：空/单字符/top 常用/纯数字/重复/键盘走位 10 档弱密码接受度（{UNIQ} 防唯一性冲突）。产出 pass_policy.json/md |
 | `velric-agent jwks-forge <token> <oracleUrl> <outdir> --jwks-url U` | JWT jku/x5u 伪造：攻击者 JWKS + RSA 签名提权 claims，oracle 差分判定验证器是否解引用头部 URL。产出 jwks_forge.json/md |
 | `velric-agent cors-deep <url> <outdir>` | CORS 可利用性矩阵：任意/空/兄弟域 origin 反射 × credentials × preflight 方法，四档 verdict。产出 cors_deep.json/md |

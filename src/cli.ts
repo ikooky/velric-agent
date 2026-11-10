@@ -96,6 +96,7 @@ Usage:
   velric-agent auth-probe <api_merged.txt> <outdir>  anonymous vs auth access mapping
   velric-agent idor-prescreen <params_merged.json> <outdir>  IDOR candidate prescreen
   velric-agent git-restore <baseUrl> <outdir>  rebuild source from leaked .git
+  velric-agent info-leak <baseUrl> <outdir>   information disclosure (sensitive paths/stack traces/banners/inline secrets)
   velric-agent pass-policy <url> <outdir> --body-template T   password policy surface (empty/single-char/top-common acceptance)
   velric-agent jwks-forge <token> <oracleUrl> <outdir>   JWT jku/x5u header forgery (attacker JWKS + RSA-signed claim elevation)
   velric-agent cors-deep <url> <outdir>   CORS exploitability matrix (origin reflection × credentials × null/sibling, preflight)
@@ -1073,6 +1074,14 @@ const dispatch = async (command: string, positional: readonly string[], flags: R
         }
         const r = await disassembleDex({ file: target, outputRoot: dir, maxMethods: num(flags["max-methods"]), classFilter: typeof flags["class-filter"] === "string" ? flags["class-filter"] : undefined });
         out({ file: r.file, bytes: r.bytes, methods: r.methods, disassembled: r.disassembled, sample: r.details.slice(0, 3), topStringXrefs: r.stringXrefs.filter(x => /^(?:https?:|str )/.test(x.str) || x.str.length > 8).slice(0, 20), artifacts: r.artifacts });
+        return 0;
+      }
+      case "info-leak": {
+        const [url, dir] = positional;
+        if (!url || !dir) { console.error("usage: info-leak <baseUrl> <outdir>"); return 2; }
+        const { probeInfoLeak } = await import("./domain/infoLeak.js");
+        const r = await probeInfoLeak({ baseUrl: url, outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, headers: await jobj<Record<string, string>>(flags, "headers"), proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout) });
+        out({ probed: r.probed, findings: r.findings.length, bySeverity: { high: r.findings.filter(f => f.severity === "high").length, medium: r.findings.filter(f => f.severity === "medium").length, low: r.findings.filter(f => f.severity === "low").length }, detail: r.findings.slice(0, 15), artifacts: r.artifacts });
         return 0;
       }
       case "pass-policy": {

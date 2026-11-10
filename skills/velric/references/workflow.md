@@ -39,6 +39,7 @@
 - JWT 伪造：`jwks-forge`（jku/x5u 指向攻击者 JWKS + RSA 签名提权 claims；verifier 不解引用则安全）
 - CORS 深链：`cors-deep`（反射×credentials 矩阵；jsonplaceholder 实测任意 origin 反射+credentials=true 全 exploitable）
 - WS 面：`ws-auth`（裸 6455 握手四探针）
+- 泄漏面：`info-leak`（敏感路径/堆栈/banner/inline secret 三档；SPA fallback 校准防误报）
 - 密码面：`pass-policy`（10 档弱密码接受度；juice-shop 实测 8/10 接受含空密码+空密码登录）
 - 重置接管：`reset-abuse`（静态安全答案喷洒→重置→新凭证登录三段自证；hash 回显离线破解）
 - 投毒面：`host-poison`（Host/XFH 金丝雀反射到服务端生成的绝对 URL — 重置投毒核心）

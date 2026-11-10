@@ -88,6 +88,7 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `x86-disasm` — x86 ELF 指令级反汇编(符号/序言锚定,call 目标标注,可选 capstone-wasm 引擎,缺失自动降级)
 - `race-probe` — TOCTOU 竞争(并发变异 admitted+回读发散)
 - `graphql-batch` — GraphQL 深度/别名轰炸限额
+- `info-leak` — 信息泄漏面(敏感路径/堆栈/banner/secret,三档严重度)
 - `pass-policy` — 密码策略面(10 档弱密码接受度)
 - `jwks-forge` — JWT jku/x5u 伪造(攻击者 JWKS+提权 claims)
 - `cors-deep` — CORS 可利用性矩阵
