@@ -96,6 +96,10 @@ Usage:
   velric-agent auth-probe <api_merged.txt> <outdir>  anonymous vs auth access mapping
   velric-agent idor-prescreen <params_merged.json> <outdir>  IDOR candidate prescreen
   velric-agent git-restore <baseUrl> <outdir>  rebuild source from leaked .git
+  velric-agent pass-policy <url> <outdir> --body-template T   password policy surface (empty/single-char/top-common acceptance)
+  velric-agent jwks-forge <token> <oracleUrl> <outdir>   JWT jku/x5u header forgery (attacker JWKS + RSA-signed claim elevation)
+  velric-agent cors-deep <url> <outdir>   CORS exploitability matrix (origin reflection × credentials × null/sibling, preflight)
+  velric-agent ws-auth <wsUrl> <outdir>   WebSocket auth gap (anonymous upgrade, cross-origin, push w/o auth; raw RFC6455)
   velric-agent reset-abuse <resetUrl> <loginUrl> <outdir>   static security-answer takeover (answer spray → reset → new-credential login proof)
   velric-agent ldap-probe <url> <outdir> --param uid   LDAP injection (wildcard/filter-widening/boolean-OR grammars, row-divergence + error signatures)
   velric-agent api-version <url> <outdir>   API version authz drift (v0..v4 anonymous-vs-authenticated downgrade leaks)
@@ -1069,6 +1073,42 @@ const dispatch = async (command: string, positional: readonly string[], flags: R
         }
         const r = await disassembleDex({ file: target, outputRoot: dir, maxMethods: num(flags["max-methods"]), classFilter: typeof flags["class-filter"] === "string" ? flags["class-filter"] : undefined });
         out({ file: r.file, bytes: r.bytes, methods: r.methods, disassembled: r.disassembled, sample: r.details.slice(0, 3), topStringXrefs: r.stringXrefs.filter(x => /^(?:https?:|str )/.test(x.str) || x.str.length > 8).slice(0, 20), artifacts: r.artifacts });
+        return 0;
+      }
+      case "pass-policy": {
+        const [url, dir] = positional;
+        if (!url || !dir) { console.error("usage: pass-policy <url> <outdir> --body-template '{\"email\":\"u{PASS}@x.io\",\"password\":\"{PASS}\"}'"); return 2; }
+        const { probePassPolicy } = await import("./domain/passPolicy.js");
+        const r = await probePassPolicy({ url, bodyTemplate: String(flags["body-template"] ?? "{}"), outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, bearer: typeof flags.bearer === "string" ? flags.bearer : undefined, headers: await jobj<Record<string, string>>(flags, "headers"), proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout) });
+        out({ probed: r.probed, weakAccepted: r.weakAccepted.length, detail: r.weakAccepted.slice(0, 10), artifacts: r.artifacts });
+        return 0;
+      }
+      case "jwks-forge": {
+        const [token, oracleUrl, dir] = positional;
+        if (!token || !oracleUrl || !dir) { console.error("usage: jwks-forge <token> <oracleUrl> <outdir> --jwks-url U [--elevate-json J]"); return 2; }
+        const { probeJwksForge } = await import("./domain/jwtJwksForge.js");
+        let elevate: Record<string, unknown> | undefined;
+        if (typeof flags["elevate-json"] === "string") { try { elevate = JSON.parse(flags["elevate-json"]) as Record<string, unknown>; } catch { console.error("bad --elevate-json"); return 2; } }
+        const r = await probeJwksForge({ token, oracleUrl, jwksUrl: String(flags["jwks-url"] ?? "https://attacker-velric.example"), outputRoot: dir, headers: await jobj<Record<string, string>>(flags, "headers"), proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout), elevate, kid: typeof flags.kid === "string" ? flags.kid : undefined });
+        out({ supported: r.supported, forged: r.forged, evidence: r.evidence, artifacts: r.artifacts });
+        return 0;
+      }
+      case "cors-deep": {
+        const [url, dir] = positional;
+        if (!url || !dir) { console.error("usage: cors-deep <url> <outdir> [--subdomains a,b]"); return 2; }
+        const { probeCorsDeep } = await import("./domain/corsDeep.js");
+        const strListC = (v: string | boolean | undefined): string[] | undefined => typeof v === "string" && v.length > 0 ? v.split(",").map(x => x.trim()).filter(Boolean) : undefined;
+        const r = await probeCorsDeep({ url, subdomains: strListC(flags.subdomains), outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, headers: await jobj<Record<string, string>>(flags, "headers"), proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout) });
+        out({ probed: r.probed, exploitable: r.exploitable.length, detail: r.exploitable, preflightMethods: r.preflightMethods, artifacts: r.artifacts });
+        return 0;
+      }
+      case "ws-auth": {
+        const [url, dir] = positional;
+        if (!url || !dir) { console.error("usage: ws-auth <wsUrl> <outdir> [--origins a,b]"); return 2; }
+        const { probeWsAuth } = await import("./domain/wsAuth.js");
+        const strListW = (v: string | boolean | undefined): string[] | undefined => typeof v === "string" && v.length > 0 ? v.split(",").map(x => x.trim()).filter(Boolean) : undefined;
+        const r = await probeWsAuth({ url, origins: strListW(flags.origins), outputRoot: dir, headers: await jobj<Record<string, string>>(flags, "headers"), timeoutMs: num(flags.timeout) });
+        out({ probed: r.probed, anonymousAccepted: r.anonymousAccepted, crossOriginAccepted: r.crossOriginAccepted, pushWithoutAuth: r.pushWithoutAuth, cases: r.cases, artifacts: r.artifacts });
         return 0;
       }
       case "reset-abuse": {

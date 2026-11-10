@@ -58,6 +58,10 @@ description: |
 | `velric-agent graphql-batch <endpoint> <outdir>` | GraphQL 深度/别名轰炸限额测量：depth 阶梯（1..9）+ 别名扇出阶梯（2/8/32/128/512），服务端拒绝语义分类。产出 graphql_batch.json/md（--query-template） |
 | `velric-agent ldap-probe <url> <outdir> --param uid` | LDAP 注入差分：通配符（\*/前缀\*）/过滤器闭合（\*)）/加宽（\*)(objectClass=\*)）/布尔 OR/AND/null/DN 注入 8 向量，行数发散 + LDAP 错误签名。产出 ldap_cases.json + findings.md |
 | `velric-agent api-version <versioned-api-url> <outdir>` | API 版本鉴权降级：v0..v4 姊妹版本匿名 vs 鉴权对照，旧版丢失鉴权层的数据泄漏。产出 api_version_cases.json + api_version.md |
+| `velric-agent pass-policy <url> <outdir> --body-template T` | 密码策略面：空/单字符/top 常用/纯数字/重复/键盘走位 10 档弱密码接受度（{UNIQ} 防唯一性冲突）。产出 pass_policy.json/md |
+| `velric-agent jwks-forge <token> <oracleUrl> <outdir> --jwks-url U` | JWT jku/x5u 伪造：攻击者 JWKS + RSA 签名提权 claims，oracle 差分判定验证器是否解引用头部 URL。产出 jwks_forge.json/md |
+| `velric-agent cors-deep <url> <outdir>` | CORS 可利用性矩阵：任意/空/兄弟域 origin 反射 × credentials × preflight 方法，四档 verdict。产出 cors_deep.json/md |
+| `velric-agent ws-auth <wsUrl> <outdir>` | WebSocket 认证缺口：裸 RFC6455 握手（匿名升级/跨 Origin/子协议混淆/无认证服务端推送）。产出 ws_auth.json/md |
 | `velric-agent reset-abuse <resetUrl> <loginUrl> <outdir>` | 密码重置滥用：静态安全问题答案喷洒→重置接受→新凭证登录自证完整接管链+hash 回显检测。产出 reset_cases.json + reset_abuse.md |
 | `velric-agent host-poison <url> <outdir>` | Host 头/密码重置投毒面：Host/X-Forwarded-Host/X-Forwarded-Proto/X-Original-Host/Forwarded 等 9 向量金丝雀，检测服务端用攻击者输入构造绝对 URL（重置链接/canonical/跳转）。产出 host_poison.json/md |
 | `velric-agent upload-probe <url> <outdir>` | 文件上传面：内容类型混淆、双扩展名、null 截断、SVG/HTML/JS 载体、polyglot GIF、.htaccess、JSP/SHTML 等 11 向量 multipart 上传，接受语义+exec-risk 判定+存储 URL 提取。产出 upload_cases.json + findings.md |

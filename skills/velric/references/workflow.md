@@ -36,6 +36,10 @@
 - SSTI：`ssti-probe`（11 引擎语法金丝雀；49 回显且排除字面回显）
 - 目录面：`ldap-probe`（通配符/过滤器加宽/布尔 OR 语法，行数发散 + LDAP 错误签名）
 - 版本面：`api-version`（v0..v4 匿名 vs 鉴权降级泄漏）
+- JWT 伪造：`jwks-forge`（jku/x5u 指向攻击者 JWKS + RSA 签名提权 claims；verifier 不解引用则安全）
+- CORS 深链：`cors-deep`（反射×credentials 矩阵；jsonplaceholder 实测任意 origin 反射+credentials=true 全 exploitable）
+- WS 面：`ws-auth`（裸 6455 握手四探针）
+- 密码面：`pass-policy`（10 档弱密码接受度；juice-shop 实测 8/10 接受含空密码+空密码登录）
 - 重置接管：`reset-abuse`（静态安全答案喷洒→重置→新凭证登录三段自证；hash 回显离线破解）
 - 投毒面：`host-poison`（Host/XFH 金丝雀反射到服务端生成的绝对 URL — 重置投毒核心）
 - 上传面：`upload-probe`（multipart 11 向量；accepted+exec-risk 双判定，落地 URL 提取）

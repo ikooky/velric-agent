@@ -344,3 +344,42 @@ describe("ldap / api-version / reset-abuse", () => {
     } finally { await new Promise<void>(r => srv.close(() => r())); }
   });
 });
+
+import { probeCorsDeep } from "../src/domain/corsDeep.js";
+import { probePassPolicy } from "../src/domain/passPolicy.js";
+
+describe("cors-deep & pass-policy", () => {
+  it("cors-deep: flags arbitrary-origin + credentials as exploitable", { timeout: 30000 }, async () => {
+    const srv = http.createServer((req, res) => {
+      const o = req.headers.origin;
+      if (o) { res.setHeader("access-control-allow-origin", String(o)); res.setHeader("access-control-allow-credentials", "true"); }
+      res.writeHead(200).end('{"secret":1}');
+    });
+    await new Promise<void>(r => srv.listen(18325, "127.0.0.1", () => r()));
+    try {
+      const dir = await mkdtemp(join(tmpdir(), "cd-"));
+      const r = await probeCorsDeep({ url: "http://127.0.0.1:18325/api/x", outputRoot: join(dir, "o") });
+      expect(r.exploitable.some(c => c.verdict === "exploitable-arbitrary")).toBe(true);
+    } finally { await new Promise<void>(r => srv.close(() => r())); }
+  });
+  it("pass-policy: flags weak acceptance, clean server stays 0", { timeout: 30000 }, async () => {
+    let n = 0;
+    const srv = http.createServer((req, res) => {
+      let b = ""; req.on("data", c => b += c); req.on("end", () => {
+        const o = JSON.parse(b || "{}") as Record<string, string>;
+        n++;
+        const pw = o["password"] ?? "";
+        const complex = /[a-z]/.test(pw) && /[A-Z0-9]/.test(pw) && pw.length >= 10;
+        if (complex) { res.writeHead(201).end('{"ok":true}'); return; }
+        res.writeHead(400).end('{"error":"Password must be at least 10 characters"}');
+      });
+    });
+    await new Promise<void>(r => srv.listen(18326, "127.0.0.1", () => r()));
+    try {
+      const dir = await mkdtemp(join(tmpdir(), "pp-"));
+      const r = await probePassPolicy({ url: "http://127.0.0.1:18326/reg", bodyTemplate: '{"email":"u{UNIQ}@x.io","password":"{PASS}"}', outputRoot: join(dir, "o") });
+      expect(r.weakAccepted.length).toBe(0);
+      expect(r.cases.length).toBe(10);
+    } finally { await new Promise<void>(r => srv.close(() => r())); }
+  });
+});
