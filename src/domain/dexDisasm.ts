@@ -104,10 +104,12 @@ export const disassembleDex = async (input: DexDisasmInput): Promise<DexDisasmRe
     let directM: number; [directM, p] = uleb(p);
     let virtualM: number; [virtualM, p] = uleb(p);
     p = (() => { let q = p; for (let i = 0, idx = 0; i < staticF + instF; i++) { let d: number; [d, q] = uleb(q); idx += d; let a: number; [a, q] = uleb(q); } return q; })();
+    let methodIdx = 0;
     for (let mi = 0; mi < directM + virtualM && disassembled < maxMethods; mi++) {
       let midx: number; [midx, p] = uleb(p);
       let acc: number; [acc, p] = uleb(p);
       let codeOff: number; [codeOff, p] = uleb(p);
+      methodIdx += midx; // class_data method_idx 是差分编码, 须累加
       methods++;
       if (!codeOff || codeOff + 16 > buf.length) continue;
       // code_item: registers_size(2) ins_size(2) outs_size(2) tries_size(2) debug_info_off(4) insns_size(4) insns...
@@ -115,7 +117,7 @@ export const disassembleDex = async (input: DexDisasmInput): Promise<DexDisasmRe
       const ins = rd16(codeOff + 2);
       const insnsSize = rd32(codeOff + 12);
       const insns = codeOff + 16;
-      const ref = methodRef(midx);
+      const ref = methodRef(methodIdx);
       const code: string[] = [];
       const strs: string[] = [];
       const calls: string[] = [];
@@ -189,7 +191,10 @@ export const disassembleDex = async (input: DexDisasmInput): Promise<DexDisasmRe
       details.push({ cls: className, method: ref, registers: regs, ins: [`${ins}`], code: lines, strings: strs, calls });
     }
   }
-  const stringXrefs = [...strXref.entries()].map(([s, where]) => ({ str: s, where: [...where] })).filter(x => x.str.length > 3).slice(0, 3000);
+  const all = [...strXref.entries()].map(([s, where]) => ({ str: s, where: [...where] })).filter(x => x.str.length > 3);
+  // URL/密钥样字符串优先排序, 其余保持发现顺序; 上限 8000 防御性截断
+  const isUrl = (s: string): boolean => /^https?:\/\//.test(s) || /^[\w.-]+\.[a-z]{2,}(?:\/|$)/i.test(s);
+  const stringXrefs = [...all.filter(x => isUrl(x.str)), ...all.filter(x => !isUrl(x.str))].slice(0, 8000);
   const artifacts: DexDisasmResult["artifacts"] = [];
   const out: string[] = [`; dex disassembly — ${basename(input.file)}`, `; ${methods} methods seen, ${disassembled} disassembled`, ""];
   for (const m of details) {
