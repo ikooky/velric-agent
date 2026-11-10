@@ -96,6 +96,8 @@ Usage:
   velric-agent auth-probe <api_merged.txt> <outdir>  anonymous vs auth access mapping
   velric-agent idor-prescreen <params_merged.json> <outdir>  IDOR candidate prescreen
   velric-agent git-restore <baseUrl> <outdir>  rebuild source from leaked .git
+  velric-agent host-poison <url> <outdir>   Host-header/reset-poisoning surface (canary reflection in generated absolute URLs)
+  velric-agent upload-probe <url> <outdir>   file-upload attack surface (content-type confusion, exec-risk extensions, SVG/polyglot carriers)
   velric-agent ssti-probe <url> <outdir> --param q   SSTI canary arithmetic (11 engine grammars, 49-reflection verdict)
   velric-agent graphql-batch <endpoint> <outdir>   GraphQL depth/alias-bombing limit measurement
   velric-agent race-probe <url> <outdir>   TOCTOU race condition (concurrent mutation admission + read-back state divergence)
@@ -1064,6 +1066,22 @@ const dispatch = async (command: string, positional: readonly string[], flags: R
         }
         const r = await disassembleDex({ file: target, outputRoot: dir, maxMethods: num(flags["max-methods"]), classFilter: typeof flags["class-filter"] === "string" ? flags["class-filter"] : undefined });
         out({ file: r.file, bytes: r.bytes, methods: r.methods, disassembled: r.disassembled, sample: r.details.slice(0, 3), topStringXrefs: r.stringXrefs.filter(x => /^(?:https?:|str )/.test(x.str) || x.str.length > 8).slice(0, 20), artifacts: r.artifacts });
+        return 0;
+      }
+      case "host-poison": {
+        const [url, dir] = positional;
+        if (!url || !dir) { console.error("usage: host-poison <url> <outdir> [--canary-host H]"); return 2; }
+        const { probeHostPoison } = await import("./domain/hostPoison.js");
+        const r = await probeHostPoison({ url, canaryHost: typeof flags["canary-host"] === "string" ? flags["canary-host"] : undefined, outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, headers: await jobj<Record<string, string>>(flags, "headers"), proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout) });
+        out({ probed: r.probed, poisoned: r.poisoned.length, detail: r.poisoned.slice(0, 10), artifacts: r.artifacts });
+        return 0;
+      }
+      case "upload-probe": {
+        const [url, dir] = positional;
+        if (!url || !dir) { console.error("usage: upload-probe <url> <outdir> [--field file] [--bearer T]"); return 2; }
+        const { probeUpload } = await import("./domain/uploadProbe.js");
+        const r = await probeUpload({ url, field: typeof flags.field === "string" ? flags.field : undefined, outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, bearer: typeof flags.bearer === "string" ? flags.bearer : undefined, headers: await jobj<Record<string, string>>(flags, "headers"), proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout) });
+        out({ probed: r.probed, dangerous: r.dangerous.length, detail: r.dangerous.slice(0, 10), artifacts: r.artifacts });
         return 0;
       }
       case "ssti-probe": {

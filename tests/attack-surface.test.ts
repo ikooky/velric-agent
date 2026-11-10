@@ -242,3 +242,40 @@ describe("race-probe & ssti-probe", () => {
     } finally { await new Promise<void>(r => srv.close(() => r())); }
   });
 });
+
+import { probeHostPoison } from "../src/domain/hostPoison.js";
+import { probeUpload } from "../src/domain/uploadProbe.js";
+
+describe("host-poison & upload-probe", () => {
+  it("host-poison: detects canary in generated URL", { timeout: 30000 }, async () => {
+    const srv = http.createServer((req, res) => {
+      const host = req.headers["x-forwarded-host"] ?? req.headers.host ?? "";
+      if (String(host).includes("evil")) { res.writeHead(200).end(`<a href="https://${String(host)}/reset?token=x">reset</a>`); return; }
+      res.writeHead(200).end("normal page");
+    });
+    await new Promise<void>(r => srv.listen(18312, "127.0.0.1", () => r()));
+    try {
+      const dir = await mkdtemp(join(tmpdir(), "hp-"));
+      const r = await probeHostPoison({ url: "http://127.0.0.1:18312/page", canaryHost: "canary.evil.example", outputRoot: join(dir, "o") });
+      expect(r.poisoned.length).toBeGreaterThan(0);
+      expect(r.poisoned.some(p => p.vector === "x-forwarded-host")).toBe(true);
+    } finally { await new Promise<void>(r => srv.close(() => r())); }
+  });
+  it("upload-probe: flags exec-risk acceptance, rejects clean server", { timeout: 30000 }, async () => {
+    let stored: string[] = [];
+    const srv = http.createServer((req, res) => {
+      let b = Buffer.alloc(0); req.on("data", c => b = Buffer.concat([b, c])); req.on("end", () => {
+        const m = /filename="([^"]+)"/.exec(b.toString("latin1"));
+        stored.push(m?.[1] ?? "?");
+        if (m && (/\.(php|jsp|html|svg|shtml|js)\b/i.test(m[1]!) || m[1]!.startsWith(".ht"))) { res.writeHead(415).end('{"error":"only images"}'); return; }
+        res.writeHead(204).end();
+      });
+    });
+    await new Promise<void>(r => srv.listen(18313, "127.0.0.1", () => r()));
+    try {
+      const dir = await mkdtemp(join(tmpdir(), "up-"));
+      const r = await probeUpload({ url: "http://127.0.0.1:18313/up", outputRoot: join(dir, "o") });
+      expect(r.dangerous.length).toBe(0); // 干净服务器0危险
+    } finally { await new Promise<void>(r => srv.close(() => r())); }
+  });
+});

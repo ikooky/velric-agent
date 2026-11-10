@@ -34,6 +34,8 @@
 - 竞争面：`race-probe`（TOCTOU：并发单次语义请求全 admitted + 回读状态发散；juice-shop 钱包并发充值 30/30 全入账实测）
 - GraphQL 限额：`graphql-batch`（深度阶梯 + 别名扇出 512；countries.trevorblades 无别名限制实测）
 - SSTI：`ssti-probe`（11 引擎语法金丝雀；49 回显且排除字面回显）
+- 投毒面：`host-poison`（Host/XFH 金丝雀反射到服务端生成的绝对 URL — 重置投毒核心）
+- 上传面：`upload-probe`（multipart 11 向量；accepted+exec-risk 双判定，落地 URL 提取）
 - NoSQL 面：`nosqli-probe`（$ne 全命中语义：行数/modified 计数 vs 基线发散；$where 报错签名作 lead）
 - 凭证面：`cred-brute`（语义分类喷洒；安全问题答案爆破用 body-template 适配 reset 端点）
 - 2FA secret 泄漏：`otp-brute` 自动附带检测 status/setup 端点明文 totpSecret（命中后 base32 secret + RFC6238 即可伪造 TOTP）
