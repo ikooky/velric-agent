@@ -164,3 +164,44 @@ describe("sqli-probe", () => {
     } finally { await new Promise<void>(r => srv.close(() => r())); }
   });
 });
+
+import { probeNosqli } from "../src/domain/nosqliProbe.js";
+import { probeCredBrute } from "../src/domain/credBrute.js";
+
+describe("nosqli & cred-brute", () => {
+  it("nosqli: $ne operator executed as query (multi-row divergence)", { timeout: 30000 }, async () => {
+    const srv = http.createServer((req, res) => {
+      let b = ""; req.on("data", c => b += c); req.on("end", () => {
+        let o: Record<string, unknown>;
+        try { o = JSON.parse(b || "{}"); } catch { res.writeHead(400).end("bad"); return; }
+        const id = o["id"];
+        if (id && typeof id === "object" && "$ne" in (id as object)) { res.writeHead(200).end('{"modified":7}'); return; }
+        if (typeof id === "string" && id === "known") { res.writeHead(200).end('{"modified":1}'); return; }
+        res.writeHead(404).end('{"modified":0}');
+      });
+    });
+    await new Promise<void>(r => srv.listen(18308, "127.0.0.1", () => r()));
+    try {
+      const dir = await mkdtemp(join(tmpdir(), "no-"));
+      const r = await probeNosqli({ url: "http://127.0.0.1:18308/x", param: "id", in: "body", method: "PATCH", bodyTemplate: '{"id":"known"}', outputRoot: join(dir, "o") });
+      expect(r.confirmed.some(c => c.vector === "operator-$ne")).toBe(true);
+    } finally { await new Promise<void>(r => srv.close(() => r())); }
+  });
+  it("cred-brute: classifies valid and invalid credentials", { timeout: 30000 }, async () => {
+    const srv = http.createServer((req, res) => {
+      let b = ""; req.on("data", c => b += c); req.on("end", () => {
+        const o = JSON.parse(b || "{}") as Record<string, string>;
+        if (o["user"] === "bob" && o["pass"] === "hunter2") { res.writeHead(200).end('{"token":"eyJ.x.y"}'); return; }
+        res.writeHead(401).end('{"error":"bad credentials"}');
+      });
+    });
+    await new Promise<void>(r => srv.listen(18309, "127.0.0.1", () => r()));
+    try {
+      const dir = await mkdtemp(join(tmpdir(), "cb-"));
+      const r = await probeCredBrute({ url: "http://127.0.0.1:18309/login", bodyTemplate: '{"user":"{USER}","pass":"{PASS}"}', pairs: [{ user: "bob", pass: "wrong" }, { user: "bob", pass: "hunter2" }], outputRoot: join(dir, "o") });
+      expect(r.valid.length).toBe(1);
+      expect(r.valid[0]!.pass).toBe("hunter2");
+      expect(r.semantics["bad-cred"]).toBe(1);
+    } finally { await new Promise<void>(r => srv.close(() => r())); }
+  });
+});

@@ -96,6 +96,8 @@ Usage:
   velric-agent auth-probe <api_merged.txt> <outdir>  anonymous vs auth access mapping
   velric-agent idor-prescreen <params_merged.json> <outdir>  IDOR candidate prescreen
   velric-agent git-restore <baseUrl> <outdir>  rebuild source from leaked .git
+  velric-agent cred-brute <url> <outdir> --pairs-file F   credential spray (semantic classification: auth-ok/bad-cred/429/lockout/captcha)
+  velric-agent nosqli-probe <url> <outdir> --param id   NoSQL operator injection ($ne/$gt/$regex/$where, type juggling)
   velric-agent otp-brute <url> <outdir> --body-template T   OTP/2FA verify rate-limit & lockout measurement (bounded wrong-code sample)
   velric-agent sqli-probe <url> <outdir> --param q   SQL injection differential (error oracle / boolean blind / bounded time blind / auth-bypass grammar)
   velric-agent value-abuse <url> <outdir>   business-logic value abuse (negative/zero/fractional/overflow quantities & prices, read-back persistence verification)
@@ -314,7 +316,7 @@ const dispatch = async (command: string, positional: readonly string[], flags: R
         const [url, dir] = positional;
         const payloads = jarr(flags, "payloads");
         if (!url || !dir || !payloads) {
-          console.error("usage: oob-confirm <url> <outdir> --payloads a,b [--positions-file JSON] [--method M] [--body STR]");
+          console.error("usage: oob-confirm <url> <outdir> --payloads a,b [--positions-file JSON] [--method M] [--body STR] [--raw-body XML]");
           return 2;
         }
         const { probeOob } = await import("./domain/oobConfirm.js");
@@ -323,6 +325,7 @@ const dispatch = async (command: string, positional: readonly string[], flags: R
           positions: await jarrObj<{ param: string; in: "query" | "body" | "header" | "path" }>(flags, "positions"),
           method: typeof flags.method === "string" ? flags.method : undefined,
           body: typeof flags.body === "string" ? flags.body : undefined,
+          rawBody: typeof flags["raw-body"] === "string" ? flags["raw-body"] : undefined,
           headers: await jobj<Record<string, string>>(flags, "headers"),
           proxy: await resolveProxy(flags),
           timeoutMs: num(flags.timeout),
@@ -1060,12 +1063,31 @@ const dispatch = async (command: string, positional: readonly string[], flags: R
         out({ file: r.file, bytes: r.bytes, methods: r.methods, disassembled: r.disassembled, sample: r.details.slice(0, 3), topStringXrefs: r.stringXrefs.filter(x => /^(?:https?:|str )/.test(x.str) || x.str.length > 8).slice(0, 20), artifacts: r.artifacts });
         return 0;
       }
+      case "cred-brute": {
+        const [url, dir] = positional;
+        const pairsFile = flags["pairs-file"];
+        if (!url || !dir || typeof pairsFile !== "string") { console.error("usage: cred-brute <url> <outdir> --pairs-file F [--body-template '{\"email\":\"{USER}\",\"password\":\"{PASS}\"}'] [--delay-ms N]"); return 2; }
+        const { probeCredBrute } = await import("./domain/credBrute.js");
+        const { readFile: rf } = await import("node:fs/promises");
+        const pairs = JSON.parse(await rf(pairsFile, "utf8")) as { user: string; pass: string }[];
+        const r = await probeCredBrute({ url, bodyTemplate: String(flags["body-template"] ?? "{}"), pairs, outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, headers: await jobj<Record<string, string>>(flags, "headers"), proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout), delayMs: num(flags["delay-ms"]) });
+        out({ tried: r.tried, valid: r.valid.length, semantics: r.semantics, throttled: r.throttled, hits: r.valid.slice(0, 10), artifacts: r.artifacts });
+        return 0;
+      }
+      case "nosqli-probe": {
+        const [url, dir] = positional;
+        if (!url || !dir) { console.error("usage: nosqli-probe <url> <outdir> --param id [--in body] [--method PATCH] [--body-template T] [--bearer T]"); return 2; }
+        const { probeNosqli } = await import("./domain/nosqliProbe.js");
+        const r = await probeNosqli({ url, param: String(flags.param ?? "id"), in: typeof flags.in === "string" ? (flags.in === "body" ? "body" : "query") : "query", method: typeof flags.method === "string" ? flags.method : undefined, bodyTemplate: typeof flags["body-template"] === "string" ? flags["body-template"] : undefined, outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, bearer: typeof flags.bearer === "string" ? flags.bearer : undefined, headers: await jobj<Record<string, string>>(flags, "headers"), proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout) });
+        out({ probed: r.probed, confirmed: r.confirmed.length, leads: r.leads.length, detail: [...r.confirmed, ...r.leads].slice(0, 10), artifacts: r.artifacts });
+        return 0;
+      }
       case "otp-brute": {
         const [url, dir] = positional;
         if (!url || !dir) { console.error("usage: otp-brute <url> <outdir> --body-template T [--samples N]   (T with {CODE} placeholder)"); return 2; }
         const { probeOtpBrute } = await import("./domain/otpBrute.js");
         const r = await probeOtpBrute({ url, bodyTemplate: String(flags["body-template"] ?? "{}"), samples: num(flags.samples), outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, headers: await jobj<Record<string, string>>(flags, "headers"), proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout) });
-        out({ sent: r.sent, rateLimited: r.rateLimited, lockout: r.lockoutSigns.length, bruteForceable: r.bruteForceable, estimateSeconds: r.estimateSeconds, artifacts: r.artifacts });
+        out({ secretLeak: r.secretLeak, sent: r.sent, rateLimited: r.rateLimited, lockout: r.lockoutSigns.length, bruteForceable: r.bruteForceable, estimateSeconds: r.estimateSeconds, artifacts: r.artifacts });
         return 0;
       }
       case "sqli-probe": {

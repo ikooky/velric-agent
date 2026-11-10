@@ -19,6 +19,8 @@ export interface OtpInput {
   readonly timeoutMs?: number;
 }
 export interface OtpResult {
+  /** 2FA setup/status endpoints leaking the TOTP secret in plaintext (bypass material) */
+  readonly secretLeak: { endpoint: string; secret: string }[];
   readonly sent: number;
   readonly wrongSemantics: { status: number; count: number }[];
   readonly rateLimited: number;
@@ -30,6 +32,17 @@ export interface OtpResult {
 
 export const probeOtpBrute = async (input: OtpInput): Promise<OtpResult> => {
   const n = Math.min(input.samples ?? 30, 60);
+  // 2FA secret 泄漏检测: setup/status 姐妹端点(base同路径)明文回显 totpSecret
+  const secretLeak: { endpoint: string; secret: string }[] = [];
+  const base2fa = new URL(input.url);
+  for (const probe of ["/rest/2fa/status"]) {
+    try {
+      const u = new URL(probe, base2fa.origin);
+      const r = await fetchUrl(u.toString(), { method: "GET", cookie: input.cookie, headers: input.headers ?? {}, proxy: input.proxy, timeoutMs: input.timeoutMs ?? 10000, maxAttempts: 1 });
+      const m = /(?:totpSecret|"secret")\s*[:=]\s*"([A-Z2-7]{16,})"/.exec(r.body);
+      if (m && m[1]) secretLeak.push({ endpoint: u.toString(), secret: m[1] });
+    } catch { /* optional */ }
+  }
   const statusCount = new Map<number, number>();
   const lockoutSigns: string[] = [];
   let rateLimited = 0;
@@ -58,5 +71,5 @@ export const probeOtpBrute = async (input: OtpInput): Promise<OtpResult> => {
     await writeArtifact(input.outputRoot, "otp_brute.json", JSON.stringify({ sent: n, statusCount: [...statusCount], rateLimited, lockoutSigns, bruteForceable, estimateSeconds }, null, 2)),
     await writeArtifact(input.outputRoot, "otp_brute.md", [`# OTP brute-force surface`, ``, `- sent ${n} wrong codes in ${elapsed.toFixed(1)}s (${(perReq * 1000).toFixed(0)}ms/req)`, `- rate-limited responses: ${rateLimited}`, `- lockout/captcha signs: ${lockoutSigns.length}`, `- verdict: **${bruteForceable ? `NO THROTTLING within ${n} attempts` : "throttled within sample"}**${estimateSeconds !== null ? ` — serial 10^6 keyspace ≈ ${estimateSeconds}s; note: budget-limited throttlers (e.g. 100/5min) stay invisible below their threshold — raise --samples to probe higher limits` : ""}`].join("\n")),
   ];
-  return { sent: n, wrongSemantics: [...statusCount].map(([status, count]) => ({ status, count })), rateLimited, lockoutSigns, bruteForceable, estimateSeconds, artifacts };
+  return { secretLeak, sent: n, wrongSemantics: [...statusCount].map(([status, count]) => ({ status, count })), rateLimited, lockoutSigns, bruteForceable, estimateSeconds, artifacts };
 };

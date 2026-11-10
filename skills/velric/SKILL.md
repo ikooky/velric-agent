@@ -53,6 +53,9 @@ description: |
 | `velric-agent wasm-disasm <file.wasm> <outdir>` | WASM 完整反汇编：全 opcode（含 SIMD/饱和截断/批量内存）、函数内偏移、call 目标按 name 解析、全模块调用图。产出 wasm_disasm.txt + wasm_callgraph.json（--max-functions 钳制） |
 | `velric-agent dex-disasm <file.dex或.apk> <outdir>` | Dalvik 字节码反汇编（smali 级）：每方法指令流+寄存器+调用解析、字符串交叉引用（哪个方法引用哪个字符串）、类过滤。产出 dex_disasm.smali + dex_string_xrefs.json（--class-filter RE / --max-methods N） |
 | `velric-agent x86-disasm <elf> <outdir>` | x86 ELF 指令级反汇编：符号表锚定函数（stripped 二进制走 entry+endbr64/push-rbp 序言启发式）、call 目标符号标注、字符串表。产出 x86_disasm.txt + x86_disasm.json（--max-functions N / --max-instrs N）。引擎为 capstone-wasm（可选依赖，缺失时降级输出字符串表并明示） |
+| `velric-agent nosqli-probe <url> <outdir> --param id` | NoSQL 注入差分：$ne/$gt/$regex/$exists/$where 运算符 + 类型混淆（[]/null/0/{}），行数/modified 计数发散判定 + Mongo 错误签名。产出 nosqli_cases.json + findings.md（--in body --method PATCH --body-template） |
+| `velric-agent cred-brute <url> <outdir> --pairs-file F` | 凭证爆破：有界字典喷洒 + 逐响应语义分类（auth-ok/bad-cred/429/锁定/CAPTCHA），节流存在性汇总。产出 cred_cases.json + cred_brute.md（--body-template '{USER}/{PASS}' --delay-ms） |
+| `velric-agent otp-brute`（增强） | 附带 2FA secret 泄漏检测：探 verify 端点同时检查 setup/status 姐妹端点明文回显 totpSecret（base32 特征），命中即输出可伪造 TOTP 的绕过素材 |
 | `velric-agent value-abuse <url> <outdir> --body-template '{"quantity":1}'` | 业务逻辑值域滥用：负数/零/小数/溢出/字符串数值/科学计数法 7 变体注入，接受+回显+**回读持久化验证**三段确认。产出 value_abuse_cases.json + value_abuse.md（--verify-url 回读 / --bearer T） |
 | `velric-agent sqli-probe <url> <outdir> --param q` | SQL 注入差分：error-oracle（5 种引号破坏）+ boolean-blind（AND 1=1/1=2 三组对）+ 有界 time-blind（sqlite/pgsql/mysql/mssql）+ 认证绕过语法（--auth-bypass）。产出 sqli_cases.json + sqli_findings.md（--in body 配 --body-template） |
 | `velric-agent otp-brute <url> <outdir> --body-template T` | OTP/2FA 爆破面：有界错误码样本测 verify 端点节流/锁定/CAPTCHA 升级缺失，全空间串行时间估算。产出 otp_brute.json/md（T 含 {CODE} 占位符） |

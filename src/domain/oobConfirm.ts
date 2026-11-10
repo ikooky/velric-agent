@@ -155,6 +155,8 @@ export interface OobProbeInput {
   readonly positions?: { param: string; in: "query" | "body" | "header" | "path" }[];
   readonly method?: string;
   readonly body?: string;
+  /** raw body mode: the {OOB} placeholder is substituted directly into the full body (XML/form/anything non-JSON) */
+  readonly rawBody?: string;
   readonly headers?: Record<string, string>;
   readonly proxy?: string;
   readonly timeoutMs?: number;
@@ -177,7 +179,9 @@ export const probeOob = async (input: OobProbeInput): Promise<OobProbeResult> =>
 
   // Positions default: all query params.
   let positions = input.positions;
-  if (!positions) {
+  if (input.rawBody !== undefined) {
+    positions = [{ param: "(raw-body)", in: "body" as const }];
+  } else if (!positions) {
     const u = new URL(input.url);
     positions = [...u.searchParams.keys()].map((k) => ({ param: k, in: "query" as const }));
   }
@@ -193,7 +197,10 @@ export const probeOob = async (input: OobProbeInput): Promise<OobProbeResult> =>
       let target = input.url;
       let body = input.body;
       const headers = { ...input.headers };
-      if (pos.in === "query") {
+      if (input.rawBody !== undefined) {
+        body = p.replaceAll("{OOB}", cbUrl);
+        target = input.url;
+      } else if (pos.in === "query") {
         const u = new URL(target);
         u.searchParams.set(pos.param, concrete);
         target = u.toString();

@@ -31,6 +31,9 @@
 - 注入面：`sqli-probe`（error-oracle/boolean-blind/有界 time-blind/--auth-bypass 认证绕过；body 型配 --body-template）
 - 写 IDOR：`idor-deep --write`（变异他人资源，服务器 modified 计数自证；body-ID 门禁在显式 --write 时放开）
 - 2FA 面：`otp-brute`（节流/锁定缺失测量；高限额节流器需拉高 --samples 才可见）
+- NoSQL 面：`nosqli-probe`（$ne 全命中语义：行数/modified 计数 vs 基线发散；$where 报错签名作 lead）
+- 凭证面：`cred-brute`（语义分类喷洒；安全问题答案爆破用 body-template 适配 reset 端点）
+- 2FA secret 泄漏：`otp-brute` 自动附带检测 status/setup 端点明文 totpSecret（命中后 base32 secret + RFC6238 即可伪造 TOTP）
 
 ## Phase 3 — 运行时
 - `runtime`(需 Chromium)抓真实 XHR/fetch/WS 帧;无浏览器时静态面兜底
