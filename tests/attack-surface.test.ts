@@ -401,3 +401,30 @@ describe("info-leak", () => {
     } finally { await new Promise<void>(r => srv.close(() => r())); }
   });
 });
+
+describe("regex-injection hardening", () => {
+  it("param with regex metachars no longer crashes body-mode probes", { timeout: 20000 }, async () => {
+    // ldap-probe body mode with a metachar param would previously throw
+    // SyntaxError from new RegExp(`"${param}"...`) and kill the CLI process.
+    const srv = http.createServer((req, res) => {
+      let b = ""; req.on("data", c => b += c); req.on("end", () => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end('{"data":[{"uid":"alice"}]}');
+      });
+    });
+    await new Promise<void>(r => srv.listen(18328, "127.0.0.1", () => r()));
+    try {
+      const { probeLdap } = await import("../src/domain/ldapProbe.js");
+      const dir = await mkdtemp(join(tmpdir(), "re-"));
+      const r = await probeLdap({
+        url: "http://127.0.0.1:18328/dir",
+        param: "uid(name", // ← would crash before escapeRegex
+        in: "body",
+        method: "POST",
+        bodyTemplate: '{"uid(name":"alice"}',
+        outputRoot: join(dir, "o"),
+      });
+      expect(r.probed).toBeGreaterThan(0); // completed without throwing
+    } finally { await new Promise<void>(r => srv.close(() => r())); }
+  });
+});

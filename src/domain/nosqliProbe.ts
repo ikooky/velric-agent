@@ -1,3 +1,4 @@
+import { escapeRegex } from "./normalize.js";
 import { fetchUrl } from "../adapters/http.js";
 import { writeArtifact } from "../adapters/artifacts.js";
 
@@ -63,7 +64,7 @@ export const probeNosqli = async (input: NosqliInput): Promise<NosqliResult> => 
     let url = input.url; let body: string | undefined;
     if (where === "body") {
       const tpl = input.bodyTemplate ?? "{}";
-      body = tpl.replace(new RegExp(`("${input.param}"\\s*:\\s*)("[^"]*"|\\[[^\\]]*\\]|\\{[^}]*\\}|[^,}]*)`), `$1${rawValue}`);
+      body = tpl.replace(new RegExp(`("${escapeRegex(input.param)}"\\s*:\\s*)("[^"]*"|\\[[^\\]]*\\]|\\{[^}]*\\}|[^,}]*)`), `$1${rawValue}`);
     } else {
       const u = new URL(input.url);
       u.searchParams.set(input.param, rawValue);
@@ -74,7 +75,7 @@ export const probeNosqli = async (input: NosqliInput): Promise<NosqliResult> => 
     return { vector, payload: rawValue, status: r.status, len: r.bytes, count, signal: MONGO_ERR.test(r.body) ? "mongo-error" : null };
   };
   // baseline: 常规值
-  const baseVal = where === "body" ? (new RegExp(`"${input.param}"\\s*:\\s*"([^"]*)"`).exec(input.bodyTemplate ?? "{}")?.[1] ?? "x") : (new URL(input.url).searchParams.get(input.param) ?? "x");
+  const baseVal = where === "body" ? (new RegExp(`"${escapeRegex(input.param)}"\\s*:\\s*"([^"]*)"`).exec(input.bodyTemplate ?? "{}")?.[1] ?? "x") : (new URL(input.url).searchParams.get(input.param) ?? "x");
   const base = await sendRaw(JSON.stringify(baseVal), "baseline");
   const baseCount = base.count;
   const cases: NosqliCase[] = [base];

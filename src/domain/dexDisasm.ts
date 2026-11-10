@@ -58,8 +58,13 @@ export const disassembleDex = async (input: DexDisasmInput): Promise<DexDisasmRe
   let methods = 0;
   let disassembled = 0;
   // Reuse structure parse from dexAnalyze but we need method→code_off mapping: re-walk header
-  const rd32 = (p: number): number => buf.readUInt32LE(p);
-  const rd16 = (p: number): number => buf.readUInt16LE(p);
+  // Bounds-guarded readers: a corrupt/hostile header can carry offsets far
+  // beyond the file — raw Buffer reads would throw ERR_OUT_OF_RANGE and kill
+  // the CLI. Out-of-range reads return 0 so parsing degrades instead of crash.
+  let truncated = false;
+  const rd32 = (p: number): number => (p >= 0 && p + 4 <= buf.length) ? buf.readUInt32LE(p) : (truncated = true, 0);
+  const rd16 = (p: number): number => (p >= 0 && p + 2 <= buf.length) ? buf.readUInt16LE(p) : (truncated = true, 0);
+  const rd8 = (p: number): number => (p >= 0 && p < buf.length) ? buf.readUInt8(p) : (truncated = true, 0);
   const stringIdsSize = rd32(56); const stringIdsOff = rd32(60);
   const typeIdsSize = rd32(64); const typeIdsOff = rd32(68);
   const protoIdsOff = rd32(76);
@@ -68,7 +73,7 @@ export const disassembleDex = async (input: DexDisasmInput): Promise<DexDisasmRe
   const classDefsSize = rd32(96); const classDefsOff = rd32(100);
   const readStr = (offset: number): string => {
     let p = offset; let len = 0, shift = 0;
-    for (;;) { const b = buf.readUInt8(p++); len |= (b & 0x7F) << shift; if (!(b & 0x80)) break; shift += 7; }
+    for (;;) { const b = rd8(p++); len |= (b & 0x7F) << shift; if (!(b & 0x80)) break; shift += 7; }
     return buf.toString("utf8", p, Math.min(p + len, buf.length)).replace(/\0.*$/s, "");
   };
   const str = (idx: number): string => {
@@ -88,7 +93,7 @@ export const disassembleDex = async (input: DexDisasmInput): Promise<DexDisasmRe
   };
   const uleb = (p: number): [number, number] => {
     let r = 0, s = 0;
-    for (;;) { const b = buf.readUInt8(p++); r |= (b & 0x7F) << s; if (!(b & 0x80)) return [r >>> 0, p]; s += 7; }
+    for (;;) { const b = rd8(p++); r |= (b & 0x7F) << s; if (!(b & 0x80)) return [r >>> 0, p]; s += 7; }
   };
   const maxMethods = input.maxMethods ?? 3000;
   const filter = input.classFilter ? new RegExp(input.classFilter) : null;

@@ -1,3 +1,4 @@
+import { escapeRegex } from "./normalize.js";
 import { fetchUrl } from "../adapters/http.js";
 import { writeArtifact } from "../adapters/artifacts.js";
 
@@ -56,7 +57,7 @@ export const probeSsti = async (input: SstiInput): Promise<SstiResult> => {
     let url = input.url; let body: string | undefined;
     if (where === "body") {
       const tpl = input.bodyTemplate ?? "{}";
-      body = tpl.replace(new RegExp(`("${input.param}"\\s*:\\s*)("[^"]*")`), `$1${JSON.stringify(payload)}`);
+      body = tpl.replace(new RegExp(`("${escapeRegex(input.param)}"\\s*:\\s*)("[^"]*")`), `$1${JSON.stringify(payload)}`);
     } else {
       const u = new URL(input.url);
       u.searchParams.set(input.param, payload);

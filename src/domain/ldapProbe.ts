@@ -1,5 +1,5 @@
 import { fetchUrl } from "../adapters/http.js";
-import { normalizeBody, charSimilarity } from "./normalize.js";
+import {normalizeBody, charSimilarity, escapeRegex} from "./normalize.js";
 import { writeArtifact } from "../adapters/artifacts.js";
 
 /** LDAP injection differential: filter-grammar payloads (*, )(uid=*),
@@ -58,7 +58,7 @@ export const probeLdap = async (input: LdapInput): Promise<LdapResult> => {
     let url = input.url; let body: string | undefined;
     if (where === "body") {
       const tpl = input.bodyTemplate ?? "{}";
-      body = tpl.replace(new RegExp(`("${input.param}"\\s*:\\s*)("[^"]*")`), `$1${JSON.stringify(payload)}`);
+      body = tpl.replace(new RegExp(`("${escapeRegex(input.param)}"\\s*:\\s*)("[^"]*")`), `$1${JSON.stringify(payload)}`);
     } else {
       const u = new URL(input.url);
       u.searchParams.set(input.param, payload);
@@ -67,7 +67,7 @@ export const probeLdap = async (input: LdapInput): Promise<LdapResult> => {
     const r = await fetchUrl(url, { method, body, cookie: input.cookie, headers: body ? { "content-type": "application/json", ...hdrs } : hdrs, proxy: input.proxy, timeoutMs: input.timeoutMs ?? 15000, maxAttempts: 1 });
     return { vector: "", payload, status: r.status, len: r.bytes, rows: countRows(r.body), signal: LDAP_ERR.test(r.body) ? "ldap-error" : null };
   };
-  const baseVal = where === "body" ? (new RegExp(`"${input.param}"\\s*:\\s*"([^"]*)"`).exec(input.bodyTemplate ?? "{}")?.[1] ?? "x") : (new URL(input.url).searchParams.get(input.param) ?? "x");
+  const baseVal = where === "body" ? (new RegExp(`"${escapeRegex(input.param)}"\\s*:\\s*"([^"]*)"`).exec(input.bodyTemplate ?? "{}")?.[1] ?? "x") : (new URL(input.url).searchParams.get(input.param) ?? "x");
   const base = await send(baseVal);
   const cases: LdapCase[] = [{ ...base, vector: "baseline" }];
   const confirmed: LdapResult["confirmed"] = [];

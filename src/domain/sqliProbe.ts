@@ -1,5 +1,5 @@
 import { fetchUrl } from "../adapters/http.js";
-import { normalizeBody, charSimilarity } from "./normalize.js";
+import {normalizeBody, charSimilarity, escapeRegex} from "./normalize.js";
 import { writeArtifact } from "../adapters/artifacts.js";
 
 /** SQL injection differential probe: syntax-error oracles (quote balancing),
@@ -47,7 +47,7 @@ export const probeSqli = async (input: SqliInput): Promise<SqliResult> => {
   const build = (payload: string): { url: string; body?: string } => {
     if (where === "body") {
       const tpl = input.bodyTemplate ?? "{}";
-      const filled = tpl.replace(new RegExp(`("${input.param}"\\s*:\\s*")([^"]*)(")`), `$1${payload.replace(/\$/g, "$$$$")}$3`);
+      const filled = tpl.replace(new RegExp(`("${escapeRegex(input.param)}"\\s*:\\s*")([^"]*)(")`), `$1${payload.replace(/\$/g, "$$$$")}$3`);
       return { url: input.url, body: filled };
     }
     const u = new URL(input.url);
@@ -62,7 +62,7 @@ export const probeSqli = async (input: SqliInput): Promise<SqliResult> => {
     const ms = Date.now() - t0;
     return { payload, technique: "", status: r.status, ms, len: r.bytes, signal: ERR_SIG.test(r.body) ? "error-signature" : null };
   };
-  const base = await send(where === "body" ? (input.bodyTemplate ? String(new RegExp(`"${input.param}"\\s*:\\s*"([^"]*)"`).exec(input.bodyTemplate)?.[1] ?? "") : "") : (new URL(input.url).searchParams.get(input.param) ?? ""));
+  const base = await send(where === "body" ? (input.bodyTemplate ? String(new RegExp(`"${escapeRegex(input.param)}"\\s*:\\s*"([^"]*)"`).exec(input.bodyTemplate)?.[1] ?? "") : "") : (new URL(input.url).searchParams.get(input.param) ?? ""));
   const cases: SqliCase[] = [{ ...base, payload: "(baseline)", technique: "baseline" }];
   const confirmed: SqliResult["confirmed"] = [];
   const leads: SqliResult["leads"] = [];

@@ -129,3 +129,7 @@ export const charSimilarity = (a: string, b: string): number => {
   return 2 * prev[b.length]! / (a.length + b.length);
 };
 
+
+/** Escape a literal string for safe interpolation into a RegExp (param names,
+ *  canaries) — prevents regex-metachar crashes and ReDoS-shaped patterns. */
+export const escapeRegex = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

@@ -52,7 +52,7 @@ const handshake = (host: string, port: number, path: string, origin: string | nu
   };
   const timer = setTimeout(done, 4000);
   sock.on("data", (d) => { buf += d.toString("latin1"); if (buf.includes("\r\n\r\n")) { clearTimeout(timer); setTimeout(done, 600); } });
-  sock.on("error", () => { clearTimeout(timer); resolve({ status: null, headers: {}, body: "", raw: "" }); });
+  sock.on("error", () => { clearTimeout(timer); sock.destroy(); resolve({ status: null, headers: {}, body: "", raw: "" }); });
 });
 
 export const probeWsAuth = async (input: WsAuthInput): Promise<WsAuthResult> => {

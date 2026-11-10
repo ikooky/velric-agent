@@ -21,10 +21,12 @@ export interface DexAnalysis {
 class Dx {
   pos = 0;
   readonly buf: Buffer;
+  truncated = false;
   constructor(buf: Buffer) { this.buf = buf; }
-  u32(): number { const v = this.buf.readUInt32LE(this.pos); this.pos += 4; return v; }
-  u16(): number { const v = this.buf.readUInt16LE(this.pos); this.pos += 2; return v; }
-  u8(): number { return this.buf.readUInt8(this.pos++); }
+  // Bounds-guarded: hostile header offsets must degrade, not throw ERR_OUT_OF_RANGE.
+  u32(): number { if (this.pos < 0 || this.pos + 4 > this.buf.length) { this.truncated = true; this.pos = this.buf.length; return 0; } const v = this.buf.readUInt32LE(this.pos); this.pos += 4; return v; }
+  u16(): number { if (this.pos < 0 || this.pos + 2 > this.buf.length) { this.truncated = true; this.pos = this.buf.length; return 0; } const v = this.buf.readUInt16LE(this.pos); this.pos += 2; return v; }
+  u8(): number { if (this.pos < 0 || this.pos >= this.buf.length) { this.truncated = true; return 0; } return this.buf.readUInt8(this.pos++); }
   uleb(): number { let r = 0, s = 0; for (;;) { const b = this.u8(); r |= (b & 0x7F) << s; if (!(b & 0x80)) return r >>> 0; s += 7; } }
   skip(n: number): void { this.pos += n; }
 }
@@ -53,30 +55,30 @@ export const analyzeDex = async (input: DexAnalyzeInput): Promise<DexAnalysis> =
   const classDefsSize = d.u32(); const classDefsOff = d.u32();
   // strings: MUTF-8 (≈UTF-8 for BMP without embedded NULs) — read via uleb length + bytes
   const readStringAt = (offset: number): string => {
-    if (offset <= 0 || offset >= buf.length) return "";
+    if (!Number.isFinite(offset) || offset <= 0 || offset >= buf.length) return "";
     let p = offset; let len = 0, shift = 0;
-    for (;;) { const b = buf.readUInt8(p++); len |= (b & 0x7F) << shift; if (!(b & 0x80)) break; shift += 7; }
+    for (;;) { if (p >= buf.length) return ""; const b = buf.readUInt8(p++); len |= (b & 0x7F) << shift; if (!(b & 0x80)) break; shift += 7; }
     return buf.toString("utf8", p, Math.min(p + len, buf.length)).replace(/\0.*$/s, "");
   };
   const strings: string[] = [];
   const stringCount = Math.min(stringIdsSize, 3_000_000);
   for (let i = 0; i < stringCount; i++) {
     const idAt = stringIdsOff + i * 4;
-    if (idAt + 4 > buf.length) break;
+    if (idAt < 0 || idAt + 4 > buf.length) break;
     strings.push(readStringAt(buf.readUInt32LE(idAt)));
   }
   // types: descriptor strings via type_ids -> string index
   const typeDesc = (idx: number): string => {
     if (idx < 0 || idx >= typeIdsSize) return "?";
     const at = typeIdsOff + idx * 4;
-    if (at + 4 > buf.length) return "?";
+    if (at < 0 || at + 4 > buf.length) return "?";
     return strings[buf.readUInt32LE(at)] ?? "?";
   };
   // methods: method_ids -> class_idx(2) proto_idx(2) name_idx(4)
   const methodName = (idx: number): { name: string; clazz: string } => {
     if (idx < 0 || idx >= methodIdsSize) return { name: "?", clazz: "?" };
     const at = methodIdsOff + idx * 8;
-    if (at + 8 > buf.length) return { name: "?", clazz: "?" };
+    if (at < 0 || at + 8 > buf.length) return { name: "?", clazz: "?" };
     const clazz = typeDesc(buf.readUInt16LE(at));
     const name = strings[buf.readUInt32LE(at + 4)] ?? "?";
     return { name, clazz };
@@ -84,7 +86,7 @@ export const analyzeDex = async (input: DexAnalyzeInput): Promise<DexAnalysis> =
   const fieldName = (idx: number): string => {
     if (idx < 0 || idx >= fieldIdsSize) return "?";
     const at = fieldIdsOff + idx * 8;
-    if (at + 8 > buf.length) return "?";
+    if (at < 0 || at + 8 > buf.length) return "?";
     return `${typeDesc(buf.readUInt16LE(at))} ${strings[buf.readUInt32LE(at + 4)] ?? "?"}`;
   };
   // class defs: class_idx(4) access_flags(4) superclass_idx(4) interfaces_off(4) source_file_idx(4) annotations_off(4) class_data_off(4) static_values_off(4)
@@ -94,7 +96,7 @@ export const analyzeDex = async (input: DexAnalyzeInput): Promise<DexAnalysis> =
   const classLimit = Math.min(classDefsSize, 50000);
   for (let i = 0; i < classLimit; i++) {
     const at = classDefsOff + i * 32;
-    if (at + 32 > buf.length) break;
+    if (at < 0 || at + 32 > buf.length) break;
     const classIdx = buf.readUInt32LE(at);
     const accessFlags = buf.readUInt32LE(at + 4);
     const superIdx = buf.readUInt32LE(at + 8);
