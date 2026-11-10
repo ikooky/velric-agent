@@ -164,6 +164,6 @@ export const disassembleWasm = async (input: WasmDisasmInput): Promise<WasmDisas
     lines.push("}", "");
   }
   artifacts.push(await writeArtifact(input.outputRoot, "wasm_disasm.txt", lines.join("\n")));
-  artifacts.push(await writeArtifact(input.outputRoot, "wasm_callgraph.json", JSON.stringify(callgraph.slice(0, 5000), null, 2)));
-  return { file: basename(input.file), bytes: buf.length, functions: funcCount + importFuncCount, disassembled: details.length, callgraph: callgraph.slice(0, 5000), details: details.slice(0, 200), artifacts };
+  artifacts.push(await writeArtifact(input.outputRoot, "wasm_callgraph.json", JSON.stringify(callgraph, null, 2)));
+  return { file: basename(input.file), bytes: buf.length, functions: funcCount + importFuncCount, disassembled: details.length, callgraph, details: details.slice(0, 200), artifacts };
 };
