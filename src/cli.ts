@@ -96,6 +96,9 @@ Usage:
   velric-agent auth-probe <api_merged.txt> <outdir>  anonymous vs auth access mapping
   velric-agent idor-prescreen <params_merged.json> <outdir>  IDOR candidate prescreen
   velric-agent git-restore <baseUrl> <outdir>  rebuild source from leaked .git
+  velric-agent reset-abuse <resetUrl> <loginUrl> <outdir>   static security-answer takeover (answer spray → reset → new-credential login proof)
+  velric-agent ldap-probe <url> <outdir> --param uid   LDAP injection (wildcard/filter-widening/boolean-OR grammars, row-divergence + error signatures)
+  velric-agent api-version <url> <outdir>   API version authz drift (v0..v4 anonymous-vs-authenticated downgrade leaks)
   velric-agent host-poison <url> <outdir>   Host-header/reset-poisoning surface (canary reflection in generated absolute URLs)
   velric-agent upload-probe <url> <outdir>   file-upload attack surface (content-type confusion, exec-risk extensions, SVG/polyglot carriers)
   velric-agent ssti-probe <url> <outdir> --param q   SSTI canary arithmetic (11 engine grammars, 49-reflection verdict)
@@ -1066,6 +1069,34 @@ const dispatch = async (command: string, positional: readonly string[], flags: R
         }
         const r = await disassembleDex({ file: target, outputRoot: dir, maxMethods: num(flags["max-methods"]), classFilter: typeof flags["class-filter"] === "string" ? flags["class-filter"] : undefined });
         out({ file: r.file, bytes: r.bytes, methods: r.methods, disassembled: r.disassembled, sample: r.details.slice(0, 3), topStringXrefs: r.stringXrefs.filter(x => /^(?:https?:|str )/.test(x.str) || x.str.length > 8).slice(0, 20), artifacts: r.artifacts });
+        return 0;
+      }
+      case "reset-abuse": {
+        const [resetUrl, loginUrl, dir] = positional;
+        const answersFile = flags["answers-file"];
+        if (!resetUrl || !loginUrl || !dir || typeof answersFile !== "string") { console.error("usage: reset-abuse <resetUrl> <loginUrl> <outdir> --answers-file F --email U --new-pass P [--reset-template T] [--login-template T]"); return 2; }
+        const { probeResetAbuse } = await import("./domain/resetAbuse.js");
+        const { readFile: rf } = await import("node:fs/promises");
+        const answers = (await rf(answersFile, "utf8")).split("\n").map(x => x.trim()).filter(Boolean);
+        const r = await probeResetAbuse({ resetUrl, loginUrl, email: String(flags.email ?? ""), answers, newPass: String(flags["new-pass"] ?? "VelricProbe99!"), resetTemplate: String(flags["reset-template"] ?? '{"email":"{EMAIL}","answer":"{ANSWER}","new":"{NEWPASS}","repeat":"{NEWPASS}"}'), loginTemplate: String(flags["login-template"] ?? '{"email":"{EMAIL}","password":"{PASS}"}'), outputRoot: dir, headers: await jobj<Record<string, string>>(flags, "headers"), proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout) });
+        out({ tried: r.tried, acceptedAnswers: r.acceptedAnswers, takeover: r.takeover, hashEcho: r.hashEcho, evidence: r.evidence, artifacts: r.artifacts });
+        return 0;
+      }
+      case "ldap-probe": {
+        const [url, dir] = positional;
+        if (!url || !dir) { console.error("usage: ldap-probe <url> <outdir> --param uid [--in body] [--body-template T]"); return 2; }
+        const { probeLdap } = await import("./domain/ldapProbe.js");
+        const r = await probeLdap({ url, param: String(flags.param ?? "uid"), in: typeof flags.in === "string" ? (flags.in === "body" ? "body" : "query") : "query", method: typeof flags.method === "string" ? flags.method : undefined, bodyTemplate: typeof flags["body-template"] === "string" ? flags["body-template"] : undefined, outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, bearer: typeof flags.bearer === "string" ? flags.bearer : undefined, headers: await jobj<Record<string, string>>(flags, "headers"), proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout) });
+        out({ probed: r.probed, confirmed: r.confirmed.length, leads: r.leads.length, detail: [...r.confirmed, ...r.leads].slice(0, 10), artifacts: r.artifacts });
+        return 0;
+      }
+      case "api-version": {
+        const [url, dir] = positional;
+        if (!url || !dir) { console.error("usage: api-version <versioned-api-url> <outdir> [--bearer T] [--prefixes a,b]"); return 2; }
+        const { probeApiVersion } = await import("./domain/apiVersion.js");
+        const strListV = (v: string | boolean | undefined): string[] | undefined => typeof v === "string" && v.length > 0 ? v.split(",").map(x => x.trim()).filter(Boolean) : undefined;
+        const r = await probeApiVersion({ url, outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, bearer: typeof flags.bearer === "string" ? flags.bearer : undefined, headers: await jobj<Record<string, string>>(flags, "headers"), extraPrefixes: strListV(flags.prefixes), proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout) });
+        out({ probed: r.probed, leaks: r.leaks.length, detail: r.leaks.slice(0, 10), artifacts: r.artifacts });
         return 0;
       }
       case "host-poison": {

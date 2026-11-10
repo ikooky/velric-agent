@@ -34,6 +34,9 @@
 - 竞争面：`race-probe`（TOCTOU：并发单次语义请求全 admitted + 回读状态发散；juice-shop 钱包并发充值 30/30 全入账实测）
 - GraphQL 限额：`graphql-batch`（深度阶梯 + 别名扇出 512；countries.trevorblades 无别名限制实测）
 - SSTI：`ssti-probe`（11 引擎语法金丝雀；49 回显且排除字面回显）
+- 目录面：`ldap-probe`（通配符/过滤器加宽/布尔 OR 语法，行数发散 + LDAP 错误签名）
+- 版本面：`api-version`（v0..v4 匿名 vs 鉴权降级泄漏）
+- 重置接管：`reset-abuse`（静态安全答案喷洒→重置→新凭证登录三段自证；hash 回显离线破解）
 - 投毒面：`host-poison`（Host/XFH 金丝雀反射到服务端生成的绝对 URL — 重置投毒核心）
 - 上传面：`upload-probe`（multipart 11 向量；accepted+exec-risk 双判定，落地 URL 提取）
 - NoSQL 面：`nosqli-probe`（$ne 全命中语义：行数/modified 计数 vs 基线发散；$where 报错签名作 lead）

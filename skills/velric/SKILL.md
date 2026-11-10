@@ -56,6 +56,9 @@ description: |
 | `velric-agent nosqli-probe <url> <outdir> --param id` | NoSQL 注入差分：$ne/$gt/$regex/$exists/$where 运算符 + 类型混淆（[]/null/0/{}），行数/modified 计数发散判定 + Mongo 错误签名。产出 nosqli_cases.json + findings.md（--in body --method PATCH --body-template） |
 | `velric-agent race-probe <url> <outdir>` | TOCTOU 竞争面：并发单次语义请求（券/转账/扣款）N×rounds 全发，admitted vs 服务端自证状态发散判定 check-then-act 窗口。产出 race_cases.json + findings.md（--concurrency/--rounds/--verify-url） |
 | `velric-agent graphql-batch <endpoint> <outdir>` | GraphQL 深度/别名轰炸限额测量：depth 阶梯（1..9）+ 别名扇出阶梯（2/8/32/128/512），服务端拒绝语义分类。产出 graphql_batch.json/md（--query-template） |
+| `velric-agent ldap-probe <url> <outdir> --param uid` | LDAP 注入差分：通配符（\*/前缀\*）/过滤器闭合（\*)）/加宽（\*)(objectClass=\*)）/布尔 OR/AND/null/DN 注入 8 向量，行数发散 + LDAP 错误签名。产出 ldap_cases.json + findings.md |
+| `velric-agent api-version <versioned-api-url> <outdir>` | API 版本鉴权降级：v0..v4 姊妹版本匿名 vs 鉴权对照，旧版丢失鉴权层的数据泄漏。产出 api_version_cases.json + api_version.md |
+| `velric-agent reset-abuse <resetUrl> <loginUrl> <outdir>` | 密码重置滥用：静态安全问题答案喷洒→重置接受→新凭证登录自证完整接管链+hash 回显检测。产出 reset_cases.json + reset_abuse.md |
 | `velric-agent host-poison <url> <outdir>` | Host 头/密码重置投毒面：Host/X-Forwarded-Host/X-Forwarded-Proto/X-Original-Host/Forwarded 等 9 向量金丝雀，检测服务端用攻击者输入构造绝对 URL（重置链接/canonical/跳转）。产出 host_poison.json/md |
 | `velric-agent upload-probe <url> <outdir>` | 文件上传面：内容类型混淆、双扩展名、null 截断、SVG/HTML/JS 载体、polyglot GIF、.htaccess、JSP/SHTML 等 11 向量 multipart 上传，接受语义+exec-risk 判定+存储 URL 提取。产出 upload_cases.json + findings.md |
 | `velric-agent ssti-probe <url> <outdir> --param q` | SSTI 面：11 种引擎语法的 7\*7 金丝雀算术（jinja/twig/freemarker/velocity/smarty/erb/es6/mvel/pebble），49 回显且非字面回显才 confirmed。产出 ssti_cases.json + findings.md |

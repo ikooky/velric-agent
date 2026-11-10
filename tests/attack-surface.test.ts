@@ -279,3 +279,68 @@ describe("host-poison & upload-probe", () => {
     } finally { await new Promise<void>(r => srv.close(() => r())); }
   });
 });
+
+import { probeLdap } from "../src/domain/ldapProbe.js";
+import { probeApiVersion } from "../src/domain/apiVersion.js";
+import { probeResetAbuse } from "../src/domain/resetAbuse.js";
+
+describe("ldap / api-version / reset-abuse", () => {
+  it("ldap: wildcard widens filter (row divergence)", { timeout: 30000 }, async () => {
+    const srv = http.createServer((req, res) => {
+      const uid = new URL(req.url ?? "/", "http://x").searchParams.get("uid") ?? "";
+      if (uid === "*") { res.writeHead(200).end('{"data":[1,2,3]}'); return; }
+      if (uid.includes(")(")) { res.writeHead(400).end("Bad search filter"); return; }
+      res.writeHead(200).end('{"data":[1]}');
+    });
+    await new Promise<void>(r => srv.listen(18322, "127.0.0.1", () => r()));
+    try {
+      const dir = await mkdtemp(join(tmpdir(), "ld-"));
+      const r = await probeLdap({ url: "http://127.0.0.1:18322/dir?uid=alice", param: "uid", outputRoot: join(dir, "o") });
+      expect(r.confirmed.some(c => c.vector === "wildcard")).toBe(true);
+      expect(r.leads.some(l => l.vector === "filter-widen-and")).toBe(true);
+    } finally { await new Promise<void>(r => srv.close(() => r())); }
+  });
+  it("api-version: flags anonymous data on sibling version", { timeout: 30000 }, async () => {
+    const data = JSON.stringify({ data: [{ id: 1, secret: "s3cret-kpi-value" }] });
+    const srv = http.createServer((req, res) => {
+      const m = /^\/api\/(v\d+)\//.exec(req.url ?? "");
+      if (!m) { res.writeHead(404).end(); return; }
+      if (m[1] === "v2") { if (!req.headers.authorization) { res.writeHead(401).end(); return; } res.writeHead(200).end(data); return; }
+      if (m[1] === "v1") { res.writeHead(200).end(data); return; }
+      res.writeHead(404).end();
+    });
+    await new Promise<void>(r => srv.listen(18323, "127.0.0.1", () => r()));
+    try {
+      const dir = await mkdtemp(join(tmpdir(), "av-"));
+      const r = await probeApiVersion({ url: "http://127.0.0.1:18323/api/v2/kpis", outputRoot: join(dir, "o") });
+      expect(r.leaks.some(l => l.version === "api/v1")).toBe(true);
+      expect(r.leaks.every(l => l.version !== "api/v2")).toBe(true);
+    } finally { await new Promise<void>(r => srv.close(() => r())); }
+  });
+  it("reset-abuse: full takeover proof chain", { timeout: 30000 }, async () => {
+    const pass: Record<string, string> = {};
+    const srv = http.createServer((req, res) => {
+      const u = req.url ?? "";
+      let b = ""; req.on("data", c => b += c); req.on("end", () => {
+        const o = JSON.parse(b || "{}") as Record<string, string>;
+        if (u === "/reset") {
+          if (o["answer"] === "fluffy") { pass["v"] = o["new"] ?? ""; res.writeHead(200).end(JSON.stringify({ user: { email: o["email"], password: "deadbeefdeadbeefdeadbeefdeadbeef" } })); return; }
+          res.writeHead(401).end("Wrong answer"); return;
+        }
+        if (u === "/login") {
+          if (pass["v"] && o["password"] === pass["v"]) { res.writeHead(200).end('{"authentication":{"token":"x.y.z"}}'); return; }
+          res.writeHead(401).end(); return;
+        }
+        res.writeHead(404).end();
+      });
+    });
+    await new Promise<void>(r => srv.listen(18324, "127.0.0.1", () => r()));
+    try {
+      const dir = await mkdtemp(join(tmpdir(), "rs-"));
+      const r = await probeResetAbuse({ resetUrl: "http://127.0.0.1:18324/reset", loginUrl: "http://127.0.0.1:18324/login", email: "victim@x.io", answers: ["rex", "bella", "fluffy"], newPass: "NewP@ss1", resetTemplate: '{"email":"{EMAIL}","answer":"{ANSWER}","new":"{NEWPASS}","repeat":"{NEWPASS}"}', loginTemplate: '{"email":"{EMAIL}","password":"{PASS}"}', outputRoot: join(dir, "o") });
+      expect(r.takeover).toBe(true);
+      expect(r.acceptedAnswers).toContain("fluffy");
+      expect(r.hashEcho).toBe("deadbeefdeadbeefdeadbeefdeadbeef");
+    } finally { await new Promise<void>(r => srv.close(() => r())); }
+  });
+});

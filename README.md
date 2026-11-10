@@ -88,6 +88,9 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `x86-disasm` — x86 ELF 指令级反汇编(符号/序言锚定,call 目标标注,可选 capstone-wasm 引擎,缺失自动降级)
 - `race-probe` — TOCTOU 竞争(并发变异 admitted+回读发散)
 - `graphql-batch` — GraphQL 深度/别名轰炸限额
+- `ldap-probe` — LDAP 注入(通配符/过滤器加宽/布尔语法)
+- `api-version` — API 版本鉴权降级泄漏
+- `reset-abuse` — 密码重置接管(答案喷洒→重置→登录自证)
 - `host-poison` — Host 头/重置投毒面(9 向量金丝雀)
 - `upload-probe` — 文件上传面(类型混淆/双扩展/polyglot/.htaccess,11 向量)
 - `ssti-probe` — SSTI 金丝雀(11 引擎语法,49 回显判定)
