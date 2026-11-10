@@ -96,6 +96,11 @@ Usage:
   velric-agent auth-probe <api_merged.txt> <outdir>  anonymous vs auth access mapping
   velric-agent idor-prescreen <params_merged.json> <outdir>  IDOR candidate prescreen
   velric-agent git-restore <baseUrl> <outdir>  rebuild source from leaked .git
+  velric-agent hpp-probe <url> <outdir>   HTTP parameter pollution (duplicate/array/comma strategies, response differential)
+  velric-agent proto-pollute <url> <outdir>   prototype pollution vectors (__proto__/constructor/prototype, JSON body)
+  velric-agent redirect-traverse <url> <outdir>   open redirect + path traversal encodings (Location analysis, /etc/passwd oracle)
+  velric-agent cache-deceive <baseUrl> <outdir>   web cache deception (path suffix tricks) + unkeyed header poisoning surface
+  velric-agent role-escalate <url> <outdir>   privilege escalation params (role/isAdmin/userType field injection differential)
   velric-agent x86-disasm <elf-binary> <outdir>  x86 ELF instruction-level disassembly (symbol-anchored functions, endbr64/prologue heuristics for stripped binaries, call targets, string table)
   velric-agent dex-disasm <file.dex|.apk> <outdir>  Dalvik bytecode disassembly (smali-level, string xrefs, per-class filter, direct APK input)
   velric-agent wasm-disasm <file.wasm> <outdir>  Full WASM disassembly (all opcodes incl. SIMD/sat-trunc/bulk-memory, function-local offsets, call targets resolved to names, callgraph edges)
@@ -1046,6 +1051,49 @@ const dispatch = async (command: string, positional: readonly string[], flags: R
         }
         const r = await disassembleDex({ file: target, outputRoot: dir, maxMethods: num(flags["max-methods"]), classFilter: typeof flags["class-filter"] === "string" ? flags["class-filter"] : undefined });
         out({ file: r.file, bytes: r.bytes, methods: r.methods, disassembled: r.disassembled, sample: r.details.slice(0, 3), topStringXrefs: r.stringXrefs.filter(x => /^(?:https?:|str )/.test(x.str) || x.str.length > 8).slice(0, 20), artifacts: r.artifacts });
+        return 0;
+      }
+      case "hpp-probe": {
+        const [url, dir] = positional;
+        if (!url || !dir) { console.error("usage: hpp-probe <url> <outdir> --params a,b [--expected V]"); return 2; }
+        const { probeHpp } = await import("./domain/hppProbe.js");
+        const strList = (v: string | boolean | undefined): string[] | undefined => typeof v === "string" && v.length > 0 ? v.split(",").map(x => x.trim()).filter(Boolean) : undefined;
+        const r = await probeHpp({ baseUrl: url, outputRoot: dir, params: strList(flags.params) ?? ["id", "q", "page", "redirect", "url"], expectedValue: typeof flags.expected === "string" ? flags.expected : undefined, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout) });
+        out({ probed: r.probed, findings: r.findings.length, detail: r.findings.slice(0, 10), artifacts: r.artifacts });
+        return 0;
+      }
+      case "proto-pollute": {
+        const [url, dir] = positional;
+        if (!url || !dir) { console.error("usage: proto-pollute <url> <outdir> [--method POST] [--body-template '{}']"); return 2; }
+        const { probePrototype } = await import("./domain/protoPollute.js");
+        const r = await probePrototype({ url, method: typeof flags.method === "string" ? flags.method : undefined, bodyTemplate: typeof flags["body-template"] === "string" ? flags["body-template"] : undefined, outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout) });
+        out({ probed: r.probed, findings: r.findings.length, detail: r.findings, artifacts: r.artifacts });
+        return 0;
+      }
+      case "redirect-traverse": {
+        const [url, dir] = positional;
+        if (!url || !dir) { console.error("usage: redirect-traverse <url> <outdir> [--params a,b]"); return 2; }
+        const { probeRedirectTraversal } = await import("./domain/redirectTraverse.js");
+        const strList2 = (v: string | boolean | undefined): string[] | undefined => typeof v === "string" && v.length > 0 ? v.split(",").map(x => x.trim()).filter(Boolean) : undefined;
+        const r = await probeRedirectTraversal({ baseUrl: url, params: strList2(flags.params), outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout) });
+        out({ redirectProbed: r.redirectProbed, externalRedirects: r.redirectFindings.length, traversalProbed: r.traversalProbed, traversalHits: r.traversalFindings.length, redirectFindings: r.redirectFindings.slice(0, 10), artifacts: r.artifacts });
+        return 0;
+      }
+      case "cache-deceive": {
+        const [url, dir] = positional;
+        if (!url || !dir) { console.error("usage: cache-deceive <baseUrl> <outdir> [--private-path /api/me]"); return 2; }
+        const { probeCache } = await import("./domain/cacheDeceive.js");
+        const r = await probeCache({ baseUrl: url, privatePath: typeof flags["private-path"] === "string" ? flags["private-path"] : undefined, outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout) });
+        out({ probed: r.probed, deceptionSuspects: r.deceptionSuspects.length, poisonSurface: r.poisonSurface, artifacts: r.artifacts });
+        return 0;
+      }
+      case "role-escalate": {
+        const [url, dir] = positional;
+        if (!url || !dir) { console.error("usage: role-escalate <url> <outdir> [--method POST] [--body-template '{}'] [--fields a,b]"); return 2; }
+        const { probeRoleEscalation } = await import("./domain/roleEscalate.js");
+        const strList3 = (v: string | boolean | undefined): string[] | undefined => typeof v === "string" && v.length > 0 ? v.split(",").map(x => x.trim()).filter(Boolean) : undefined;
+        const r = await probeRoleEscalation({ url, method: typeof flags.method === "string" ? flags.method : undefined, bodyTemplate: typeof flags["body-template"] === "string" ? flags["body-template"] : undefined, fields: strList3(flags.fields), outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout) });
+        out({ probed: r.probed, findings: r.findings.length, detail: r.findings.slice(0, 15), artifacts: r.artifacts });
         return 0;
       }
       case "x86-disasm": {
