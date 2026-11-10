@@ -87,3 +87,55 @@ describe("instruction-layer disassembly", () => {
     expect(r.disassembled).toBe(0);
   });
 });
+
+import { disassembleX86 } from "../src/domain/x86Disasm.js";
+
+describe("x86 instruction-layer disassembly", () => {
+  it("degrades gracefully on non-ELF garbage", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "x86-"));
+    const f = join(dir, "g.bin");
+    await writeFile(f, Buffer.from("not an elf at all"));
+    const r = await disassembleX86({ file: f, outputRoot: join(dir, "out") });
+    // 非ELF: 无exec段 → 0函数; 引擎在则degraded=false但无函数, 引擎不在则degraded=true — 两者都不崩
+    expect(r.functions).toBe(0);
+    expect(r.disassembled).toBe(0);
+  });
+  it("disassembles hand-built ELF64 with one exec function", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "x86-"));
+    const f = join(dir, "t.elf");
+    // 最小ELF64: ehdr + .text section(code: push rbp; mov rbp,rsp; mov eax,42; ret) + shstrtab
+    const ehsize = 64, shentsize = 64, shnum = 3;
+    const shstr = Buffer.from("\0.text\0.shstrtab\0");
+    const code = Buffer.from([0x55, 0x48, 0x89, 0xE5, 0xB8, 0x2A, 0x00, 0x00, 0x00, 0xC3]);
+    const textOff = ehsize, shstrOff = textOff + code.length;
+    const shoff = shstrOff + shstr.length;
+    const eh = Buffer.alloc(ehsize);
+    eh.write("\x7fELF", 0, "ascii"); eh[4] = 2; eh[5] = 1; eh[6] = 1; // ELF64 LE
+    eh.writeUInt16LE(3, 16); // EM_X86_64
+    eh.writeUInt32LE(1, 20); // ET_REL? use ET_EXEC
+    eh.writeUInt16LE(ehsize, 52); // e_ehsize @ 0x34
+    eh.writeUInt16LE(shentsize, 58); // e_shentsize @ 0x3a
+    eh.writeUInt16LE(shnum, 60); // e_shnum @ 0x3c
+    eh.writeUInt16LE(shnum - 1, 62); // e_shstrndx @ 0x3e
+    eh.writeBigUInt64LE(BigInt(shoff), 40); // e_shoff 0x28
+    eh.writeBigUInt64LE(0x1000n, 24); // e_entry
+    const sh = Buffer.alloc(shentsize * shnum);
+    // [0] NULL, [1] .text (PROGBITS|EXEC), [2] .shstrtab
+    sh.writeUInt32LE(1, shentsize * 1 + 0); // name off ".text"
+    sh.writeUInt32LE(1, shentsize * 1 + 4); // PROGBITS
+    sh.writeBigUInt64LE(0x1000n, shentsize * 1 + 0x10); // addr
+    sh.writeUInt32LE(textOff, shentsize * 1 + 0x18);
+    sh.writeBigUInt64LE(BigInt(code.length), shentsize * 1 + 0x20);
+    sh.writeBigUInt64LE(0x4n, shentsize * 1 + 0x08); // SHF_EXECINSTR
+    sh.writeUInt32LE(7, shentsize * 2 + 0); // name off ".shstrtab"
+    sh.writeUInt32LE(3, shentsize * 2 + 4); // STRTAB
+    sh.writeUInt32LE(shstrOff, shentsize * 2 + 0x18);
+    sh.writeBigUInt64LE(BigInt(shstr.length), shentsize * 2 + 0x20);
+    await writeFile(f, Buffer.concat([eh, code, shstr, sh]));
+    const r = await disassembleX86({ file: f, outputRoot: join(dir, "out") });
+    if (r.engine === "none") return; // capstone未装的机器上走降级路径
+    expect(r.functions).toBeGreaterThanOrEqual(1);
+    const all = r.details.flatMap(fn => fn.instrs);
+    expect(all.some(i => i.mnemonic === "mov" && i.opStr.includes("0x2a"))).toBe(true);
+  });
+});

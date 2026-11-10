@@ -96,6 +96,7 @@ Usage:
   velric-agent auth-probe <api_merged.txt> <outdir>  anonymous vs auth access mapping
   velric-agent idor-prescreen <params_merged.json> <outdir>  IDOR candidate prescreen
   velric-agent git-restore <baseUrl> <outdir>  rebuild source from leaked .git
+  velric-agent x86-disasm <elf-binary> <outdir>  x86 ELF instruction-level disassembly (symbol-anchored functions, endbr64/prologue heuristics for stripped binaries, call targets, string table)
   velric-agent dex-disasm <file.dex|.apk> <outdir>  Dalvik bytecode disassembly (smali-level, string xrefs, per-class filter, direct APK input)
   velric-agent wasm-disasm <file.wasm> <outdir>  Full WASM disassembly (all opcodes incl. SIMD/sat-trunc/bulk-memory, function-local offsets, call targets resolved to names, callgraph edges)
   velric-agent elf-analyze <binary> <outdir>   ELF static analysis (sections/segments/symbols/imports, hardening: PIE RELRO NX canary stripped, dynamic deps, build-id)
@@ -1045,6 +1046,17 @@ const dispatch = async (command: string, positional: readonly string[], flags: R
         }
         const r = await disassembleDex({ file: target, outputRoot: dir, maxMethods: num(flags["max-methods"]), classFilter: typeof flags["class-filter"] === "string" ? flags["class-filter"] : undefined });
         out({ file: r.file, bytes: r.bytes, methods: r.methods, disassembled: r.disassembled, sample: r.details.slice(0, 3), topStringXrefs: r.stringXrefs.filter(x => /^(?:https?:|str )/.test(x.str) || x.str.length > 8).slice(0, 20), artifacts: r.artifacts });
+        return 0;
+      }
+      case "x86-disasm": {
+        const [file, dir] = positional;
+        if (!file || !dir) {
+          console.error("usage: x86-disasm <elf-binary> <outdir> [--max-functions N] [--max-instrs N]");
+          return 2;
+        }
+        const { disassembleX86 } = await import("./domain/x86Disasm.js");
+        const r = await disassembleX86({ file, outputRoot: dir, maxFunctions: num(flags["max-functions"]), maxInstrs: num(flags["max-instrs"]) });
+        out({ file: r.file, engine: r.engine, arch: r.arch, degraded: r.degraded, reason: r.reason, bytes: r.bytes, functions: r.functions, disassembled: r.disassembled, calls: r.importsUsed.slice(0, 40), topFunctions: r.details.map(f => ({ name: f.name, address: f.address, size: f.size, instrs: f.instrs.length })), artifacts: r.artifacts });
         return 0;
       }
       case "wasm-disasm": {

@@ -19,7 +19,7 @@
 - `sourcemaps` 生产 .map 泄漏检测
 - `deobfuscate` 字符串数组/控制流平坦化还原后再做后续分析
 - `vm-analyze` 语料命中风控/自定义 VM（IIFE+状态数组+位解码 opcode 分发）时：先跑它拿 opcode 表/常量表/dispatch 语义，再定位导出函数注册点；opcode 表是后续人工追踪调用链的底图
-- 二进制目标直接进静态逆向：ELF→`elf-analyze`（加固判定+导入面），WASM→`wasm-analyze`（符号恢复），APK/DEX→`dex-analyze`（类清单+字符串情报）；三者都是纯解析零外部依赖，产出 json+md 双格式；指令层深挖：WASM→`wasm-disasm`（全量反汇编+调用图），DEX→`dex-disasm`（smali 级方法体+字符串 xref，--class-filter 聚焦目标类）
+- 二进制目标直接进静态逆向：ELF→`elf-analyze`（加固判定+导入面），WASM→`wasm-analyze`（符号恢复），APK/DEX→`dex-analyze`（类清单+字符串情报）；三者都是纯解析零外部依赖，产出 json+md 双格式；指令层深挖：WASM→`wasm-disasm`（全量反汇编+调用图），DEX→`dex-disasm`（smali 级方法体+字符串 xref，--class-filter 聚焦目标类），x86 ELF→`x86-disasm`（符号/序言锚定函数级反汇编，call 目标符号标注；无 capstone-wasm 时自动降级）
 
 ## Phase 3 — 运行时
 - `runtime`(需 Chromium)抓真实 XHR/fetch/WS 帧;无浏览器时静态面兜底
