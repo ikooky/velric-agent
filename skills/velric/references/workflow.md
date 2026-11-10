@@ -31,6 +31,9 @@
 - 注入面：`sqli-probe`（error-oracle/boolean-blind/有界 time-blind/--auth-bypass 认证绕过；body 型配 --body-template）
 - 写 IDOR：`idor-deep --write`（变异他人资源，服务器 modified 计数自证；body-ID 门禁在显式 --write 时放开）
 - 2FA 面：`otp-brute`（节流/锁定缺失测量；高限额节流器需拉高 --samples 才可见）
+- 竞争面：`race-probe`（TOCTOU：并发单次语义请求全 admitted + 回读状态发散；juice-shop 钱包并发充值 30/30 全入账实测）
+- GraphQL 限额：`graphql-batch`（深度阶梯 + 别名扇出 512；countries.trevorblades 无别名限制实测）
+- SSTI：`ssti-probe`（11 引擎语法金丝雀；49 回显且排除字面回显）
 - NoSQL 面：`nosqli-probe`（$ne 全命中语义：行数/modified 计数 vs 基线发散；$where 报错签名作 lead）
 - 凭证面：`cred-brute`（语义分类喷洒；安全问题答案爆破用 body-template 适配 reset 端点）
 - 2FA secret 泄漏：`otp-brute` 自动附带检测 status/setup 端点明文 totpSecret（命中后 base32 secret + RFC6238 即可伪造 TOTP）

@@ -96,6 +96,9 @@ Usage:
   velric-agent auth-probe <api_merged.txt> <outdir>  anonymous vs auth access mapping
   velric-agent idor-prescreen <params_merged.json> <outdir>  IDOR candidate prescreen
   velric-agent git-restore <baseUrl> <outdir>  rebuild source from leaked .git
+  velric-agent ssti-probe <url> <outdir> --param q   SSTI canary arithmetic (11 engine grammars, 49-reflection verdict)
+  velric-agent graphql-batch <endpoint> <outdir>   GraphQL depth/alias-bombing limit measurement
+  velric-agent race-probe <url> <outdir>   TOCTOU race condition (concurrent mutation admission + read-back state divergence)
   velric-agent cred-brute <url> <outdir> --pairs-file F   credential spray (semantic classification: auth-ok/bad-cred/429/lockout/captcha)
   velric-agent nosqli-probe <url> <outdir> --param id   NoSQL operator injection ($ne/$gt/$regex/$where, type juggling)
   velric-agent otp-brute <url> <outdir> --body-template T   OTP/2FA verify rate-limit & lockout measurement (bounded wrong-code sample)
@@ -1061,6 +1064,30 @@ const dispatch = async (command: string, positional: readonly string[], flags: R
         }
         const r = await disassembleDex({ file: target, outputRoot: dir, maxMethods: num(flags["max-methods"]), classFilter: typeof flags["class-filter"] === "string" ? flags["class-filter"] : undefined });
         out({ file: r.file, bytes: r.bytes, methods: r.methods, disassembled: r.disassembled, sample: r.details.slice(0, 3), topStringXrefs: r.stringXrefs.filter(x => /^(?:https?:|str )/.test(x.str) || x.str.length > 8).slice(0, 20), artifacts: r.artifacts });
+        return 0;
+      }
+      case "ssti-probe": {
+        const [url, dir] = positional;
+        if (!url || !dir) { console.error("usage: ssti-probe <url> <outdir> --param q [--in query|body] [--body-template T] [--bearer T]"); return 2; }
+        const { probeSsti } = await import("./domain/sstiProbe.js");
+        const r = await probeSsti({ url, param: String(flags.param ?? "q"), in: typeof flags.in === "string" ? (flags.in === "body" ? "body" : "query") : "query", method: typeof flags.method === "string" ? flags.method : undefined, bodyTemplate: typeof flags["body-template"] === "string" ? flags["body-template"] : undefined, outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, bearer: typeof flags.bearer === "string" ? flags.bearer : undefined, headers: await jobj<Record<string, string>>(flags, "headers"), proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout) });
+        out({ probed: r.probed, confirmed: r.confirmed.length, detail: r.confirmed, artifacts: r.artifacts });
+        return 0;
+      }
+      case "graphql-batch": {
+        const [url, dir] = positional;
+        if (!url || !dir) { console.error("usage: graphql-batch <endpoint> <outdir> [--query-template 'query { x {NEST} }'] [--max-depth N]"); return 2; }
+        const { probeGraphqlBatch } = await import("./domain/graphqlBatch.js");
+        const r = await probeGraphqlBatch({ url, queryTemplate: typeof flags["query-template"] === "string" ? flags["query-template"] : undefined, maxDepth: num(flags["max-depth"]), outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, headers: await jobj<Record<string, string>>(flags, "headers"), proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout) });
+        out({ probed: r.probed, deepestDepth: Math.max(...r.depthLadder.filter(d => !d.rejected).map(d => d.depth), 0), maxAlias: Math.max(...r.aliasLadder.filter(a => !a.rejected).map(a => a.aliases), 0), unboundedDepth: r.unboundedDepth, unboundedAliases: r.unboundedAliases, depthLadder: r.depthLadder, artifacts: r.artifacts });
+        return 0;
+      }
+      case "race-probe": {
+        const [url, dir] = positional;
+        if (!url || !dir) { console.error("usage: race-probe <url> <outdir> [--method POST] [--body JSON] [--verify-url U] [--concurrency N] [--rounds N] [--bearer T]"); return 2; }
+        const { probeRace } = await import("./domain/raceProbe.js");
+        const r = await probeRace({ url, method: typeof flags.method === "string" ? flags.method : undefined, body: typeof flags.body === "string" ? flags.body : undefined, verifyUrl: typeof flags["verify-url"] === "string" ? flags["verify-url"] : undefined, outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, bearer: typeof flags.bearer === "string" ? flags.bearer : undefined, headers: await jobj<Record<string, string>>(flags, "headers"), proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout), concurrency: num(flags.concurrency), rounds: num(flags.rounds) });
+        out({ fired: r.fired, admitted: r.admitted, rejected: r.rejected, distinctBodies: r.distinctSuccessBodies, raceSuspected: r.raceSuspected, evidence: r.evidence, rounds: r.rounds, stateChanged: r.verifyBefore !== r.verifyAfter, artifacts: r.artifacts });
         return 0;
       }
       case "cred-brute": {

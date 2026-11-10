@@ -205,3 +205,40 @@ describe("nosqli & cred-brute", () => {
     } finally { await new Promise<void>(r => srv.close(() => r())); }
   });
 });
+
+import { probeRace } from "../src/domain/raceProbe.js";
+import { probeSsti } from "../src/domain/sstiProbe.js";
+
+describe("race-probe & ssti-probe", () => {
+  it("race: detects all-admitted concurrent mutations", { timeout: 30000 }, async () => {
+    let admitted = 0;
+    const srv = http.createServer((req, res) => {
+      // 模拟无锁: 全部接受
+      admitted++;
+      res.writeHead(200).end('{"ok":true}');
+    });
+    await new Promise<void>(r => srv.listen(18310, "127.0.0.1", () => r()));
+    try {
+      const dir = await mkdtemp(join(tmpdir(), "rc-"));
+      const r = await probeRace({ url: "http://127.0.0.1:18310/redeem", method: "POST", body: '{"code":"X"}', concurrency: 5, rounds: 2, outputRoot: join(dir, "o") });
+      expect(r.admitted).toBe(10);
+      expect(r.raceSuspected).toBe(true);
+    } finally { await new Promise<void>(r => srv.close(() => r())); }
+  });
+  it("ssti: flags evaluated canary (49) without literal echo", { timeout: 30000 }, async () => {
+    const srv = http.createServer((req, res) => {
+      const q = new URL(req.url ?? "/", "http://x");
+      const v = q.searchParams.get("t") ?? "";
+      if (v.includes("{{7*7}}")) { res.writeHead(200).end('rendered: 49'); return; }
+      res.writeHead(200).end(`echo ${v}`);
+    });
+    await new Promise<void>(r => srv.listen(18311, "127.0.0.1", () => r()));
+    try {
+      const dir = await mkdtemp(join(tmpdir(), "ss-"));
+      const r = await probeSsti({ url: "http://127.0.0.1:18311/render?t=x", param: "t", outputRoot: join(dir, "o") });
+      expect(r.confirmed.some(c => c.payload === "{{7*7}}")).toBe(true);
+      // echo型(字面回显)不confirmed:
+      expect(r.confirmed.every(c => !c.literalEcho)).toBe(true);
+    } finally { await new Promise<void>(r => srv.close(() => r())); }
+  });
+});

@@ -86,6 +86,9 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `wasm-disasm` — WASM 完整反汇编(全 opcode 含 SIMD,call 目标名解析,全模块调用图)
 - `dex-disasm` — Dalvik 字节码反汇编(smali 级,字符串交叉引用,类过滤)
 - `x86-disasm` — x86 ELF 指令级反汇编(符号/序言锚定,call 目标标注,可选 capstone-wasm 引擎,缺失自动降级)
+- `race-probe` — TOCTOU 竞争(并发变异 admitted+回读发散)
+- `graphql-batch` — GraphQL 深度/别名轰炸限额
+- `ssti-probe` — SSTI 金丝雀(11 引擎语法,49 回显判定)
 - `nosqli-probe` — NoSQL 注入($ne/$gt/$regex/$where 运算符+类型混淆,计数发散判定)
 - `cred-brute` — 凭证爆破(语义分类:auth-ok/bad-cred/429/锁定/captcha)
 - `otp-brute` — 2FA 爆破面+totpSecret 泄漏检测

@@ -54,6 +54,9 @@ description: |
 | `velric-agent dex-disasm <file.dex或.apk> <outdir>` | Dalvik 字节码反汇编（smali 级）：每方法指令流+寄存器+调用解析、字符串交叉引用（哪个方法引用哪个字符串）、类过滤。产出 dex_disasm.smali + dex_string_xrefs.json（--class-filter RE / --max-methods N） |
 | `velric-agent x86-disasm <elf> <outdir>` | x86 ELF 指令级反汇编：符号表锚定函数（stripped 二进制走 entry+endbr64/push-rbp 序言启发式）、call 目标符号标注、字符串表。产出 x86_disasm.txt + x86_disasm.json（--max-functions N / --max-instrs N）。引擎为 capstone-wasm（可选依赖，缺失时降级输出字符串表并明示） |
 | `velric-agent nosqli-probe <url> <outdir> --param id` | NoSQL 注入差分：$ne/$gt/$regex/$exists/$where 运算符 + 类型混淆（[]/null/0/{}），行数/modified 计数发散判定 + Mongo 错误签名。产出 nosqli_cases.json + findings.md（--in body --method PATCH --body-template） |
+| `velric-agent race-probe <url> <outdir>` | TOCTOU 竞争面：并发单次语义请求（券/转账/扣款）N×rounds 全发，admitted vs 服务端自证状态发散判定 check-then-act 窗口。产出 race_cases.json + findings.md（--concurrency/--rounds/--verify-url） |
+| `velric-agent graphql-batch <endpoint> <outdir>` | GraphQL 深度/别名轰炸限额测量：depth 阶梯（1..9）+ 别名扇出阶梯（2/8/32/128/512），服务端拒绝语义分类。产出 graphql_batch.json/md（--query-template） |
+| `velric-agent ssti-probe <url> <outdir> --param q` | SSTI 面：11 种引擎语法的 7\*7 金丝雀算术（jinja/twig/freemarker/velocity/smarty/erb/es6/mvel/pebble），49 回显且非字面回显才 confirmed。产出 ssti_cases.json + findings.md |
 | `velric-agent cred-brute <url> <outdir> --pairs-file F` | 凭证爆破：有界字典喷洒 + 逐响应语义分类（auth-ok/bad-cred/429/锁定/CAPTCHA），节流存在性汇总。产出 cred_cases.json + cred_brute.md（--body-template '{USER}/{PASS}' --delay-ms） |
 | `velric-agent otp-brute`（增强） | 附带 2FA secret 泄漏检测：探 verify 端点同时检查 setup/status 姐妹端点明文回显 totpSecret（base32 特征），命中即输出可伪造 TOTP 的绕过素材 |
 | `velric-agent value-abuse <url> <outdir> --body-template '{"quantity":1}'` | 业务逻辑值域滥用：负数/零/小数/溢出/字符串数值/科学计数法 7 变体注入，接受+回显+**回读持久化验证**三段确认。产出 value_abuse_cases.json + value_abuse.md（--verify-url 回读 / --bearer T） |
