@@ -481,4 +481,23 @@ export const PlatformHandlers: Record<string, (ctx: Ctx) => Promise<number>> = {
   out({ base: r.base, exposed: r.endpoints.filter((e) => e.status === 200), secrets: r.secrets, routes: r.routes, rce: r.rce, artifacts: r.artifacts });
   return r.endpoints.some((e) => e.status === 200) ? 0 : 1;
   },
+
+  "admin-rce": async (ctx) => {
+    const { positional, flags, out, num, resolveProxy } = ctx;
+  const [url, panel, user, pass, dir] = positional;
+  if (!url || !panel || !user || !pass || !dir) { console.error("usage: admin-rce <baseUrl> <panel> <user> <pass> <outdir> [--command id]"); return 2; }
+  const { exploitAdmin } = await import("../../domain/adminRce.js");
+  const r = await exploitAdmin({ baseUrl: url, panel: panel as never, user, pass, outputRoot: dir, proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout), command: typeof flags.command === "string" ? flags.command : undefined, keep: flags.keep === true });
+  out({ panel: r.panel, authenticated: r.authenticated, actions: r.actions, loot: r.loot, artifacts: r.artifacts });
+  return r.authenticated ? 0 : 1;
+  },
+  "actuator-rce": async (ctx) => {
+    const { positional, flags, out, num, jobj, resolveProxy } = ctx;
+  const [url, dir] = positional;
+  if (!url || !dir) { console.error("usage: actuator-rce <baseUrl> <outdir> [--shutdown] [--bearer T]"); return 2; }
+  const { exploitActuator } = await import("../../domain/actuatorRce.js");
+  const r = await exploitActuator({ baseUrl: url, outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, bearer: typeof flags.bearer === "string" ? flags.bearer : undefined, headers: await jobj<Record<string, string>>(flags, "headers"), proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout), maxHeapBytes: num(flags["max-heap"]), shutdown: flags.shutdown === true });
+  out({ base: r.base, actions: r.actions, loot: r.loot, artifacts: r.artifacts });
+  return r.actions.length ? 0 : 1;
+  },
 };

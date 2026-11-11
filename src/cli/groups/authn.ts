@@ -124,4 +124,23 @@ export const AuthnHandlers: Record<string, (ctx: Ctx) => Promise<number>> = {
   out({ honest: r.honest, takeoverRisk: r.takeoverRisk, accepted: r.vectors.filter((v) => v.verdict === "accepted"), aux: r.aux, artifacts: r.artifacts });
   return r.takeoverRisk ? 0 : 1;
   },
+
+  "2fa-bypass": async (ctx) => {
+    const { positional, flags, out, num, jobj, resolveProxy } = ctx;
+  const [login, verify, protectedUrl, dir] = positional;
+  if (!login || !verify || !protectedUrl || !dir) { console.error("usage: 2fa-bypass <loginUrl> <verifyUrl> <protectedUrl> <outdir> --body-template T --user U --pass P [--code C]"); return 2; }
+  const { probeTwoFaBypass } = await import("../../domain/twoFaBypass.js");
+  const r = await probeTwoFaBypass({ loginUrl: login, verifyUrl: verify, protectedUrl, bodyTemplate: String(flags["body-template"] ?? "{}"), verifyTemplate: typeof flags["verify-template"] === "string" ? flags["verify-template"] : undefined, user: String(flags.user ?? ""), pass: String(flags.pass ?? ""), code: typeof flags.code === "string" ? flags.code : undefined, outputRoot: dir, proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout), headers: await jobj<Record<string, string>>(flags, "headers") });
+  out({ otpStepDetected: r.otpStepDetected, exploitable: r.exploitable, probes: r.probes, artifacts: r.artifacts });
+  return r.exploitable ? 0 : 1;
+  },
+  "reset-deep": async (ctx) => {
+    const { positional, flags, out, num, jobj, resolveProxy } = ctx;
+  const [requestUrl, dir] = positional;
+  if (!requestUrl || !dir || typeof flags.email !== "string") { console.error("usage: reset-deep <requestUrl> <outdir> --body-template T --email E [--token T --submit-url U --login-url L]"); return 2; }
+  const { probeResetDeep } = await import("../../domain/resetDeep.js");
+  const r = await probeResetDeep({ requestUrl, bodyTemplate: String(flags["body-template"] ?? "{}"), email: flags.email, outputRoot: dir, token: typeof flags.token === "string" ? flags.token : undefined, submitUrl: typeof flags["submit-url"] === "string" ? flags["submit-url"] : undefined, loginUrl: typeof flags["login-url"] === "string" ? flags["login-url"] : undefined, proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout), headers: await jobj<Record<string, string>>(flags, "headers") });
+  out({ baseline: r.baseline, tokenShape: r.tokenShape, refererHosts: r.refererHosts, probes: r.probes, artifacts: r.artifacts });
+  return r.probes.some((p) => p.verdict === "reusable" || p.verdict === "predictable" || p.verdict === "poison-suspect") ? 0 : 1;
+  },
 };

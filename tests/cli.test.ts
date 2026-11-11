@@ -31,7 +31,7 @@ describe("CLI registry alignment", () => {
   });
   it("no group file was lost in the cli.ts split", async () => {
     // The old monolith had exactly 104 dispatch cases; the registry must carry them all.
-    expect(COMMAND_INDEX.size).toBe(111);
+    expect(COMMAND_INDEX.size).toBe(119);
     const legacy = await readFile(new URL("../src/cli.ts", import.meta.url), "utf8");
     expect(legacy.trim()).toBe('export { runCli, dispatch } from "./cli/index.js";');
   });

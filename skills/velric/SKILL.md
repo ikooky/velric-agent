@@ -26,7 +26,7 @@ description: |
 
 ### 侦察 — 资产与面测绘
 
-先跑 fingerprint 判 WAF/类型；subdomains/port-scan/wayback 圈资产；paths/dir-fuzz/info-leak 摸面。
+先跑 fingerprint 判 WAF/类型；subdomains/port-scan/wayback 圈资产；paths/dir-fuzz/info-leak 摸面；cloud-storage/runtime-config-leak 拿桶与运行时配置。
 
 | 命令 | 用途 |
 |------|------|
@@ -42,6 +42,8 @@ description: |
 | `velric-agent dir-fuzz <outdir> (--url URL [--wordlist-file F] | --preset sensitive|backups --base URL)` | wordlist fuzzing |
 | `velric-agent nuclei-lite <baseUrl> <outdir>` | template matcher (panels/leaks) |
 | `velric-agent admin-surface <baseUrl> <outdir>` | admin/panel surface map |
+| `velric-agent cloud-storage <buckets> <outdir>` | anonymous S3/GCS/Azure bucket list/read/write (--write) |
+| `velric-agent runtime-config-leak <baseUrl> <outdir>` | SPA runtime config leakage (config.js/.env, secret classes) |
 | `velric-agent info-leak <baseUrl> <outdir>` | information disclosure (paths/stack/banners/secrets) |
 | `velric-agent coverage <baseUrl> <outdir>` | interactive coverage enumeration |
 | `velric-agent site-map <baseUrl> <outdir>` | structured site map |
@@ -83,7 +85,7 @@ runtime 抓真实 XHR/WS；merge-params 汇参数矩阵；ws-schema/proto-decode
 
 ### 逆向 — 静态与指令层
 
-Electron: asar-unpack 解包+授权校验点定位；JS: vm-analyze（自定义 VM opcode）→ dom-sinks/analyze-gates；二进制: elf/wasm/dex-analyze 定性 → wasm/dex/x86-disasm 指令级 + xref。
+Electron: asar-unpack 定位 → asar-patch 改写重打包；JS: vm-analyze（自定义 VM opcode）→ dom-sinks/analyze-gates；二进制: elf/wasm/dex-analyze 定性 → wasm/dex/x86-disasm 指令级 + xref。
 
 | 命令 | 用途 |
 |------|------|
@@ -96,6 +98,7 @@ Electron: asar-unpack 解包+授权校验点定位；JS: vm-analyze（自定义 
 | `velric-agent wasm-disasm <file.wasm> <outdir>` | full WASM disassembly (all opcodes, callgraph) |
 | `velric-agent dex-disasm <file.dex|.apk> <outdir>` | Dalvik bytecode disassembly (smali-level, string xrefs) |
 | `velric-agent asar-unpack <app.asar> <outdir>` | Electron asar extract + license-check localization (--list-only) |
+| `velric-agent asar-patch <app.asar> <out.asar> --patches-file F` | asar text patch + repack (crack the license check) |
 
 ### 注入 — 语法与参数
 
@@ -113,7 +116,7 @@ Electron: asar-unpack 解包+授权校验点定位；JS: vm-analyze（自定义 
 
 ### 认证 — 凭证与令牌
 
-cred-brute 语义分类喷洒；pass-policy/reset-abuse 弱密码与重置接管；jwt-inspect/jwt-attack/jwks-forge 三层 JWT 面；admin-creds 默认口令拿后台；oauth-bypass 重定向劫持。
+cred-brute 语义分类喷洒；pass-policy/reset-abuse 弱密码与重置接管；jwt-inspect/jwt-attack/jwks-forge 三层 JWT 面；admin-creds 默认口令拿后台；oauth-bypass 重定向劫持；2fa-bypass/reset-deep 第二因子与重置深度。
 
 | 命令 | 用途 |
 |------|------|
@@ -121,6 +124,8 @@ cred-brute 语义分类喷洒；pass-policy/reset-abuse 弱密码与重置接管
 | `velric-agent otp-brute <url> <outdir> --body-template T` | OTP/2FA rate-limit & lockout measurement (+2FA secret leak detection) |
 | `velric-agent pass-policy <url> <outdir> --body-template T` | password policy surface (10-tier weak acceptance) |
 | `velric-agent reset-abuse <resetUrl> <loginUrl> <outdir>` | static security-answer takeover (spray → reset → login proof) |
+| `velric-agent 2fa-bypass <loginUrl> <verifyUrl> <protectedUrl> <outdir>` | 2FA step skip / OTP replay |
+| `velric-agent reset-deep <requestUrl> <outdir> --body-template T --email E` | reset token shape/reuse/host-poison/alias depth |
 | `velric-agent jwt-inspect <outdir>` | JWT decode + weak-secret crack |
 | `velric-agent jwt-attack <token> <endpoint> <outdir>` | JWT attack suite (alg confusion/weak key/kid, --public-key-file) |
 | `velric-agent admin-creds <baseUrl> <outdir>` | vendor default-credential takeover on admin panels (10 panels, marker-verified) |
@@ -129,11 +134,12 @@ cred-brute 语义分类喷洒；pass-policy/reset-abuse 弱密码与重置接管
 
 ### 授权 — 越权与访问控制
 
-auth-probe 画鉴权面 → idor-prescreen/idor-deep（读写 IDOR）→ authz-replay/role-matrix 多角色差分 → role-escalate/mass-assign/api-version 提权面。
+auth-probe 画鉴权面 → path-auth-bypass 路径混淆 → idor-prescreen/idor-deep（读写 IDOR）→ authz-replay/role-matrix 多角色差分 → role-escalate/mass-assign/api-version 提权面。
 
 | 命令 | 用途 |
 |------|------|
 | `velric-agent auth-probe <api_merged.txt> <outdir>` | anonymous vs auth access mapping |
+| `velric-agent path-auth-bypass <protectedUrl> <outdir>` | path-confusion filter bypass (20 vectors, soft-404 calibrated) |
 | `velric-agent idor-prescreen <params_merged.json> <outdir>` | IDOR candidate prescreen |
 | `velric-agent idor-deep <outdir> --endpoints[-file] JSON` | three-reference IDOR oracle probing (--write for write-IDOR) |
 | `velric-agent authz-replay <recordRoot> <outdir> --roles[-file] JSON` | authz differential replay (live-baseline verdicts) |
@@ -161,7 +167,7 @@ value-abuse 负数/溢出注入 + 回读持久化；race-probe TOCTOU 并发自�
 
 ### 平台 — 管道与证据
 
-auto/auto-batch 确定性管道；hunt 循环台账；waf-adapt/oob-confirm/smuggle/oidc/cors 深化工具；service-unauth/actuator-exploit 后场直取（未授权基础设施 / Actuator 挖密钥+RCE）；gen-report/save-evidence 收尾。
+auto/auto-batch 确定性管道；hunt 循环台账；waf-adapt/oob-confirm/smuggle/oidc/cors 深化工具；service-unauth/actuator-exploit/actuator-rce 后场直取（未授权设施 / Actuator 挖密钥+Jolokia+RCE）；admin-rce 登录后利用；gen-report/save-evidence 收尾。
 
 | 命令 | 用途 |
 |------|------|
@@ -178,6 +184,8 @@ auto/auto-batch 确定性管道；hunt 循环台账；waf-adapt/oob-confirm/smug
 | `velric-agent export-findings <f> <dir> <fmt>` | findings csv/json/md/sarif export |
 | `velric-agent service-unauth <host> <outdir>` | unauthenticated infra sweep (Redis/Docker/etcd/k8s/ES/prom/Nacos...) |
 | `velric-agent actuator-exploit <baseUrl> <outdir>` | Spring Actuator: env/heapdump secret mining + gateway SpEL RCE |
+| `velric-agent admin-rce <baseUrl> <panel> <user> <pass> <outdir>` | post-login exploit (Tomcat WAR shell/Jenkins console/panel loot) |
+| `velric-agent actuator-rce <baseUrl> <outdir>` | Jolokia sysprops/env-write/sessions/heap token extraction |
 | `velric-agent scan-platform <dir> <action>` | native scan platform (projects/tasks/pipeline/assets) |
 | `velric-agent waf-adapt <url> <payload> <outdir>` | payload transport adaptation vs WAF (--in query|body|header|path) |
 | `velric-agent oob-confirm <url> <outdir> --payloads a,b` | OOB callback confirmation (interactsh) |

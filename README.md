@@ -18,6 +18,8 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `wayback` — 历史端点回收
 - `paths` — 68 条敏感路径字典，soft-404 校准 + 通配路由识别 + catch-all 聚簇；`paths preset=backups` 衔接 backup-unpack 成完整链
 - `dir-fuzz` — 词表内容发现(FUZZ 关键字+soft-404 自动校准+扩展名变异+递归)
+- `cloud-storage` — 匿名云桶(S3/GCS/Azure 列举+对象读+可选写探针)
+- `runtime-config-leak` — SPA 运行时配置泄漏(config.js/.env 等 20 路径,Stripe/Firebase/Supabase 等密钥类别)
 - `info-leak` — 信息泄漏面(22 敏感路径/堆栈/banner/inline secret，三档严重度，SPA fallback 校准)
 - `admin-surface` — 管理面板面测绘(29 条路径探测+指纹)
 - `nuclei-lite` — 模板匹配(暴露面板/泄漏特征)
@@ -58,6 +60,7 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `wasm-disasm` — WASM 完整反汇编(全 opcode 含 SIMD/饱和截断/批量内存,call 目标名解析,全模块调用图)
 - `dex-disasm` — Dalvik 字节码反汇编(smali 级,字符串交叉引用,类过滤,直接吃 APK)
 - `x86-disasm` — x86 ELF 指令级反汇编(符号/序言锚定,call 目标标注,可选 capstone-wasm 引擎,缺失自动降级)
+- `asar-patch` — asar 文本替换+重打包(改授权比较/激活地址,偏移重算)
 - `asar-unpack` — Electron asar 解包(边界校验+去重跳过)与授权校验点定位(local/remote 分类、更新源、混淆度)
 
 **注入 — 语法与参数**
@@ -73,6 +76,8 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `cred-brute` — 凭证爆破(语义分类:auth-ok/bad-cred/429/锁定/captcha)
 - `otp-brute` — OTP/2FA 爆破面(节流/锁定缺失测量)+totpSecret 泄漏检测(RFC6238 伪造素材)
 - `pass-policy` — 密码策略面(空/单字符/top 常用 10 档弱密码接受度)
+- `2fa-bypass` — 2FA 步骤跳过/OTP 重放(预 OTP 会话直取+信任 cookie 属性)
+- `reset-deep` — 重置 token 深度(形态/熵/时间戳、复用、Host 投毒、别名、Referer 泄漏面)
 - `reset-abuse` — 密码重置接管(答案喷洒→重置→新凭证登录三段自证+hash 回显)
 - `jwt-inspect` — JWT 解码 + HS256 弱密钥爆破
 - `jwt-attack` — JWT 攻击套件(alg 混淆/RS-HS/弱 HMAC 密钥/kid 注入/claim 篡改,--public-key-file)
@@ -81,6 +86,7 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `oauth-bypass` — OAuth redirect_uri 劫持矩阵(11 变体)+PKCE 降级,IdP 自动 302 才算 accepted
 
 **授权 — 越权与访问控制**
+- `path-auth-bypass` — 路径混淆鉴权绕过(20 向量:点段/矩阵参/编码分隔/NUL/X-Original-URL,soft-404 校准)
 - `auth-probe` — 匿名 vs 带 cookie 双探，产出鉴权面清单(含边缘阻断识别)
 - `idor-prescreen` — id 类参数数值邻域差分预筛(只读)
 - `idor-deep` — 三参照 IDOR 判定(A/B/无关对象,身份字段确认+编码 ID 变体;`--write` 写 IDOR 模式,服务器写计数自证)
@@ -113,6 +119,8 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `evidence` / `evidence-bind` — 证据存储(sha256 寻址+跨漏洞去重) / 绑定生命周期(角色/版本冲突拒绝/md-zip 导出)
 - `service-unauth` — 未授权基础设施直取(Redis INFO/Docker API/etcd/Consul/K8s/ES/Prometheus/Nacos/RabbitMQ/CouchDB/MinIO)
 - `actuator-exploit` — Spring Actuator 深打:env/configprops/heapdump 挖凭据 + gateway SpEL 路由注入 RCE(自动清理)
+- `admin-rce` — 登录后利用(Tomcat WAR 部署 JSP shell+清理/Jenkins script console/面板数据 dump)
+- `actuator-rce` — Jolokia MBean 读系统属性、env 写+refresh 实证、session id、heapdump token 提取
 - `scan-platform` — 原生扫描平台(进程内:项目/任务/模块流水线/资产检索,零外部服务零凭据)
 - `retest` — 漏洞复测(PoC 重放+reproduced/fixed/inconclusive+状态流转)
 - `replay-tamper` — 录制流量篡改重放(字段替换规则,默认 dry-run)

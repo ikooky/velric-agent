@@ -54,7 +54,7 @@ verify() {
   out="$(node scripts/velric-agent.mjs help 2>&1)" || { log_err "verify failed: $out"; return 1; }
   printf '%s\n' "$out" | grep -q "velric-agent" || { log_err "help output malformed"; return 1; }
   local n
-  n="$(printf '%s\n' "$out" | grep -cE '^\s*velric-agent [a-z]')"
+  n="$(printf '%s\n' "$out" | grep -cE '^  velric-agent [a-z0-9]')"
   [ "$n" -ge 40 ] || { log_err "command matrix incomplete ($n commands)"; return 1; }
   log_ok "verified: $n commands available"
 }

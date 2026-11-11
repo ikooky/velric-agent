@@ -188,4 +188,14 @@ export const AuthzHandlers: Record<string, (ctx: Ctx) => Promise<number>> = {
   }));
   return 0;
   },
+
+  "path-auth-bypass": async (ctx) => {
+    const { positional, flags, out, num, jobj, resolveProxy } = ctx;
+  const [url, dir] = positional;
+  if (!url || !dir) { console.error("usage: path-auth-bypass <protectedUrl> <outdir> [--cookie C]"); return 2; }
+  const { probePathBypass } = await import("../../domain/pathAuthBypass.js");
+  const r = await probePathBypass({ protectedUrl: url, outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, headers: await jobj<Record<string, string>>(flags, "headers"), proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout) });
+  out({ denied: r.denied, bypassed: r.bypassed, variants: r.variants, artifacts: r.artifacts });
+  return r.bypassed.length ? 0 : 1;
+  },
 };

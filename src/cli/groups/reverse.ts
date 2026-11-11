@@ -140,4 +140,16 @@ export const ReverseHandlers: Record<string, (ctx: Ctx) => Promise<number>> = {
   out({ asar: r.asar, bytes: r.bytes, entryCount: r.entryCount, extracted: r.extracted, skipped: r.skipped, package: r.package, obfuscation: r.obfuscation, findings: r.findings, extractedRoot: r.extractedRoot, artifacts: r.artifacts });
   return r.findings.length ? 0 : 1;
   },
+
+  "asar-patch": async (ctx) => {
+    const { positional, flags, out, jobj } = ctx;
+  const [src, dst] = positional;
+  if (!src || !dst) { console.error("usage: asar-patch <app.asar> <out.asar> --patches-file patches.json"); return 2; }
+  const patches = await jobj<never[]>(flags, "patches");
+  if (!patches) { console.error("missing --patches-file (array of {file,find,replace,regex?,nth?})"); return 2; }
+  const { patchAsar } = await import("../../domain/asarPatch.js");
+  const r = await patchAsar({ asarPath: src, outputPath: dst, patches });
+  out(r);
+  return 0;
+  },
 };

@@ -28,6 +28,8 @@ export interface FetchOptions {
   readonly maxBytes?: number;
   readonly method?: string;
   readonly body?: string;
+  /** Binary request body; takes precedence over `body` (needed for ZIP/WAR uploads). */
+  readonly bodyBuffer?: Buffer;
 }
 export interface FetchResult {
   readonly url: string; readonly finalUrl?: string | null;
@@ -154,7 +156,7 @@ const fetchOnce = async (url: string, options: FetchOptions): Promise<FetchResul
       } });
       return underlying.dispatch(opts, wrapped);
     } } as Dispatcher;
-    const req = { method, headers, body: options.body, signal: controller.signal, dispatcher: observed };
+    const req = { method, headers, body: options.bodyBuffer ?? options.body, signal: controller.signal, dispatcher: observed };
     const res = method === "TRACE" ? await (async () => {
       const r = await undiciRequest(url, { ...req, method: "TRACE" });
       const h = new Headers(); const cookies: string[] = [];
@@ -178,7 +180,7 @@ const fetchOnce = async (url: string, options: FetchOptions): Promise<FetchResul
   finally { clearTimeout(timer); options.signal?.removeEventListener("abort", abort); }
   if (proxy && pool) { if (result.failureKind === "transport-error") pool.reportFailure(proxy); else if (result.status > 0) pool.reportSuccess(proxy); }
   if (sent && executionRunId() !== "unbound") {
-    const receipt = await recordReceipt({ url, method, status: result.status, requestHash: hash(JSON.stringify({ method, url, headers, body: options.body ?? null })), responseHash: result.storedHash, principal: principalHash(headers), complete: result.complete === true, finalUrl: result.finalUrl });
+    const receipt = await recordReceipt({ url, method, status: result.status, requestHash: hash(options.bodyBuffer ? options.bodyBuffer : JSON.stringify({ method, url, headers, body: options.body ?? null })), responseHash: result.storedHash, principal: principalHash(headers), complete: result.complete === true, finalUrl: result.finalUrl });
     result = { ...result, receiptId: receipt.id };
   }
   return result;

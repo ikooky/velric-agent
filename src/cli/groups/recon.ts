@@ -252,4 +252,23 @@ export const ReconHandlers: Record<string, (ctx: Ctx) => Promise<number>> = {
   if (action === "upsert_url") { st.upsertUrl(positional[2] ?? ""); await st.save(); out({ ok: true }); return 0; }
   console.error("unknown action"); return 2;
   },
+
+  "cloud-storage": async (ctx) => {
+    const { positional, flags, out, num, jarr, resolveProxy } = ctx;
+  const [buckets, dir] = positional;
+  if (!buckets || !dir) { console.error("usage: cloud-storage <bucket[,bucket]> <outdir> [--provider aws|gcs|azure] [--write]"); return 2; }
+  const { probeCloudStorage } = await import("../../domain/cloudStorage.js");
+  const r = await probeCloudStorage({ buckets: jarr(flags, "buckets") ?? buckets.split(","), outputRoot: dir, provider: typeof flags.provider === "string" ? flags.provider as "aws" | "gcs" | "azure" : undefined, proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout), write: flags.write === true, endpoint: typeof flags.endpoint === "string" ? flags.endpoint : undefined });
+  out({ findings: r.findings, artifacts: r.artifacts });
+  return r.findings.some((f) => f.state === "public-list" || f.state === "write-enabled") ? 0 : 1;
+  },
+  "runtime-config-leak": async (ctx) => {
+    const { positional, flags, out, num, resolveProxy } = ctx;
+  const [url, dir] = positional;
+  if (!url || !dir) { console.error("usage: runtime-config-leak <baseUrl> <outdir>"); return 2; }
+  const { probeConfigLeak } = await import("../../domain/configLeak.js");
+  const r = await probeConfigLeak({ baseUrl: url, outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout) });
+  out({ files: r.files.filter((f) => f.looksLikeConfig), secrets: r.secrets, artifacts: r.artifacts });
+  return r.secrets.length ? 0 : 1;
+  },
 };

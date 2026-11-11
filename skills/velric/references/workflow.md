@@ -10,7 +10,7 @@
 - 域名种子 → `subdomains`（crt.sh + CNAME 链 + 词表）+ `subdomain-alter`
 - IP/主机 → `port-scan`（非 Web 开放端口直出 finding）
 - 历史面 → `wayback`（死接口/老管理面回收）；`enrich` 建资产图
-- 面测绘：`paths`（soft-404 校准）/ `dir-fuzz` / `info-leak`（敏感路径+堆栈+banner 三档）/ `admin-surface` / `nuclei-lite`
+- 面测绘：`runtime-config-leak`（config.js/.env）→ `cloud-storage`（桶列举）→ `paths`（soft-404 校准）/ `dir-fuzz` / `info-leak`（敏感路径+堆栈+banner 三档）/ `admin-surface` / `nuclei-lite`
 
 ## Phase 2 — 内容与静态（内容+逆向组）
 - SPA → `harvest`（bundle 提取 API/路由 + secrets 扫描）；MPA → `spider` + `extract-routes`
@@ -26,10 +26,10 @@
 ## Phase 4 — 攻击面（注入+认证+授权+业务逻辑组）
 对带凭据的目标按角色逐个跑，findings 均需独立复核语义：
 - **注入组**：`sqli-probe`（error/boolean/time-blind/--auth-bypass）→ `nosqli-probe`（$ne 行数发散）→ `ldap-probe`（通配符加宽）→ `ssti-probe`（11 引擎 49 回显）→ `proto-pollute` / `hpp-probe` / `redirect-traverse`
-- **认证组**：`admin-creds`（默认口令打后台）→ `oauth-bypass`（重定向劫持/PKCE）→ `cred-brute`（语义分类喷洒）→ `otp-brute`（2FA 节流+secret 泄漏）→ `pass-policy`（弱密码接受度）→ `reset-abuse`（答案喷洒→重置→登录三段自证）→ `jwt-inspect`/`jwt-attack`（oracle 选匿名 401 鉴权 200 的资源型路由）/`jwks-forge`（jku/x5u 伪造）
-- **授权组**：`auth-probe` 画鉴权面 → `idor-prescreen` → `idor-deep`（含 `--write` 写 IDOR，服务器 modified 计数自证）→ `authz-replay`/`role-matrix` 多角色差分 → `role-escalate`（回显型只信状态码变化）/ `mass-assign` / `api-version` / `header-bypass` / `verb-matrix` / `graphql-authz`
+- **认证组**：`admin-creds`（默认口令打后台）→ `2fa-bypass`/`reset-deep`（第二因子与重置深度）→ `oauth-bypass`（重定向劫持/PKCE）→ `cred-brute`（语义分类喷洒）→ `otp-brute`（2FA 节流+secret 泄漏）→ `pass-policy`（弱密码接受度）→ `reset-abuse`（答案喷洒→重置→登录三段自证）→ `jwt-inspect`/`jwt-attack`（oracle 选匿名 401 鉴权 200 的资源型路由）/`jwks-forge`（jku/x5u 伪造）
+- **授权组**：`auth-probe` 画鉴权面 → `idor-prescreen` → `idor-deep`（含 `--write` 写 IDOR，服务器 modified 计数自证）→ `path-auth-bypass`（路径混淆）→ `authz-replay`/`role-matrix` 多角色差分 → `role-escalate`（回显型只信状态码变化）/ `mass-assign` / `api-version` / `header-bypass` / `verb-matrix` / `graphql-authz`
 - **业务逻辑组**：`entitlement-bypass`（付费墙服务端强制？）→ `billing-tamper`（计价篡改+回读）→ `value-abuse`（负数/溢出+回读持久化）→ `race-probe`（TOCTOU 并发自证）→ `cache-deceive`（先带 cookie 定私有路径再匿名复核）→ `host-poison`（重置投毒）→ `upload-probe`（exec-risk+落地 URL）→ `graphql-batch`（深度/别名限额）
-- **后场与传输**（平台组内）：`service-unauth`（Redis/Docker/etcd/k8s 未授权直取）→ `actuator-exploit`（env/heapdump 挖密钥 + gateway SpEL RCE）→ `cors`/`cors-deep`、`smuggle-probe`、`oidc-probe`、`ws-auth`/`ws-origin-check`、`waf-adapt`（过 WAF 变形）、`oob-confirm`（interactsh 回调）、`mine-params`/`probe-params`（隐藏参数）
+- **后场与传输**（平台组内）：`service-unauth`（Redis/Docker/etcd/k8s 未授权直取）→ `actuator-exploit`/`actuator-rce`（env/heapdump/Jolokia/session）→ `admin-rce`（登录后拿 shell 或全量 dump）→ `cors`/`cors-deep`、`smuggle-probe`、`oidc-probe`、`ws-auth`/`ws-origin-check`、`waf-adapt`（过 WAF 变形）、`oob-confirm`（interactsh 回调）、`mine-params`/`probe-params`（隐藏参数）
 
 ## 收尾（平台组）
 - `gen-report` + `save-evidence`（sha256 寻址证据 blob）；`export-findings`（csv/json/md/sarif）；`run-diff` 对比两次 run
