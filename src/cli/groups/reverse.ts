@@ -130,4 +130,14 @@ export const ReverseHandlers: Record<string, (ctx: Ctx) => Promise<number>> = {
   out({ file: r.file, engine: r.engine, arch: r.arch, degraded: r.degraded, reason: r.reason, bytes: r.bytes, functions: r.functions, disassembled: r.disassembled, calls: r.importsUsed.slice(0, 40), topFunctions: r.details.map(f => ({ name: f.name, address: f.address, size: f.size, instrs: f.instrs.length })), artifacts: r.artifacts });
   return 0;
   },
+
+  "asar-unpack": async (ctx) => {
+    const { positional, flags, out, num } = ctx;
+  const [file, dir] = positional;
+  if (!file || !dir) { console.error("usage: asar-unpack <app.asar> <outdir> [--list-only]"); return 2; }
+  const { unpackAsar } = await import("../../domain/asarUnpack.js");
+  const r = await unpackAsar({ asarPath: file, outputRoot: dir, listOnly: flags["list-only"] === true, maxFileBytes: num(flags["max-file"]), maxTotalBytes: num(flags["max-total"]) });
+  out({ asar: r.asar, bytes: r.bytes, entryCount: r.entryCount, extracted: r.extracted, skipped: r.skipped, package: r.package, obfuscation: r.obfuscation, findings: r.findings, extractedRoot: r.extractedRoot, artifacts: r.artifacts });
+  return r.findings.length ? 0 : 1;
+  },
 };

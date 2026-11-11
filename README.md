@@ -58,6 +58,7 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `wasm-disasm` — WASM 完整反汇编(全 opcode 含 SIMD/饱和截断/批量内存,call 目标名解析,全模块调用图)
 - `dex-disasm` — Dalvik 字节码反汇编(smali 级,字符串交叉引用,类过滤,直接吃 APK)
 - `x86-disasm` — x86 ELF 指令级反汇编(符号/序言锚定,call 目标标注,可选 capstone-wasm 引擎,缺失自动降级)
+- `asar-unpack` — Electron asar 解包(边界校验+去重跳过)与授权校验点定位(local/remote 分类、更新源、混淆度)
 
 **注入 — 语法与参数**
 - `sqli-probe` — SQL 注入差分(error-oracle/boolean-blind/有界 time-blind/--auth-bypass 认证绕过)
@@ -76,6 +77,8 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `jwt-inspect` — JWT 解码 + HS256 弱密钥爆破
 - `jwt-attack` — JWT 攻击套件(alg 混淆/RS-HS/弱 HMAC 密钥/kid 注入/claim 篡改,--public-key-file)
 - `jwks-forge` — JWT jku/x5u 伪造(攻击者 JWKS+RSA 签名提权 claims)
+- `admin-creds` — 管理面板默认口令接管(10 类面板,标记请求验真,不信裸 200)
+- `oauth-bypass` — OAuth redirect_uri 劫持矩阵(11 变体)+PKCE 降级,IdP 自动 302 才算 accepted
 
 **授权 — 越权与访问控制**
 - `auth-probe` — 匿名 vs 带 cookie 双探，产出鉴权面清单(含边缘阻断识别)
@@ -97,6 +100,8 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `host-poison` — Host 头/重置投毒面(9 向量金丝雀反射)
 - `upload-probe` — 文件上传面(类型混淆/双扩展/polyglot/.htaccess,11 向量,exec-risk+落地 URL)
 - `graphql-batch` — GraphQL 深度/别名轰炸限额测量
+- `entitlement-bypass` — 付费墙服务端强制判定(匿名/免费号/plan 声明头伪造,同构回包=纯 UI 门)
+- `billing-tamper` — 计价篡改(0/1分/负数/巨值/浮点/币种/数量/优惠券)+订单回读判 accepted
 
 **平台 — 管道/证据/hunt**
 - `auto` — 一键管道 18 阶段，stage 级 checkpoint 断点续跑
@@ -106,6 +111,8 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `hunt-begin` / `hunt-record` / `hunt-overview` — 宿主 agent 驱动的 hunt 循环，观察台账反幻觉闸门，预算硬停
 - `asset-graph` / `exploration-graph` / `cold-graph` — 资产图 / 探索血缘图(goal→intent→fact→finding) / 冷压缩
 - `evidence` / `evidence-bind` — 证据存储(sha256 寻址+跨漏洞去重) / 绑定生命周期(角色/版本冲突拒绝/md-zip 导出)
+- `service-unauth` — 未授权基础设施直取(Redis INFO/Docker API/etcd/Consul/K8s/ES/Prometheus/Nacos/RabbitMQ/CouchDB/MinIO)
+- `actuator-exploit` — Spring Actuator 深打:env/configprops/heapdump 挖凭据 + gateway SpEL 路由注入 RCE(自动清理)
 - `scan-platform` — 原生扫描平台(进程内:项目/任务/模块流水线/资产检索,零外部服务零凭据)
 - `retest` — 漏洞复测(PoC 重放+reproduced/fixed/inconclusive+状态流转)
 - `replay-tamper` — 录制流量篡改重放(字段替换规则,默认 dry-run)

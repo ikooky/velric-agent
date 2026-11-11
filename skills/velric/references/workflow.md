@@ -16,7 +16,7 @@
 - SPA → `harvest`（bundle 提取 API/路由 + secrets 扫描）；MPA → `spider` + `extract-routes`
 - `deobfuscate` 还原混淆后：`vm-analyze`（自定义 VM opcode 表）、`dom-sinks`（DOM-XSS 污点候选）、`analyze-gates`（鉴权门）、`perm-tree`（权限树）
 - 泄漏语料：`git-restore`（.git 源码还原）、`backup-unpack`、`sqlite-read`、`sourcemaps`（.map 泄漏）
-- 二进制目标：ELF→`elf-analyze`、WASM→`wasm-analyze`、APK/DEX→`dex-analyze` 定性；深挖走指令层 `wasm-disasm`（全量反汇编+调用图）/ `dex-disasm`（smali 级+字符串 xref）/ `x86-disasm`（符号/序言锚定）
+- 二进制目标：ELF→`elf-analyze`、WASM→`wasm-analyze`、APK/DEX→`dex-analyze` 定性；Electron 目标先 `asar-unpack` 定位授权校验点；深挖走指令层 `wasm-disasm`（全量反汇编+调用图）/ `dex-disasm`（smali 级+字符串 xref）/ `x86-disasm`（符号/序言锚定）
 
 ## Phase 3 — 运行时（运行时组）
 - `runtime`（需 Chromium）抓真实 XHR/fetch/WS 帧；无浏览器时静态面兜底
@@ -26,10 +26,10 @@
 ## Phase 4 — 攻击面（注入+认证+授权+业务逻辑组）
 对带凭据的目标按角色逐个跑，findings 均需独立复核语义：
 - **注入组**：`sqli-probe`（error/boolean/time-blind/--auth-bypass）→ `nosqli-probe`（$ne 行数发散）→ `ldap-probe`（通配符加宽）→ `ssti-probe`（11 引擎 49 回显）→ `proto-pollute` / `hpp-probe` / `redirect-traverse`
-- **认证组**：`cred-brute`（语义分类喷洒）→ `otp-brute`（2FA 节流+secret 泄漏）→ `pass-policy`（弱密码接受度）→ `reset-abuse`（答案喷洒→重置→登录三段自证）→ `jwt-inspect`/`jwt-attack`（oracle 选匿名 401 鉴权 200 的资源型路由）/`jwks-forge`（jku/x5u 伪造）
+- **认证组**：`admin-creds`（默认口令打后台）→ `oauth-bypass`（重定向劫持/PKCE）→ `cred-brute`（语义分类喷洒）→ `otp-brute`（2FA 节流+secret 泄漏）→ `pass-policy`（弱密码接受度）→ `reset-abuse`（答案喷洒→重置→登录三段自证）→ `jwt-inspect`/`jwt-attack`（oracle 选匿名 401 鉴权 200 的资源型路由）/`jwks-forge`（jku/x5u 伪造）
 - **授权组**：`auth-probe` 画鉴权面 → `idor-prescreen` → `idor-deep`（含 `--write` 写 IDOR，服务器 modified 计数自证）→ `authz-replay`/`role-matrix` 多角色差分 → `role-escalate`（回显型只信状态码变化）/ `mass-assign` / `api-version` / `header-bypass` / `verb-matrix` / `graphql-authz`
-- **业务逻辑组**：`value-abuse`（负数/溢出+回读持久化）→ `race-probe`（TOCTOU 并发自证）→ `cache-deceive`（先带 cookie 定私有路径再匿名复核）→ `host-poison`（重置投毒）→ `upload-probe`（exec-risk+落地 URL）→ `graphql-batch`（深度/别名限额）
-- **传输与配置**（平台组内）：`cors`/`cors-deep`、`smuggle-probe`、`oidc-probe`、`ws-auth`/`ws-origin-check`、`waf-adapt`（过 WAF 变形）、`oob-confirm`（interactsh 回调）、`mine-params`/`probe-params`（隐藏参数）
+- **业务逻辑组**：`entitlement-bypass`（付费墙服务端强制？）→ `billing-tamper`（计价篡改+回读）→ `value-abuse`（负数/溢出+回读持久化）→ `race-probe`（TOCTOU 并发自证）→ `cache-deceive`（先带 cookie 定私有路径再匿名复核）→ `host-poison`（重置投毒）→ `upload-probe`（exec-risk+落地 URL）→ `graphql-batch`（深度/别名限额）
+- **后场与传输**（平台组内）：`service-unauth`（Redis/Docker/etcd/k8s 未授权直取）→ `actuator-exploit`（env/heapdump 挖密钥 + gateway SpEL RCE）→ `cors`/`cors-deep`、`smuggle-probe`、`oidc-probe`、`ws-auth`/`ws-origin-check`、`waf-adapt`（过 WAF 变形）、`oob-confirm`（interactsh 回调）、`mine-params`/`probe-params`（隐藏参数）
 
 ## 收尾（平台组）
 - `gen-report` + `save-evidence`（sha256 寻址证据 blob）；`export-findings`（csv/json/md/sarif）；`run-diff` 对比两次 run

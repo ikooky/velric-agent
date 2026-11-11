@@ -459,4 +459,26 @@ export const PlatformHandlers: Record<string, (ctx: Ctx) => Promise<number>> = {
   }));
   return 0;
   },
+
+  "service-unauth": async (ctx) => {
+    const { positional, flags, out, num, jarr, jobj, resolveProxy } = ctx;
+  const [host, dir] = positional;
+  if (!host || !dir) { console.error("usage: service-unauth <host> <outdir> [--services redis,docker,...] [--ports redis=6390]"); return 2; }
+  const { probeServiceUnauth } = await import("../../domain/serviceUnauth.js");
+  const ports = typeof flags.ports === "string"
+    ? Object.fromEntries(flags.ports.split(",").map((kv) => { const [k, v] = kv.split("="); return [k ?? "", Number(v)]; }).filter(([k, v]) => k && Number.isFinite(v)))
+    : undefined;
+  const r = await probeServiceUnauth({ host, outputRoot: dir, proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout), services: jarr(flags, "services"), ports });
+  out({ host: r.host, unauth: r.findings.filter((f) => f.state === "unauth-access"), authRequired: r.findings.filter((f) => f.state === "auth-required"), artifacts: r.artifacts });
+  return r.findings.some((f) => f.state === "unauth-access") ? 0 : 1;
+  },
+  "actuator-exploit": async (ctx) => {
+    const { positional, flags, out, num, jobj, resolveProxy } = ctx;
+  const [url, dir] = positional;
+  if (!url || !dir) { console.error("usage: actuator-exploit <baseUrl> <outdir> [--no-rce] [--no-heapdump]"); return 2; }
+  const { probeActuator } = await import("../../domain/actuatorExploit.js");
+  const r = await probeActuator({ baseUrl: url, outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, bearer: typeof flags.bearer === "string" ? flags.bearer : undefined, headers: await jobj<Record<string, string>>(flags, "headers"), proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout), rce: flags["no-rce"] === true ? false : true, heapdump: flags["no-heapdump"] === true ? false : true, maxHeapBytes: num(flags["max-heap"]) });
+  out({ base: r.base, exposed: r.endpoints.filter((e) => e.status === 200), secrets: r.secrets, routes: r.routes, rce: r.rce, artifacts: r.artifacts });
+  return r.endpoints.some((e) => e.status === 200) ? 0 : 1;
+  },
 };

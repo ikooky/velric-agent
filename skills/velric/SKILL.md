@@ -83,7 +83,7 @@ runtime 抓真实 XHR/WS；merge-params 汇参数矩阵；ws-schema/proto-decode
 
 ### 逆向 — 静态与指令层
 
-JS: vm-analyze（自定义 VM opcode）→ dom-sinks/analyze-gates；二进制: elf/wasm/dex-analyze 定性 → wasm/dex/x86-disasm 指令级 + xref。
+Electron: asar-unpack 解包+授权校验点定位；JS: vm-analyze（自定义 VM opcode）→ dom-sinks/analyze-gates；二进制: elf/wasm/dex-analyze 定性 → wasm/dex/x86-disasm 指令级 + xref。
 
 | 命令 | 用途 |
 |------|------|
@@ -95,7 +95,7 @@ JS: vm-analyze（自定义 VM opcode）→ dom-sinks/analyze-gates；二进制: 
 | `velric-agent dex-analyze <file.dex|.apk> <outdir>` | DEX static analysis (strings/classes/methods/URLs) |
 | `velric-agent wasm-disasm <file.wasm> <outdir>` | full WASM disassembly (all opcodes, callgraph) |
 | `velric-agent dex-disasm <file.dex|.apk> <outdir>` | Dalvik bytecode disassembly (smali-level, string xrefs) |
-| `velric-agent x86-disasm <elf> <outdir>` | x86 ELF instruction-level disassembly (capstone-wasm optional) |
+| `velric-agent asar-unpack <app.asar> <outdir>` | Electron asar extract + license-check localization (--list-only) |
 
 ### 注入 — 语法与参数
 
@@ -113,7 +113,7 @@ JS: vm-analyze（自定义 VM opcode）→ dom-sinks/analyze-gates；二进制: 
 
 ### 认证 — 凭证与令牌
 
-cred-brute 语义分类喷洒；pass-policy/reset-abuse 弱密码与重置接管；jwt-inspect/jwt-attack/jwks-forge 三层 JWT 面。
+cred-brute 语义分类喷洒；pass-policy/reset-abuse 弱密码与重置接管；jwt-inspect/jwt-attack/jwks-forge 三层 JWT 面；admin-creds 默认口令拿后台；oauth-bypass 重定向劫持。
 
 | 命令 | 用途 |
 |------|------|
@@ -123,7 +123,8 @@ cred-brute 语义分类喷洒；pass-policy/reset-abuse 弱密码与重置接管
 | `velric-agent reset-abuse <resetUrl> <loginUrl> <outdir>` | static security-answer takeover (spray → reset → login proof) |
 | `velric-agent jwt-inspect <outdir>` | JWT decode + weak-secret crack |
 | `velric-agent jwt-attack <token> <endpoint> <outdir>` | JWT attack suite (alg confusion/weak key/kid, --public-key-file) |
-| `velric-agent jwks-forge <token> <oracleUrl> <outdir> --jwks-url U` | JWT jku/x5u header forgery (attacker JWKS + claim elevation) |
+| `velric-agent admin-creds <baseUrl> <outdir>` | vendor default-credential takeover on admin panels (10 panels, marker-verified) |
+| `velric-agent oauth-bypass <authzUrl-{REDIRECT}> <legitRedirect> <outdir>` | OAuth redirect_uri matrix + PKCE downgrade (takeover) |
 | `velric-agent login-replay <url> <u> <p> <outdir>` | login + cookie export |
 
 ### 授权 — 越权与访问控制
@@ -146,7 +147,7 @@ auth-probe 画鉴权面 → idor-prescreen/idor-deep（读写 IDOR）→ authz-r
 
 ### 业务逻辑 — 值域与竞争
 
-value-abuse 负数/溢出注入 + 回读持久化；race-probe TOCTOU 并发自证；cache-deceive/host-poison/upload-probe/graphql-batch 基础设施逻辑面。
+value-abuse 负数/溢出注入 + 回读持久化；race-probe TOCTOU 并发自证；cache-deceive/host-poison/upload-probe/graphql-batch 基础设施逻辑面；entitlement-bypass/billing-tamper 订阅与计价绕过。
 
 | 命令 | 用途 |
 |------|------|
@@ -155,11 +156,12 @@ value-abuse 负数/溢出注入 + 回读持久化；race-probe TOCTOU 并发自�
 | `velric-agent cache-deceive <baseUrl> <outdir> --private-path /api/me` | web cache deception + unkeyed header poisoning |
 | `velric-agent host-poison <url> <outdir>` | Host-header/reset poisoning (9-vector canary reflection) |
 | `velric-agent upload-probe <url> <outdir>` | file-upload surface (11 vectors, exec-risk + stored URL) |
-| `velric-agent graphql-batch <endpoint> <outdir>` | GraphQL depth/alias-bombing limit measurement |
+| `velric-agent entitlement-bypass <premiumUrl> <accountUrl> <outdir>` | paywall enforcement test (anon/free/claim forgery) |
+| `velric-agent billing-tamper <checkoutUrl> <outdir> --body-template T --amount N` | price/currency/qty/coupon tampering with order read-back |
 
 ### 平台 — 管道与证据
 
-auto/auto-batch 确定性管道；hunt 循环台账；waf-adapt/oob-confirm/smuggle/oidc/cors 深化工具；gen-report/save-evidence 收尾。
+auto/auto-batch 确定性管道；hunt 循环台账；waf-adapt/oob-confirm/smuggle/oidc/cors 深化工具；service-unauth/actuator-exploit 后场直取（未授权基础设施 / Actuator 挖密钥+RCE）；gen-report/save-evidence 收尾。
 
 | 命令 | 用途 |
 |------|------|
@@ -174,6 +176,8 @@ auto/auto-batch 确定性管道；hunt 循环台账；waf-adapt/oob-confirm/smug
 | `velric-agent cold-graph <dir> <action>` | exploration graph compaction |
 | `velric-agent retest <dir> <action>` | finding retest lifecycle |
 | `velric-agent export-findings <f> <dir> <fmt>` | findings csv/json/md/sarif export |
+| `velric-agent service-unauth <host> <outdir>` | unauthenticated infra sweep (Redis/Docker/etcd/k8s/ES/prom/Nacos...) |
+| `velric-agent actuator-exploit <baseUrl> <outdir>` | Spring Actuator: env/heapdump secret mining + gateway SpEL RCE |
 | `velric-agent scan-platform <dir> <action>` | native scan platform (projects/tasks/pipeline/assets) |
 | `velric-agent waf-adapt <url> <payload> <outdir>` | payload transport adaptation vs WAF (--in query|body|header|path) |
 | `velric-agent oob-confirm <url> <outdir> --payloads a,b` | OOB callback confirmation (interactsh) |

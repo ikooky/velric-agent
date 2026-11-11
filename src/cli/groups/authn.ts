@@ -105,4 +105,23 @@ export const AuthnHandlers: Record<string, (ctx: Ctx) => Promise<number>> = {
   out(await replayLogin({ baseUrl: b, username: user, password: pass, outputRoot: dir, chromiumPath: typeof flags.chromium === "string" ? flags.chromium : undefined, proxy: await resolveProxy(flags) }));
   return 0;
   },
+
+  "admin-creds": async (ctx) => {
+    const { positional, flags, out, num, jobj, jarr, resolveProxy } = ctx;
+  const [url, dir] = positional;
+  if (!url || !dir) { console.error("usage: admin-creds <baseUrl> <outdir> [--panels tomcat-manager,jenkins,...]"); return 2; }
+  const { probeAdminCreds } = await import("../../domain/adminCreds.js");
+  const r = await probeAdminCreds({ baseUrl: url, outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, headers: await jobj<Record<string, string>>(flags, "headers"), proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout), panels: jarr(flags, "panels") });
+  out({ detected: r.detected, hits: r.hits, tried: r.tried, artifacts: r.artifacts });
+  return r.hits.length ? 0 : 1;
+  },
+  "oauth-bypass": async (ctx) => {
+    const { positional, flags, out, num, jobj, resolveProxy } = ctx;
+  const [authz, redirect, dir] = positional;
+  if (!authz || !redirect || !dir) { console.error("usage: oauth-bypass <authzUrl-with-{REDIRECT}> <legitRedirect> <outdir>"); return 2; }
+  const { probeOAuthBypass } = await import("../../domain/oauthBypass.js");
+  const r = await probeOAuthBypass({ authzUrl: authz, redirect, outputRoot: dir, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, headers: await jobj<Record<string, string>>(flags, "headers"), proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout), pkce: flags.pkce !== false });
+  out({ honest: r.honest, takeoverRisk: r.takeoverRisk, accepted: r.vectors.filter((v) => v.verdict === "accepted"), aux: r.aux, artifacts: r.artifacts });
+  return r.takeoverRisk ? 0 : 1;
+  },
 };
