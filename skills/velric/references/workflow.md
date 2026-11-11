@@ -23,6 +23,15 @@
 - `session-crawl` 带登录态爬行；`merge-params` 汇参数矩阵
 - 私有协议：`ws-schema`（WS 帧字段表）、`proto-decode`（protobuf 启发解码）
 
+## Phase 3.5 — 进入（无凭据）
+先拿门，再谈越权。顺序：
+- 枚举：`user-enum`（login/register/reset 三模式）拿到有效账号清单
+- 拿凭证：`admin-creds`（默认口令）→ `spray`（每用户 3 发，锁定感知）→ `cred-brute`（已知单用户深爆破）
+- 从 dump 反推：`hash-crack` 破哈希（md5/sha/scrypt/pbkdf2，字典+规则）
+- 前置代理挡路：`smuggle-exploit`（CL.TE/TE.CL 走私 /admin + h2c 升级）
+- 签名资源：`signed-url`（剥签名/过期、键大小写、点段）
+- 反序列化入口：`deser-surface`（Java/PHP/pickle/YAML 差分 + ViewState MAC 缺失）
+
 ## Phase 4 — 攻击面（注入+认证+授权+业务逻辑组）
 对带凭据的目标按角色逐个跑，findings 均需独立复核语义：
 - **注入组**：`sqli-probe`（error/boolean/time-blind/--auth-bypass）→ `nosqli-probe`（$ne 行数发散）→ `ldap-probe`（通配符加宽）→ `ssti-probe`（11 引擎 49 回显）→ `proto-pollute` / `hpp-probe` / `redirect-traverse`

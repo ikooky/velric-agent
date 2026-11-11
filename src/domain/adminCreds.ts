@@ -94,6 +94,48 @@ const PANELS: readonly Panel[] = [
     verify: { path: "/api_jsonrpc.php", method: "POST", contentType: "application/json", okMarker: /"result"\s*:\s*"[0-9a-f]{16,}"/ },
   },
   {
+    id: "airflow", detectPath: "/login",
+    marker: /Airflow/i,
+    kind: "form",
+    creds: [{ user: "airflow", pass: "airflow" }, { user: "admin", pass: "admin" }],
+    verify: { path: "/auth/token", method: "POST", contentType: "application/x-www-form-urlencoded", okMarker: /"access_token"/ },
+  },
+  {
+    id: "superset", detectPath: "/login",
+    marker: /Superset/i,
+    kind: "json",
+    creds: [{ user: "admin", pass: "admin" }, { user: "admin", pass: "general" }],
+    verify: { path: "/api/v1/security/login", method: "POST", contentType: "application/json", okMarker: /"access_token"/ },
+  },
+  {
+    id: "rundeck", detectPath: "/user/login",
+    marker: /Rundeck/i,
+    kind: "basic",
+    creds: [{ user: "admin", pass: "admin" }],
+    verify: { path: "/api/35/projects", method: "GET", okMarker: /\[|"name"/ },
+  },
+  {
+    id: "nexus", detectPath: "/service/rest/v1/status",
+    marker: /"version"|"edition"/,
+    kind: "basic",
+    creds: [{ user: "admin", pass: "admin123" }, { user: "admin", pass: "admin" }],
+    verify: { path: "/service/rest/v1/status", method: "GET", okMarker: /"version"/ },
+  },
+  {
+    id: "jupyter", detectPath: "/api/status",
+    marker: /"started"/,
+    kind: "basic",
+    creds: [{ user: "", pass: "" }],
+    verify: { path: "/api/contents", method: "GET", okMarker: /"name"|"type"/ },
+  },
+  {
+    id: "solr", detectPath: "/solr/admin/cores?wt=json",
+    marker: /"responseHeader"/,
+    kind: "basic",
+    creds: [{ user: "", pass: "" }],
+    verify: { path: "/solr/admin/cores?wt=json", method: "GET", okMarker: /"responseHeader"/ },
+  },
+  {
     id: "keycloak", detectPath: "/realms/master/.well-known/openid-configuration",
     marker: /"issuer".*realms\/master/,
     kind: "form",
@@ -170,16 +212,20 @@ const tryPanel = async (base: string, panel: Panel, opts: AdminCredsInput): Prom
       res = await call(base, panel, panel.verify.path, panel.verify.method, { headers: { authorization: authHeader(cred.user, cred.pass) } }, opts);
     } else if (panel.kind === "form") {
       const isNacos = panel.id === "nacos";
-      const body = formBody(isNacos ? { username: cred.user, password: cred.pass } : { username: cred.user, password: cred.pass, grant_type: "password", client_id: "admin-cli" });
+      const isAirflow = panel.id === "airflow";
+      const body = formBody(isNacos || isAirflow ? { username: cred.user, password: cred.pass } : { username: cred.user, password: cred.pass, grant_type: "password", client_id: "admin-cli" });
       res = await call(base, panel, panel.verify.path, "POST", { body, contentType: panel.verify.contentType ?? "application/x-www-form-urlencoded" }, opts);
     } else {
       const isMinio = panel.id === "minio";
       const isZabbix = panel.id === "zabbix";
+      const isSuperset = panel.id === "superset";
       const body = isMinio
         ? JSON.stringify({ accessKey: cred.user, secretKey: cred.pass })
         : isZabbix
           ? JSON.stringify({ jsonrpc: "2.0", method: "user.login", params: { username: cred.user, password: cred.pass }, id: 2 })
-          : JSON.stringify({ user: cred.user, password: cred.pass });
+          : isSuperset
+            ? JSON.stringify({ username: cred.user, password: cred.pass, provider: "db", refresh: true })
+            : JSON.stringify({ user: cred.user, password: cred.pass });
       res = await call(base, panel, panel.verify.path, "POST", { body, contentType: panel.verify.contentType ?? "application/json" }, opts);
     }
     if (res.status >= 200 && res.status < 300 && panel.verify.okMarker.test(res.body)) {

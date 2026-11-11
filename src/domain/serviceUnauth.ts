@@ -9,7 +9,7 @@ import { writeArtifact } from "../adapters/artifacts.js";
  *  RabbitMQ guest:guest, MinIO health, CouchDB admin-party, Kibana.
  *  One TCP/HTTP probe per service; a positive is proof-of-access, not a guess. */
 
-export type ServiceId = "redis" | "docker" | "etcd" | "consul" | "nacos" | "elasticsearch" | "k8s" | "prometheus" | "kibana" | "couchdb" | "rabbitmq" | "minio";
+export type ServiceId = "redis" | "docker" | "etcd" | "consul" | "nacos" | "elasticsearch" | "k8s" | "prometheus" | "kibana" | "couchdb" | "rabbitmq" | "minio" | "mongo" | "memcached" | "zookeeper" | "yarn" | "solr";
 
 export interface ServiceSpec {
   readonly id: ServiceId;
@@ -30,6 +30,11 @@ const SERVICES: readonly ServiceSpec[] = [
   { id: "couchdb", port: 5984, label: "CouchDB _all_dbs" },
   { id: "rabbitmq", port: 15672, label: "RabbitMQ management" },
   { id: "minio", port: 9000, label: "MinIO health" },
+  { id: "mongo", port: 27017, label: "MongoDB wire" },
+  { id: "memcached", port: 11211, label: "Memcached stats" },
+  { id: "zookeeper", port: 2181, label: "ZooKeeper ruok/srvr" },
+  { id: "yarn", port: 8088, label: "Hadoop YARN apps" },
+  { id: "solr", port: 8983, label: "Solr cores/system" },
 ];
 
 export interface ServiceUnauthInput {
@@ -56,6 +61,57 @@ export interface ServiceUnauthResult {
   readonly findings: ServiceFinding[];
   readonly artifacts: { path: string; bytes: number }[];
 }
+
+const tcpProbe = async (id: ServiceId, host: string, port: number, writes: { data: string; until?: RegExp }[], timeoutMs: number, okRe: RegExp, authRe: RegExp): Promise<ServiceFinding | null> => {
+  const chunks: string[] = [];
+  let idx = 0;
+  const r = await new Promise<{ err?: string }>((resolve) => {
+    const sock = connect({ host, port });
+    let settled = false;
+    const done = (err?: string): void => { if (settled) return; settled = true; clearTimeout(t); sock.removeAllListeners(); sock.destroy(); resolve({ err }); };
+    const t = setTimeout(() => done("timeout"), timeoutMs);
+    sock.setEncoding("latin1");
+    sock.on("connect", () => { const w = writes[idx]; if (w) sock.write(w.data); });
+    sock.on("data", (c: string) => {
+      chunks.push(c);
+      const text = chunks.join("");
+      const cur = writes[idx];
+      if (cur?.until && cur.until.test(text)) { idx++; const next = writes[idx]; if (next) { chunks.length = 0; sock.write(next.data); return; } done(); return; }
+      if (text.length > 8192) done();
+    });
+    sock.on("error", (e) => done(e.message));
+  });
+  const text = chunks.join("");
+  if (r.err && text === "") return null;
+  if (okRe.test(text)) return { id, port, state: "unauth-access", evidence: text.slice(0, 200).replace(/\0/g, ".") };
+  if (authRe.test(text)) return { id, port, state: "auth-required", evidence: text.slice(0, 160).replace(/\0/g, ".") };
+  return { id, port, state: "detected", evidence: text.slice(0, 120).replace(/\0/g, ".") || "connected" };
+};
+
+/** Minimal OP_QUERY isMaster against admin.$cmd. */
+const mongoProbe = async (host: string, port: number, timeoutMs: number): Promise<ServiceFinding> => {
+  const doc = Buffer.concat([
+    Buffer.from([0x10, 0x00, 0x00, 0x00]),
+    Buffer.from("isMaster\0", "latin1"),
+    Buffer.from([0x01, 0x00, 0x00, 0x00, 0x00]),
+  ]);
+  const bson = Buffer.concat([Buffer.alloc(4), doc]);
+  bson.writeInt32LE(bson.length, 0);
+  const query = Buffer.concat([
+    Buffer.from([0, 0, 0, 0]),
+    Buffer.from("admin.$cmd\0", "latin1"),
+    Buffer.alloc(8),
+    bson,
+  ]);
+  const head = Buffer.alloc(16);
+  head.writeInt32LE(16 + query.length, 0);
+  head.writeInt32LE(7, 4);
+  head.writeInt32LE(0, 8);
+  head.writeInt32LE(2004, 12);
+  const payload = Buffer.concat([head, query]).toString("latin1");
+  const r = await tcpProbe("mongo", host, port, [{ data: payload }], timeoutMs, /ismaster|maxWireVersion|ok\x00/i, /Authentication|SCRAM|requires authentication/i);
+  return r ?? { id: "mongo", port, state: "closed", evidence: "connect failed" };
+};
 
 const redisProbe = async (host: string, port: number, timeoutMs: number): Promise<ServiceFinding> => {
   const r = await new Promise<{ data: string; err?: string }>((resolve) => {
@@ -154,6 +210,14 @@ const HTTP_STEPS: Partial<Record<ServiceId, { steps: HttpStep[]; authMsg: string
   rabbitmq: { authMsg: "RabbitMQ", steps: [
     { path: "/api/overview", ok: [200], marker: /"rabbitmq_version"/, basic: "guest:guest" },
   ] },
+  yarn: { authMsg: "YARN", steps: [
+    { path: "/ws/v1/cluster/info", ok: [200], marker: /"clusterInfo"/ },
+    { path: "/ws/v1/cluster/apps?states=RUNNING", ok: [200], marker: /"apps"/ },
+  ] },
+  solr: { authMsg: "Solr", steps: [
+    { path: "/solr/admin/cores?wt=json", ok: [200], marker: /"responseHeader"/ },
+    { path: "/solr/admin/info/system?wt=json", ok: [200], marker: /"system"/ },
+  ] },
   minio: { authMsg: "MinIO", steps: [
     { path: "/minio/health/live", ok: [200] },
   ] },
@@ -169,6 +233,18 @@ export const probeServiceUnauth = async (input: ServiceUnauthInput): Promise<Ser
     try {
       if (spec.id === "redis") {
         findings.push(await redisProbe(host, port, timeoutMs));
+        continue;
+      }
+      if (spec.id === "mongo") {
+        findings.push(await mongoProbe(host, port, timeoutMs));
+        continue;
+      }
+      if (spec.id === "memcached") {
+        findings.push((await tcpProbe("memcached", host, port, [{ data: "stats\r\n", until: /END\r\n/ }], timeoutMs, /STAT /, /^$/.source ? /CLIENT_ERROR/ : /CLIENT_ERROR/)) ?? { id: "memcached", port, state: "closed", evidence: "connect failed" });
+        continue;
+      }
+      if (spec.id === "zookeeper") {
+        findings.push((await tcpProbe("zookeeper", host, port, [{ data: "ruok", until: /imok/ }, { data: "srvr", until: /Mode:/ }], timeoutMs, /imok/i, /^$/.source ? /not serving/ : /not serving/)) ?? { id: "zookeeper", port, state: "closed", evidence: "connect failed" });
         continue;
       }
       const def = HTTP_STEPS[spec.id];

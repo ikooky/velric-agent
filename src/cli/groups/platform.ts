@@ -500,4 +500,14 @@ export const PlatformHandlers: Record<string, (ctx: Ctx) => Promise<number>> = {
   out({ base: r.base, actions: r.actions, loot: r.loot, artifacts: r.artifacts });
   return r.actions.length ? 0 : 1;
   },
+
+  "smuggle-exploit": async (ctx) => {
+    const { positional, flags, out, num } = ctx;
+  const [base, target, dir] = positional;
+  if (!base || !target || !dir) { console.error("usage: smuggle-exploit <httpBaseUrl> <protectedPath> <outdir>"); return 2; }
+  const { probeSmuggleExploit } = await import("../../domain/smuggleExploit.js");
+  const r = await probeSmuggleExploit({ baseUrl: base, targetPath: target, outputRoot: dir, timeoutMs: num(flags.timeout) });
+  out({ target: r.target, bypass: r.bypass, cases: r.cases, artifacts: r.artifacts });
+  return r.bypass ? 0 : 1;
+  },
 };

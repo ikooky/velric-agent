@@ -143,4 +143,35 @@ export const AuthnHandlers: Record<string, (ctx: Ctx) => Promise<number>> = {
   out({ baseline: r.baseline, tokenShape: r.tokenShape, refererHosts: r.refererHosts, probes: r.probes, artifacts: r.artifacts });
   return r.probes.some((p) => p.verdict === "reusable" || p.verdict === "predictable" || p.verdict === "poison-suspect") ? 0 : 1;
   },
+
+  "user-enum": async (ctx) => {
+    const { positional, flags, out, num, jarr, jobj, resolveProxy } = ctx;
+  const [url, dir] = positional;
+  if (!url || !dir || typeof flags["known-user"] !== "string") { console.error("usage: user-enum <url> <outdir> --mode login|register|reset --body-template T --known-user U --candidates a,b"); return 2; }
+  const { probeUserEnum } = await import("../../domain/userEnum.js");
+  const r = await probeUserEnum({ url, bodyTemplate: String(flags["body-template"] ?? "{}"), mode: (typeof flags.mode === "string" ? flags.mode : "login") as never, knownUser: flags["known-user"], candidates: jarr(flags, "candidates") ?? [], password: typeof flags.password === "string" ? flags.password : undefined, outputRoot: dir, proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout), headers: await jobj<Record<string, string>>(flags, "headers") });
+  out({ mode: r.mode, oracle: r.oracle, existing: r.existing, rows: r.rows, artifacts: r.artifacts });
+  return r.existing.length ? 0 : 1;
+  },
+  "spray": async (ctx) => {
+    const { positional, flags, out, num, jarr, jobj, resolveProxy } = ctx;
+  const [url, dir] = positional;
+  if (!url || !dir) { console.error("usage: spray <url> <outdir> --body-template T --users a,b --passwords p1,p2 [--max-per-user 3]"); return 2; }
+  const { sprayPasswords } = await import("../../domain/spray.js");
+  const r = await sprayPasswords({ url, bodyTemplate: String(flags["body-template"] ?? "{}"), users: jarr(flags, "users") ?? [], passwords: jarr(flags, "passwords") ?? [], maxPerUser: num(flags["max-per-user"]), delayMs: num(flags.delay), outputRoot: dir, proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout), headers: await jobj<Record<string, string>>(flags, "headers") });
+  out({ tried: r.tried, hits: r.hits, lockedUsers: r.lockedUsers, throttled: r.throttled, artifacts: r.artifacts });
+  return r.hits.some((h) => h.classification === "ok") ? 0 : 1;
+  },
+  "hash-crack": async (ctx) => {
+    const { positional, flags, out, num } = ctx;
+  const [hashesArg, dir] = positional;
+  if (!hashesArg || !dir) { console.error("usage: hash-crack <hash[,hash]|file> <outdir> [--wordlist-file F] [--no-rules]"); return 2; }
+  const { readFile } = await import("node:fs/promises");
+  const hashes = hashesArg.includes(",") ? hashesArg.split(",").map((h) => h.trim()) : /\.[a-z]+$/i.test(hashesArg) ? (await readFile(hashesArg, "utf8").catch(() => hashesArg)).split(/\r?\n/).map((h) => h.trim()).filter(Boolean) : [hashesArg];
+  const wordlist = typeof flags["wordlist-file"] === "string" ? (await readFile(flags["wordlist-file"], "utf8")).split(/\r?\n/).map((w) => w.trim()).filter(Boolean) : undefined;
+  const { crackHashes } = await import("../../domain/hashCrack.js");
+  const r = await crackHashes({ hashes, outputRoot: dir, wordlist, rules: flags["no-rules"] !== true, maxSeconds: num(flags["max-seconds"]) });
+  out({ cracked: r.cracked, unsupported: r.unsupported, attempts: r.attempts, elapsedMs: r.elapsedMs, artifacts: r.artifacts });
+  return r.cracked.length ? 0 : 1;
+  },
 };

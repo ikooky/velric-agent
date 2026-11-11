@@ -67,4 +67,14 @@ export const InjectHandlers: Record<string, (ctx: Ctx) => Promise<number>> = {
   out({ redirectProbed: r.redirectProbed, externalRedirects: r.redirectFindings.length, traversalProbed: r.traversalProbed, traversalHits: r.traversalFindings.length, redirectFindings: r.redirectFindings.slice(0, 10), artifacts: r.artifacts });
   return 0;
   },
+
+  "deser-surface": async (ctx) => {
+    const { positional, flags, out, num, jarr, resolveProxy } = ctx;
+  const [url, dir] = positional;
+  if (!url || !dir) { console.error("usage: deser-surface <url> <outdir> [--params a,b] [--cookie-name C]"); return 2; }
+  const { probeDeser } = await import("../../domain/deserSurface.js");
+  const r = await probeDeser({ url, outputRoot: dir, params: jarr(flags, "params"), cookieName: typeof flags["cookie-name"] === "string" ? flags["cookie-name"] : undefined, cookie: typeof flags.cookie === "string" ? flags.cookie : undefined, proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout) });
+  out({ passive: r.passive, viewState: r.viewState, exploitable: r.exploitable, probes: r.probes, artifacts: r.artifacts });
+  return r.exploitable.length ? 0 : 1;
+  },
 };

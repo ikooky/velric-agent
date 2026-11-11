@@ -67,12 +67,16 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `sqli-probe` — SQL 注入差分(error-oracle/boolean-blind/有界 time-blind/--auth-bypass 认证绕过)
 - `nosqli-probe` — NoSQL 注入($ne/$gt/$regex/$where 运算符+类型混淆,计数发散判定)
 - `ldap-probe` — LDAP 注入(通配符/过滤器加宽/布尔语法,行数发散+错误签名)
+- `deser-surface` — 反序列化面(Java/PHP/pickle/YAML 差分注入,ViewState MAC)
 - `ssti-probe` — SSTI 金丝雀(11 引擎语法,49 回显判定,排除字面回显)
 - `proto-pollute` — 原型污染面(__proto__/constructor 向量,反射+差分)
 - `hpp-probe` — HTTP 参数污染(duplicate/array/comma/semicolon/percent-dot 差分)
 - `redirect-traverse` — 开放重定向(10 变体)+路径遍历(7 编码,passwd 特征判定)
 
 **认证 — 凭证与令牌**
+- `user-enum` — 账号枚举(登录/注册/重置三模式,双基线判定)
+- `spray` — 锁定感知密码喷洒(每用户预算+延迟)
+- `hash-crack` — 哈希识别+字典/规则破解(md5/sha/scrypt/pbkdf2)
 - `cred-brute` — 凭证爆破(语义分类:auth-ok/bad-cred/429/锁定/captcha)
 - `otp-brute` — OTP/2FA 爆破面(节流/锁定缺失测量)+totpSecret 泄漏检测(RFC6238 伪造素材)
 - `pass-policy` — 密码策略面(空/单字符/top 常用 10 档弱密码接受度)
@@ -86,6 +90,7 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `oauth-bypass` — OAuth redirect_uri 劫持矩阵(11 变体)+PKCE 降级,IdP 自动 302 才算 accepted
 
 **授权 — 越权与访问控制**
+- `signed-url` — 签名 URL 强制校验(签名/过期剥离、键大小写、点段)
 - `path-auth-bypass` — 路径混淆鉴权绕过(20 向量:点段/矩阵参/编码分隔/NUL/X-Original-URL,soft-404 校准)
 - `auth-probe` — 匿名 vs 带 cookie 双探，产出鉴权面清单(含边缘阻断识别)
 - `idor-prescreen` — id 类参数数值邻域差分预筛(只读)
@@ -129,6 +134,7 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `probe-params` — 参数差分(必填/开关参数识别)
 - `waf-adapt` — payload 传输变形过 WAF(query/body/header/path 四位置×大小写/编码/分块变体)
 - `oob-confirm` — OOB 带外回调确认(interactsh 轮询,盲 SSRF/RCE 实锤)
+- `smuggle-exploit` — CL.TE/TE.CL 走私打进后台路径 + h2c 升级
 - `smuggle-probe` — 请求走私差分(路径规范化变体+CL/TE)
 - `oidc-probe` — OAuth/OIDC/SAML 配置发现与弱配置检查
 - `cors` / `cors-deep` — CORS 配置缺陷 / 可利用性矩阵(反射×credentials×preflight)

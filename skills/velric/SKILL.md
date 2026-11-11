@@ -110,17 +110,21 @@ Electron: asar-unpack 定位 → asar-patch 改写重打包；JS: vm-analyze（�
 | `velric-agent nosqli-probe <url> <outdir> --param id` | NoSQL operator injection ($ne/$gt/$regex/$where, type juggling) |
 | `velric-agent ldap-probe <url> <outdir> --param uid` | LDAP injection (wildcard/filter-widening/boolean-OR, row divergence) |
 | `velric-agent ssti-probe <url> <outdir> --param q` | SSTI canary arithmetic (11 engine grammars, 49-reflection verdict) |
+| `velric-agent deser-surface <url> <outdir>` | deserialization surface (Java/PHP/pickle/YAML, ViewState MAC) |
 | `velric-agent proto-pollute <url> <outdir>` | prototype pollution vectors (__proto__/constructor, JSON body) |
 | `velric-agent hpp-probe <url> <outdir> --params a,b` | HTTP parameter pollution (duplicate/array/comma strategies) |
 | `velric-agent redirect-traverse <url> <outdir> --params a,b` | open redirect + path traversal encodings (Location analysis, passwd oracle) |
 
 ### 认证 — 凭证与令牌
 
-cred-brute 语义分类喷洒；pass-policy/reset-abuse 弱密码与重置接管；jwt-inspect/jwt-attack/jwks-forge 三层 JWT 面；admin-creds 默认口令拿后台；oauth-bypass 重定向劫持；2fa-bypass/reset-deep 第二因子与重置深度。
+user-enum 枚举 → spray 定点喷洒 → hash-crack 破 dump 哈希；cred-brute 语义分类；pass-policy/reset-abuse 弱密码与重置接管；jwt-inspect/jwt-attack/jwks-forge 三层 JWT 面；admin-creds 默认口令拿后台；oauth-bypass 重定向劫持；2fa-bypass/reset-deep 第二因子与重置深度。
 
 | 命令 | 用途 |
 |------|------|
 | `velric-agent cred-brute <url> <outdir> --pairs-file F` | credential spray (semantic classification) |
+| `velric-agent user-enum <url> <outdir> --mode login|register|reset --body-template T --known-user U --candidates a,b` | account enumeration oracle (dual baseline) |
+| `velric-agent spray <url> <outdir> --body-template T --users a,b --passwords p1,p2` | lockout-aware password spray (per-user budget) |
+| `velric-agent hash-crack <hash[,hash]|file> <outdir>` | identify + dictionary/rule crack (md5/sha/scrypt/pbkdf2) |
 | `velric-agent otp-brute <url> <outdir> --body-template T` | OTP/2FA rate-limit & lockout measurement (+2FA secret leak detection) |
 | `velric-agent pass-policy <url> <outdir> --body-template T` | password policy surface (10-tier weak acceptance) |
 | `velric-agent reset-abuse <resetUrl> <loginUrl> <outdir>` | static security-answer takeover (spray → reset → login proof) |
@@ -134,12 +138,13 @@ cred-brute 语义分类喷洒；pass-policy/reset-abuse 弱密码与重置接管
 
 ### 授权 — 越权与访问控制
 
-auth-probe 画鉴权面 → path-auth-bypass 路径混淆 → idor-prescreen/idor-deep（读写 IDOR）→ authz-replay/role-matrix 多角色差分 → role-escalate/mass-assign/api-version 提权面。
+auth-probe 画鉴权面 → path-auth-bypass 路径混淆 → signed-url 签名绕过 → idor-prescreen/idor-deep（读写 IDOR）→ authz-replay/role-matrix 多角色差分 → role-escalate/mass-assign/api-version 提权面。
 
 | 命令 | 用途 |
 |------|------|
 | `velric-agent auth-probe <api_merged.txt> <outdir>` | anonymous vs auth access mapping |
 | `velric-agent path-auth-bypass <protectedUrl> <outdir>` | path-confusion filter bypass (20 vectors, soft-404 calibrated) |
+| `velric-agent signed-url <signedUrl> <outdir>` | signed-URL enforcement (signature/expiry strip, key case, dot-segment) |
 | `velric-agent idor-prescreen <params_merged.json> <outdir>` | IDOR candidate prescreen |
 | `velric-agent idor-deep <outdir> --endpoints[-file] JSON` | three-reference IDOR oracle probing (--write for write-IDOR) |
 | `velric-agent authz-replay <recordRoot> <outdir> --roles[-file] JSON` | authz differential replay (live-baseline verdicts) |
@@ -190,6 +195,7 @@ auto/auto-batch 确定性管道；hunt 循环台账；waf-adapt/oob-confirm/smug
 | `velric-agent waf-adapt <url> <payload> <outdir>` | payload transport adaptation vs WAF (--in query|body|header|path) |
 | `velric-agent oob-confirm <url> <outdir> --payloads a,b` | OOB callback confirmation (interactsh) |
 | `velric-agent smuggle-probe <baseUrl> <outdir>` | request-smuggling differential |
+| `velric-agent smuggle-exploit <httpBaseUrl> <protectedPath> <outdir>` | CL.TE/TE.CL smuggling into an admin bypass + h2c upgrade |
 | `velric-agent oidc-probe <baseUrl> <outdir>` | OAuth/OIDC/SAML config probe |
 | `velric-agent cors <baseUrl> <outdir>` | CORS misconfiguration probe |
 | `velric-agent cors-deep <url> <outdir>` | CORS exploitability matrix (reflection × credentials, preflight) |

@@ -198,4 +198,14 @@ export const AuthzHandlers: Record<string, (ctx: Ctx) => Promise<number>> = {
   out({ denied: r.denied, bypassed: r.bypassed, variants: r.variants, artifacts: r.artifacts });
   return r.bypassed.length ? 0 : 1;
   },
+
+  "signed-url": async (ctx) => {
+    const { positional, flags, out, num, resolveProxy } = ctx;
+  const [url, dir] = positional;
+  if (!url || !dir) { console.error("usage: signed-url <signedUrl> <outdir>"); return 2; }
+  const { probeSignedUrl } = await import("../../domain/signedUrl.js");
+  const r = await probeSignedUrl({ url, outputRoot: dir, proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout) });
+  out({ exploitable: r.exploitable, cases: r.cases, artifacts: r.artifacts });
+  return r.exploitable ? 0 : 1;
+  },
 };
