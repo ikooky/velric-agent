@@ -510,4 +510,15 @@ export const PlatformHandlers: Record<string, (ctx: Ctx) => Promise<number>> = {
   out({ target: r.target, bypass: r.bypass, cases: r.cases, artifacts: r.artifacts });
   return r.bypass ? 0 : 1;
   },
+
+  "app-api": async (ctx) => {
+    const { positional, flags, out, jobj, resolveProxy } = ctx;
+  const [dir] = positional;
+  const calls = await jobj<never[]>(flags, "calls");
+  if (!dir || !calls) { console.error("usage: app-api <outdir> --calls-file calls.json (array of {name,url,scheme{header,algo,key,message,headerValue},token?,bodyCipherKey?})"); return 2; }
+  const { callAppApi } = await import("../../domain/appApi.js");
+  const r = await callAppApi({ calls, outputRoot: dir, proxy: await resolveProxy(flags), timeoutMs: Number(flags.timeout) || undefined });
+  out({ results: r.results.map((x) => ({ name: x.name, status: x.status, ms: x.ms, decrypted: x.decrypted === undefined ? undefined : (typeof x.decrypted === "string" ? x.decrypted.slice(0, 120) : x.decrypted) })) , artifacts: r.artifacts });
+  return 0;
+  },
 };

@@ -51,7 +51,7 @@ description: |
 
 ### 内容 — 抓取与语料
 
-SPA 走 harvest、MPA 走 spider；deobfuscate 还原后做后续分析；泄漏语料 git-restore/backup-unpack/sqlite-read。
+SPA 走 harvest、MPA 走 spider；响应加密先 envelope-break 破信封；deobfuscate 还原后做后续分析；泄漏语料 git-restore/backup-unpack/sqlite-read。
 
 | 命令 | 用途 |
 |------|------|
@@ -60,6 +60,7 @@ SPA 走 harvest、MPA 走 spider；deobfuscate 还原后做后续分析；泄漏
 | `velric-agent extract-routes <jsdir> <outdir>` | routes from JS corpus |
 | `velric-agent sourcemaps <jsDir> <outdir>` | source-map leak detection (--base URL) |
 | `velric-agent deobfuscate <jsDir> <outdir>` | JS corpus deobfuscation (--action analyze) |
+| `velric-agent envelope-break <envelope.json> <outdir> --keys k1,k2` | encrypted response envelope breaker |
 | `velric-agent git-restore <baseUrl> <outdir>` | rebuild source from leaked .git |
 | `velric-agent backup-unpack <urls.txt> <outdir>` | dump unpack + secret scan |
 | `velric-agent sqlite-read <file.db> <outdir>` | SQLite leak reader |
@@ -82,10 +83,11 @@ runtime 抓真实 XHR/WS；merge-params 汇参数矩阵；ws-schema/proto-decode
 | `velric-agent ws-schema <runtime_api.json> <outdir>` | WS message field schemas |
 | `velric-agent proto-decode <hex|base64> <outdir>` | protobuf heuristic decode |
 | `velric-agent ws-origin-check <wsUrl> <outdir>` | WS cross-origin check (CSWSH) |
+| `velric-agent hls-chain <gateway-{PATH}> <path> <outdir> --key-url U` | HLS capability chain: playlist+key+TS decrypt |
 
 ### 逆向 — 静态与指令层
 
-Electron: asar-unpack 定位 → asar-patch 改写重打包；JS: vm-analyze（自定义 VM opcode）→ dom-sinks/analyze-gates；二进制: elf/wasm/dex-analyze 定性 → wasm/dex/x86-disasm 指令级 + xref。
+Electron: asar-unpack 定位 → asar-patch 改写；Flutter: flutter-analyze 挖域/路由/密钥；JS: vm-analyze（自定义 VM opcode）→ dom-sinks/analyze-gates；二进制: elf/wasm/dex-analyze 定性 → wasm/dex/x86-disasm 指令级 + xref。
 
 | 命令 | 用途 |
 |------|------|
@@ -98,6 +100,7 @@ Electron: asar-unpack 定位 → asar-patch 改写重打包；JS: vm-analyze（�
 | `velric-agent wasm-disasm <file.wasm> <outdir>` | full WASM disassembly (all opcodes, callgraph) |
 | `velric-agent dex-disasm <file.dex|.apk> <outdir>` | Dalvik bytecode disassembly (smali-level, string xrefs) |
 | `velric-agent asar-unpack <app.asar> <outdir>` | Electron asar extract + license-check localization (--list-only) |
+| `velric-agent flutter-analyze <app.apk|libapp.so> <outdir>` | Flutter AOT static analysis (domains/routes/keys, --disassembler) |
 | `velric-agent asar-patch <app.asar> <out.asar> --patches-file F` | asar text patch + repack (crack the license check) |
 
 ### 注入 — 语法与参数
@@ -117,7 +120,7 @@ Electron: asar-unpack 定位 → asar-patch 改写重打包；JS: vm-analyze（�
 
 ### 认证 — 凭证与令牌
 
-user-enum 枚举 → spray 定点喷洒 → hash-crack 破 dump 哈希；cred-brute 语义分类；pass-policy/reset-abuse 弱密码与重置接管；jwt-inspect/jwt-attack/jwks-forge 三层 JWT 面；admin-creds 默认口令拿后台；oauth-bypass 重定向劫持；2fa-bypass/reset-deep 第二因子与重置深度。
+user-enum 枚举 → spray 定点喷洒 → hash-crack 破 dump 哈希；cred-brute 语义分类；pass-policy/reset-abuse 弱密码与重置接管；jwt-inspect/jwt-attack/jwks-forge 三层 JWT 面；admin-creds 默认口令拿后台；oauth-bypass 重定向劫持；2fa-bypass/reset-deep 第二因子与重置深度；device-login 匿名设备号开号。
 
 | 命令 | 用途 |
 |------|------|
@@ -129,6 +132,7 @@ user-enum 枚举 → spray 定点喷洒 → hash-crack 破 dump 哈希；cred-br
 | `velric-agent pass-policy <url> <outdir> --body-template T` | password policy surface (10-tier weak acceptance) |
 | `velric-agent reset-abuse <resetUrl> <loginUrl> <outdir>` | static security-answer takeover (spray → reset → login proof) |
 | `velric-agent 2fa-bypass <loginUrl> <verifyUrl> <protectedUrl> <outdir>` | 2FA step skip / OTP replay |
+| `velric-agent device-login <loginUrl> <outdir> --cipher-key K` | anonymous device-login minting (unlimited accounts) |
 | `velric-agent reset-deep <requestUrl> <outdir> --body-template T --email E` | reset token shape/reuse/host-poison/alias depth |
 | `velric-agent jwt-inspect <outdir>` | JWT decode + weak-secret crack |
 | `velric-agent jwt-attack <token> <endpoint> <outdir>` | JWT attack suite (alg confusion/weak key/kid, --public-key-file) |
@@ -191,6 +195,7 @@ auto/auto-batch 确定性管道；hunt 循环台账；waf-adapt/oob-confirm/smug
 | `velric-agent actuator-exploit <baseUrl> <outdir>` | Spring Actuator: env/heapdump secret mining + gateway SpEL RCE |
 | `velric-agent admin-rce <baseUrl> <panel> <user> <pass> <outdir>` | post-login exploit (Tomcat WAR shell/Jenkins console/panel loot) |
 | `velric-agent actuator-rce <baseUrl> <outdir>` | Jolokia sysprops/env-write/sessions/heap token extraction |
+| `velric-agent app-api <outdir> --calls-file F` | replay app signed-request protocol (HMAC + envelope decrypt) |
 | `velric-agent scan-platform <dir> <action>` | native scan platform (projects/tasks/pipeline/assets) |
 | `velric-agent waf-adapt <url> <payload> <outdir>` | payload transport adaptation vs WAF (--in query|body|header|path) |
 | `velric-agent oob-confirm <url> <outdir> --payloads a,b` | OOB callback confirmation (interactsh) |

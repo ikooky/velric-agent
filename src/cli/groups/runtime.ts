@@ -116,4 +116,15 @@ export const RuntimeHandlers: Record<string, (ctx: Ctx) => Promise<number>> = {
   out(await probeWsOrigin({ url: u, outputRoot: dir }));
   return 0;
   },
+
+  "hls-chain": async (ctx) => {
+    const { positional, flags, out, resolveProxy } = ctx;
+  const [gateway, path, dir] = positional;
+  if (!gateway || !path || !dir) { console.error("usage: hls-chain <gatewayTemplate-{PATH}|url> <playlistPath|url> <outdir> --key-url U/{PATH} [--token T] [--max-segments 2]"); return 2; }
+  const { extractHlsChain } = await import("../../domain/hlsChain.js");
+  const gatewayT = gateway.includes("{PATH}") ? gateway : path.startsWith("http") ? "none" : gateway;
+  const r = await extractHlsChain({ gatewayTemplate: gatewayT, playlistPathOrUrl: path, keyUrl: String(flags["key-url"] ?? path), outputRoot: dir, token: typeof flags.token === "string" ? flags.token : undefined, headers: typeof flags.headers === "string" ? JSON.parse(flags.headers) : undefined, proxy: await resolveProxy(flags), maxSegments: Number(flags["max-segments"]) || 2 });
+  out({ playlistStatus: r.playlistStatus, segments: r.segments, durationSec: r.durationSec, keyBytes: r.keyBytes, decrypted: r.decrypted, arbitraryPathSigned: r.arbitraryPathSigned, segmentUrlSigned: r.segmentUrlSigned, artifacts: r.artifacts });
+  return r.decrypted.some((d) => d.syncOk) ? 0 : 1;
+  },
 };

@@ -174,4 +174,14 @@ export const AuthnHandlers: Record<string, (ctx: Ctx) => Promise<number>> = {
   out({ cracked: r.cracked, unsupported: r.unsupported, attempts: r.attempts, elapsedMs: r.elapsedMs, artifacts: r.artifacts });
   return r.cracked.length ? 0 : 1;
   },
+
+  "device-login": async (ctx) => {
+    const { positional, flags, out, resolveProxy } = ctx;
+  const [url, dir] = positional;
+  if (!url || !dir) { console.error("usage: device-login <loginUrl> <outdir> [--body-template T]"); return 2; }
+  const { probeDeviceLogin } = await import("../../domain/deviceLogin.js");
+  const r = await probeDeviceLogin({ url, outputRoot: dir, bodyTemplate: typeof flags["body-template"] === "string" ? flags["body-template"] : undefined, cipherKey: typeof flags["cipher-key"] === "string" ? flags["cipher-key"] : undefined, proxy: await resolveProxy(flags) });
+  out({ working: r.working, unlimited: r.unlimited, artifacts: r.artifacts });
+  return r.working.length ? 0 : 1;
+  },
 };

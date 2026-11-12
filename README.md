@@ -30,7 +30,8 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `spider` — MPA 爬虫，抽表单与内联接口
 - `extract-routes` — JS 语料路由提取
 - `sourcemaps` — 生产 .map 泄漏检测
-- `deobfuscate` — JS 语料反混淆(字符串数组/控制流平坦化还原,--action analyze 只统计)
+- `deobfuscate` — JS 语料反混淆
+- `envelope-break` — 加密响应信封破解(bundle 密钥候选+双 SHA 派生)(字符串数组/控制流平坦化还原,--action analyze 只统计)
 - `git-restore` — 泄漏 .git 源码树还原
 - `backup-unpack` — 备份/转储解包+秘密扫描
 - `sqlite-read` — SQLite 泄漏文件解析
@@ -48,7 +49,8 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `merge-params` — 多样本参数矩阵聚合(置信度标注)
 - `ws-schema` — WS 帧字段结构提取
 - `proto-decode` — 二进制 WS 帧 protobuf 猜测解码
-- `ws-origin-check` — WS 跨域校验(CSWSH 预筛)
+- `ws-origin-check` — WS 跨域校验
+- `hls-chain` — HLS 能力链(m3u8+AES key+段解密到 TS,网关纪律判定)(CSWSH 预筛)
 
 **逆向 — 静态与指令层**
 - `vm-analyze` — JS 自定义 VM 解释器静态逆向(opcode 表提取/分类、dispatch 位解码、常量表、报告输出)
@@ -59,7 +61,8 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `dex-analyze` — DEX/APK 静态逆向(类/方法/字段全量,字符串表 URL/密钥提取)
 - `wasm-disasm` — WASM 完整反汇编(全 opcode 含 SIMD/饱和截断/批量内存,call 目标名解析,全模块调用图)
 - `dex-disasm` — Dalvik 字节码反汇编(smali 级,字符串交叉引用,类过滤,直接吃 APK)
-- `x86-disasm` — x86 ELF 指令级反汇编(符号/序言锚定,call 目标标注,可选 capstone-wasm 引擎,缺失自动降级)
+- `x86-disasm` — x86 ELF 指令级反汇编
+- `flutter-analyze` — Flutter AOT 静态分析(域/路由/密钥/类,外接反汇编器)(符号/序言锚定,call 目标标注,可选 capstone-wasm 引擎,缺失自动降级)
 - `asar-patch` — asar 文本替换+重打包(改授权比较/激活地址,偏移重算)
 - `asar-unpack` — Electron asar 解包(边界校验+去重跳过)与授权校验点定位(local/remote 分类、更新源、混淆度)
 
@@ -74,6 +77,7 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `redirect-traverse` — 开放重定向(10 变体)+路径遍历(7 编码,passwd 特征判定)
 
 **认证 — 凭证与令牌**
+- `device-login` — 匿名设备号登录(无限开号判定,envelope 解密找 token)
 - `user-enum` — 账号枚举(登录/注册/重置三模式,双基线判定)
 - `spray` — 锁定感知密码喷洒(每用户预算+延迟)
 - `hash-crack` — 哈希识别+字典/规则破解(md5/sha/scrypt/pbkdf2)
@@ -135,6 +139,7 @@ Agent 自主渗透测试工具包 —— Web 应用攻击面测绘。覆盖子�
 - `waf-adapt` — payload 传输变形过 WAF(query/body/header/path 四位置×大小写/编码/分块变体)
 - `oob-confirm` — OOB 带外回调确认(interactsh 轮询,盲 SSRF/RCE 实锤)
 - `smuggle-exploit` — CL.TE/TE.CL 走私打进后台路径 + h2c 升级
+- `app-api` — App 签名协议重放(HMAC 方案+响应信封解密)
 - `smuggle-probe` — 请求走私差分(路径规范化变体+CL/TE)
 - `oidc-probe` — OAuth/OIDC/SAML 配置发现与弱配置检查
 - `cors` / `cors-deep` — CORS 配置缺陷 / 可利用性矩阵(反射×credentials×preflight)

@@ -152,4 +152,14 @@ export const ReverseHandlers: Record<string, (ctx: Ctx) => Promise<number>> = {
   out(r);
   return 0;
   },
+
+  "flutter-analyze": async (ctx) => {
+    const { positional, flags, out } = ctx;
+  const [src, dir] = positional;
+  if (!src || !dir) { console.error("usage: flutter-analyze <app.apk|libapp.so> <outdir> [--disassembler /path/tool]"); return 2; }
+  const { analyzeFlutter } = await import("../../domain/flutterAnalyze.js");
+  const r = await analyzeFlutter({ apkOrSo: src, outputRoot: dir, disassembler: typeof flags.disassembler === "string" ? flags.disassembler : undefined });
+  out({ input: r.input, libappBytes: r.libappBytes, dartVersion: r.dartVersion, counts: r.counts, domains: r.findings.filter((f) => f.kind === "domain").slice(0, 30), routes: r.findings.filter((f) => f.kind === "route").slice(0, 40), keys: r.findings.filter((f) => f.kind === "key").slice(0, 10), disasm: r.disasm, artifacts: r.artifacts });
+  return 0;
+  },
 };

@@ -219,4 +219,15 @@ export const ContentHandlers: Record<string, (ctx: Ctx) => Promise<number>> = {
   out(await mod.searchTraffic({ outputRoot: dir, host: typeof flags.host === "string" ? flags.host : undefined, status: num(flags.status), method: typeof flags.method === "string" ? flags.method : undefined, text: typeof flags.text === "string" ? flags.text : undefined, page: num(flags.page), pageSize: num(flags.pageSize) }));
   return 0;
   },
+
+  "envelope-break": async (ctx) => {
+    const { positional, flags, out, jarr } = ctx;
+  const [responseArg, dir] = positional;
+  if (!responseArg || !dir) { console.error("usage: envelope-break <envelope.json|inline> <outdir> --keys k1,k2 [--keys-file F]"); return 2; }
+  const keys = jarr(flags, "keys") ?? [];
+  const { crackEnvelope } = await import("../../domain/envelopeBreak.js");
+  const r = await crackEnvelope({ response: responseArg, outputRoot: dir, keys });
+  out({ cracked: r.cracked, keyUsed: r.keyUsed, scheme: r.scheme, plaintextPrefix: r.plaintextPrefix, parsed: r.parsed, tried: r.tried, artifacts: r.artifacts });
+  return r.cracked ? 0 : 1;
+  },
 };
