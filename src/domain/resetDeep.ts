@@ -65,9 +65,10 @@ const analyseToken = (token: string): { shape: string; verdict: ResetVerdict } =
 export const probeResetDeep = async (input: ResetInput): Promise<ResetResult> => {
   const ct = contentTypeOf(input.bodyTemplate);
   const hdrs = (extra?: Record<string, string>): Record<string, string> => ({ "content-type": ct, ...(input.headers ?? {}), ...(extra ?? {}) });
+  const isJson = ct.includes("json");
   const request = async (extra?: Record<string, string>, email = input.email): Promise<{ status: number; body: string }> => {
     const r = await fetchUrl(input.requestUrl, {
-      method: "POST", body: input.bodyTemplate.replaceAll("{EMAIL}", encodeURIComponent(email)),
+      method: "POST", body: input.bodyTemplate.replaceAll("{EMAIL}", isJson ? email : encodeURIComponent(email)),
       headers: hdrs(extra), maxAttempts: 1, redirect: "manual", proxy: input.proxy, timeoutMs: input.timeoutMs ?? 10_000, maxBytes: 256 * 1024,
     });
     return { status: r.status, body: r.body };

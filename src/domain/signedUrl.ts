@@ -25,6 +25,8 @@ export interface SignedCase {
 }
 
 export interface SignedUrlResult {
+  /** Whether the input actually carried signature/expiry params. */
+  readonly signed: boolean;
   readonly cases: SignedCase[];
   readonly exploitable: boolean;
   readonly artifacts: { path: string; bytes: number }[];
@@ -42,6 +44,7 @@ const rebuild = (u: URL, mutate: (q: URLSearchParams) => void): string => {
 
 export const probeSignedUrl = async (input: SignedUrlInput): Promise<SignedUrlResult> => {
   const u = new URL(input.url);
+  const signed = [...u.searchParams.keys()].some((k) => SIG_KEYS.includes(k) || EXPIRY_KEYS.includes(k));
   const cases: SignedCase[] = [];
   const get = (url: string) => fetchUrl(url, { maxAttempts: 1, redirect: "manual", proxy: input.proxy, timeoutMs: input.timeoutMs ?? 10_000, maxBytes: 512 * 1024 });
   const realContent = (status: number, body: string): boolean => status >= 200 && status < 300 && !ERROR_BODY.test(body);
@@ -74,7 +77,7 @@ export const probeSignedUrl = async (input: SignedUrlInput): Promise<SignedUrlRe
   }
 
   const exploitable = cases.some((c) => c.verdict === "signature-ignored" || c.verdict === "expiry-ignored");
-  const body = JSON.stringify({ url: input.url, cases, exploitable }, null, 2);
+  const body = JSON.stringify({ url: input.url, signed, cases, exploitable }, null, 2);
   const artifact = await writeArtifact(input.outputRoot, "signed_url.json", body);
-  return { cases, exploitable, artifacts: [artifact] };
+  return { signed, cases, exploitable, artifacts: [artifact] };
 };

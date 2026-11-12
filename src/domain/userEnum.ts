@@ -49,11 +49,13 @@ const ABSENT_HINTS = /(not found|no (?:such )?(?:user|account)|unknown (?:user|a
 export const probeUserEnum = async (input: EnumInput): Promise<EnumResult> => {
   const ct = input.contentType ?? (input.bodyTemplate.trim().startsWith("{") ? "application/json" : "application/x-www-form-urlencoded");
   const headers = (): Record<string, string> => ({ "content-type": ct, ...(input.headers ?? {}) });
+  const isJson = ct.includes("json");
+  const enc = (v: string): string => (isJson ? v : encodeURIComponent(v));
   const send = async (user: string): Promise<{ status: number; body: string }> => {
     const body = input.bodyTemplate
-      .replaceAll("{USER}", encodeURIComponent(user))
-      .replaceAll("{EMAIL}", encodeURIComponent(user))
-      .replaceAll("{PASS}", encodeURIComponent(input.password ?? "Velric!wrong1"));
+      .replaceAll("{USER}", enc(user))
+      .replaceAll("{EMAIL}", enc(user))
+      .replaceAll("{PASS}", enc(input.password ?? "Velric!wrong1"));
     const r = await fetchUrl(input.url, { method: "POST", body, headers: headers(), maxAttempts: 1, redirect: "manual", proxy: input.proxy, timeoutMs: input.timeoutMs ?? 10_000, maxBytes: 256 * 1024 });
     return { status: r.status, body: r.body };
   };
@@ -76,7 +78,15 @@ export const probeUserEnum = async (input: EnumInput): Promise<EnumResult> => {
     let verdict: EnumRow["verdict"] = "ambiguous";
     if (hintValid) verdict = "exists";
     else if (hintAbsent) verdict = "absent";
-    else if (oracle && simKnown > simRandom + 0.02) verdict = "exists";
+    else if (input.mode === "register") {
+      // Registration semantics invert: 2xx = free, 409/400/422 = taken.
+      if (r.status >= 200 && r.status < 300) verdict = "absent";
+      else if ([400, 409, 422].includes(r.status)) verdict = "exists";
+    } else if (oracle && known.status !== random.status) {
+      // Status is the oracle: matching the valid baseline means the account exists.
+      if (r.status === known.status) verdict = "exists";
+      else if (r.status === random.status) verdict = "absent";
+    } else if (oracle && simKnown > simRandom + 0.02) verdict = "exists";
     else if (oracle && simRandom > simKnown + 0.02) verdict = "absent";
     else if (oracle && r.status === known.status && knownValidish) verdict = "exists";
     if (verdict === "exists") existing.push(user);

@@ -205,7 +205,7 @@ export const AuthzHandlers: Record<string, (ctx: Ctx) => Promise<number>> = {
   if (!url || !dir) { console.error("usage: signed-url <signedUrl> <outdir>"); return 2; }
   const { probeSignedUrl } = await import("../../domain/signedUrl.js");
   const r = await probeSignedUrl({ url, outputRoot: dir, proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout) });
-  out({ exploitable: r.exploitable, cases: r.cases, artifacts: r.artifacts });
+  out({ signed: r.signed, exploitable: r.exploitable, cases: r.cases, artifacts: r.artifacts });
   return r.exploitable ? 0 : 1;
   },
 };

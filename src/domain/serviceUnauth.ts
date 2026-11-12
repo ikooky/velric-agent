@@ -1,4 +1,5 @@
 import { connect } from "node:net";
+import { lookup as dnsLookup } from "node:dns/promises";
 import { fetchUrl } from "../adapters/http.js";
 import { writeArtifact } from "../adapters/artifacts.js";
 
@@ -62,9 +63,11 @@ export interface ServiceUnauthResult {
   readonly artifacts: { path: string; bytes: number }[];
 }
 
-const tcpProbe = async (id: ServiceId, host: string, port: number, writes: { data: string; until?: RegExp }[], timeoutMs: number, okRe: RegExp, authRe: RegExp): Promise<ServiceFinding | null> => {
+const v4 = async (h: string): Promise<string> => (/^\d+\.\d+\.\d+\.\d+$/.test(h) ? h : (await dnsLookup(h, { family: 4 }).catch(() => ({ address: h }))).address);
+const tcpProbe = async (id: ServiceId, hostRaw: string, port: number, writes: { data: string; until?: RegExp }[], timeoutMs: number, okRe: RegExp, authRe: RegExp): Promise<ServiceFinding | null> => {
   const chunks: string[] = [];
   let idx = 0;
+  const host = await v4(hostRaw);
   const r = await new Promise<{ err?: string }>((resolve) => {
     const sock = connect({ host, port });
     let settled = false;
@@ -113,7 +116,8 @@ const mongoProbe = async (host: string, port: number, timeoutMs: number): Promis
   return r ?? { id: "mongo", port, state: "closed", evidence: "connect failed" };
 };
 
-const redisProbe = async (host: string, port: number, timeoutMs: number): Promise<ServiceFinding> => {
+const redisProbe = async (hostRaw: string, port: number, timeoutMs: number): Promise<ServiceFinding> => {
+  const host = await v4(hostRaw);
   const r = await new Promise<{ data: string; err?: string }>((resolve) => {
     const chunks: string[] = [];
     const sock = connect({ host, port });

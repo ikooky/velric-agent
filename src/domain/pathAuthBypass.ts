@@ -78,7 +78,7 @@ export const probePathBypass = async (input: PathBypassInput): Promise<PathBypas
   });
 
   const denied = await get(input.protectedUrl);
-  const soft = await fetchUrl(`${origin}/velric-soft404-${Date.now().toString(36)}`, { maxAttempts: 1, redirect: "manual", proxy: input.proxy, timeoutMs: input.timeoutMs ?? 10_000, maxBytes: 256 * 1024 });
+  const soft = await fetchUrl(`${origin}/velric-soft404-${Date.now().toString(36)}`, { maxAttempts: 1, redirect: "follow", proxy: input.proxy, timeoutMs: input.timeoutMs ?? 10_000, maxBytes: 256 * 1024 });
   const deniedNorm = normalizeBody(denied.body);
   const softNorm = normalizeBody(soft.body);
 
@@ -92,7 +92,7 @@ export const probePathBypass = async (input: PathBypassInput): Promise<PathBypas
     let verdict: PathVerdict;
     let evidence: string;
     const ok = r.status >= 200 && r.status < 300;
-    const softHit = simSoft >= 0.98 && r.status !== denied.status;
+    const softHit = soft.bytes > 0 && simSoft >= 0.98;
     if (softHit && !(ok && !LOGIN_MARKERS.test(r.body) && r.bytes > soft.bytes * 1.5)) {
       verdict = "soft-404"; evidence = `matches soft-404 (sim ${simSoft.toFixed(2)})`;
     } else if (ok && !LOGIN_MARKERS.test(r.body.slice(0, 4000)) && simDenied < 0.9) {
