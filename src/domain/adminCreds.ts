@@ -193,9 +193,15 @@ const call = async (
 };
 
 const detect = async (base: string, panel: Panel, opts: AdminCredsInput): Promise<boolean> => {
-  const res = panel.probe
+  let res = panel.probe
     ? await call(base, panel, panel.detectPath, panel.probe.method, { body: panel.probe.body, contentType: panel.probe.contentType }, opts)
     : await call(base, panel, panel.detectPath, "GET", {}, opts);
+  // Panel roots commonly 301 to their canonical mount (/sonarqube/ etc.):
+  // one same-origin follow before judging the marker.
+  if ([301, 302, 307, 308].includes(res.status) && res.headers.location) {
+    const next = new URL(res.headers.location, new URL(panel.detectPath, base).href).href;
+    if (new URL(next).origin === new URL(base).origin) res = await fetchUrl(next, { headers: { ...(opts.headers ?? {}) }, maxAttempts: 1, redirect: "manual", proxy: opts.proxy, timeoutMs: opts.timeoutMs ?? 10_000, cookie: opts.cookie, maxBytes: 256 * 1024 });
+  }
   if (res.status === 0) return false;
   // Match marker against body or auth challenge realm; a hard 404 is never a panel.
   const haystack = `${res.body}\n${res.headers["www-authenticate"] ?? ""}`;

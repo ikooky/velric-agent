@@ -130,7 +130,7 @@ export const AuthnHandlers: Record<string, (ctx: Ctx) => Promise<number>> = {
   const [login, verify, protectedUrl, dir] = positional;
   if (!login || !verify || !protectedUrl || !dir) { console.error("usage: 2fa-bypass <loginUrl> <verifyUrl> <protectedUrl> <outdir> --body-template T --user U --pass P [--code C]"); return 2; }
   const { probeTwoFaBypass } = await import("../../domain/twoFaBypass.js");
-  const r = await probeTwoFaBypass({ loginUrl: login, verifyUrl: verify, protectedUrl, bodyTemplate: String(flags["body-template"] ?? "{}"), verifyTemplate: typeof flags["verify-template"] === "string" ? flags["verify-template"] : undefined, user: String(flags.user ?? ""), pass: String(flags.pass ?? ""), code: typeof flags.code === "string" ? flags.code : undefined, outputRoot: dir, proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout), headers: await jobj<Record<string, string>>(flags, "headers") });
+  const r = await probeTwoFaBypass({ loginUrl: login, verifyUrl: verify, protectedUrl, bodyTemplate: String(flags["body-template"] ?? "{}"), verifyTemplate: typeof flags["verify-template"] === "string" ? flags["verify-template"] : undefined, tokenField: typeof flags["token-field"] === "string" ? flags["token-field"] : undefined, user: String(flags.user ?? ""), pass: String(flags.pass ?? ""), code: typeof flags.code === "string" ? flags.code : undefined, outputRoot: dir, proxy: await resolveProxy(flags), timeoutMs: num(flags.timeout), headers: await jobj<Record<string, string>>(flags, "headers") });
   out({ otpStepDetected: r.otpStepDetected, exploitable: r.exploitable, probes: r.probes, artifacts: r.artifacts });
   return r.exploitable ? 0 : 1;
   },
